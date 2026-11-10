@@ -1,0 +1,4 @@
+﻿insurer_code,period_ym,source_pdf,rule_name,period_type,metric,scope,scope_value,clawback_months,row_type,tier_no,min_value,max_value,reward_type,reward_value,condition_type,condition_operator,condition_value
+SAM,202611,raw/SAM/2026/202611/202611_SAM_incentive_v1.pdf,11월 신계약 시책,month,converted_premium,insurer,SAM,6,tier,1,1000000,2000000,rate,0.10,,,
+SAM,202611,raw/SAM/2026/202611/202611_SAM_incentive_v1.pdf,11월 신계약 시책,month,converted_premium,insurer,SAM,6,tier,2,2000000,,rate,0.20,,,
+SAM,202611,raw/SAM/2026/202611/202611_SAM_incentive_v1.pdf,11월 신계약 시책,month,converted_premium,insurer,SAM,6,condition,,,,,,min_count,>=,2

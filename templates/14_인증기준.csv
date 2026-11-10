@@ -1,0 +1,6 @@
+﻿program_code,program_name,issuer,basis_period,year,criteria_group,metric,operator,value,evidence_path,note
+MDRT,MDRT 회원,MDRT,calendar_year,2026,commission,annual_commission,>=,0,docs/criteria/2026_MDRT_KR.pdf,공식 공고 값으로 매년 교체
+MDRT,MDRT 회원,MDRT,calendar_year,2026,premium,annual_first_premium,>=,0,docs/criteria/2026_MDRT_KR.pdf,공식 공고 값으로 매년 교체
+EXCELLENT_FC_LIFE,우수인증설계사(생보),생명보험협회,calendar_year,2026,all,tenure_months,>=,0,docs/criteria/2026_excellent_life.pdf,공식 공고 값으로 매년 교체
+EXCELLENT_FC_LIFE,우수인증설계사(생보),생명보험협회,calendar_year,2026,all,persistency_13,>=,0,docs/criteria/2026_excellent_life.pdf,공식 공고 값으로 매년 교체
+EXCELLENT_FC_LIFE,우수인증설계사(생보),생명보험협회,calendar_year,2026,all,mis_selling_count,=,0,docs/criteria/2026_excellent_life.pdf,

@@ -1,0 +1,4 @@
+﻿application_no,policy_no,insurer_code,product_code,internal_code,policyholder_name,application_date,contract_date,status,withdrawal_date,payment_mode,payment_term,premium
+APP2026110001,,SAM,P1001,A0001,홍*동,2026-11-03,,applied,,monthly,20,150000
+APP2026100042,SAM2026100042,SAM,P1001,A0001,김*수,2026-10-20,2026-10-28,inforce,,monthly,10,80000
+APP2026100017,SAM2026100017,SAM,P1001,A0001,이*영,2026-10-08,2026-10-15,withdrawn,2026-10-29,monthly,20,120000

@@ -13,6 +13,11 @@
 | 07_수수료정산서_표준 | 보험사 정산서를 표준화한 형태 | commission_statement_line |
 | 08_유지현황_표준 | 상태 변경 | contract_status_history |
 | 09_유지율_표준 | 보험사 제공 유지율 (내부 산출과 비교용) | persistency |
+| 10_시상구간_추출결과 | 시상 공문 PDF에서 추출(또는 수기 입력)한 구간·조건, 검토 후 승인 | incentive_source_doc, incentive_rule, incentive_tier, incentive_condition |
+| 11_본부계약업로드 | 본부 담당자가 올리는 청약·성립·철회 현황 | contract, contract_status_history |
+| 12_외부지표 | 불완전판매·민원·교육 이수 등 외부 지표 | agent_external_metric |
+| 13_커리어패스 | 직급 체계와 승격 기준 (행 유형이 섞임) | career_level, career_promotion_criteria |
+| 14_인증기준 | MDRT·우수인증설계사 연도별 기준 (값은 공식 공고로 매년 교체) | certification_program, certification_criteria |
 
 06~08은 보험사 원본을 직접 올리는 게 아니라 **매핑을 거친 결과**의 모양이다.
 보험사 원본은 `raw/`에 그대로 두고, 매핑 파일(`config/mapping/*.yaml`)로 이 형태를 만든다.

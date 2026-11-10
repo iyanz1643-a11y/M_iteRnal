@@ -1,0 +1,7 @@
+﻿row_type,level_code,level_name,rank_order,from_level,to_level,metric,period_type,operator,value,effective_from,effective_to
+level,FC,설계사,1,,,,,,,,
+level,SFC,선임설계사,2,,,,,,,,
+level,SM,세일즈매니저,3,,,,,,,,
+criteria,,,,FC,SFC,converted_premium,quarter,>=,6000000,202601,
+criteria,,,,FC,SFC,persistency_13,month,>=,0.85,202601,
+criteria,,,,FC,SFC,tenure_months,month,>=,12,202601,

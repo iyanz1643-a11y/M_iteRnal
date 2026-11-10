@@ -87,17 +87,38 @@ CREATE TABLE clawback_rule (
     effective_to        TEXT
 );
 
+-- 시상 공문 PDF (보험사 시책 / 내부 시상 안내)
+CREATE TABLE incentive_source_doc (
+    doc_id              INTEGER PRIMARY KEY,
+    insurer_id          INTEGER REFERENCES insurer(insurer_id),   -- NULL = 내부 시상
+    period_ym           TEXT NOT NULL,
+    title               TEXT,
+    file_path           TEXT NOT NULL,            -- raw/ 하위 상대경로
+    file_hash           TEXT NOT NULL UNIQUE,
+    received_at         TEXT NOT NULL,
+    extraction_method   TEXT,                     -- text / ocr / manual
+    extraction_status   TEXT NOT NULL DEFAULT 'pending', -- pending / extracted / reviewed / rejected
+    reviewed_by         TEXT,
+    reviewed_at         TEXT,
+    note                TEXT
+);
+
 CREATE TABLE incentive_rule (
     rule_id         INTEGER PRIMARY KEY,
     name            TEXT NOT NULL,
-    period_type     TEXT NOT NULL,                -- month / quarter
-    metric          TEXT NOT NULL,                -- converted_premium / count / monthly_premium
+    insurer_id      INTEGER REFERENCES insurer(insurer_id),   -- NULL = 내부 시상
+    source_doc_id   INTEGER REFERENCES incentive_source_doc(doc_id),
+    version         INTEGER NOT NULL DEFAULT 1,
+    status          TEXT NOT NULL DEFAULT 'draft', -- draft / active / retired
+    period_type     TEXT NOT NULL,                -- month / quarter / half / year
+    metric          TEXT NOT NULL,                -- converted_premium / count / monthly_premium / annual_premium
     scope           TEXT NOT NULL DEFAULT 'all',  -- all / insurer / product_category
     scope_value     TEXT,
     clawback_months INTEGER NOT NULL DEFAULT 0,   -- 시상 환수 감시 기간 (0 = 없음)
-    effective_from  TEXT NOT NULL,
+    effective_from  TEXT NOT NULL,                -- 월별 시책이면 from = to = 대상 월
     effective_to    TEXT,
-    active          INTEGER NOT NULL DEFAULT 1
+    approved_by     TEXT,
+    approved_at     TEXT
 );
 
 CREATE TABLE incentive_tier (
@@ -123,7 +144,8 @@ CREATE TABLE incentive_condition (
 CREATE TABLE import_batch (
     batch_id        INTEGER PRIMARY KEY,
     insurer_id      INTEGER REFERENCES insurer(insurer_id),   -- 내부 파일이면 NULL
-    data_type       TEXT NOT NULL,                -- statement / newbiz / inforce / payment / clawback / agentcode / internal
+    data_type       TEXT NOT NULL,                -- statement / newbiz / inforce / payment / clawback / agentcode / internal / org_contract / external_metric
+    upload_org_id   INTEGER REFERENCES org_unit(org_id),      -- 본부 단위 업로드 시 업로드 조직
     period_ym       TEXT NOT NULL,
     version         INTEGER NOT NULL DEFAULT 1,
     file_name       TEXT NOT NULL,
@@ -167,6 +189,8 @@ CREATE TABLE contract (
     agent_id            INTEGER REFERENCES agent(agent_id),
     insurer_agent_code  TEXT,
     policyholder_name   TEXT,
+    application_no      TEXT,                     -- 청약번호 (성립 전 식별 키)
+    application_date    TEXT,                     -- 청약일
     contract_date       TEXT,                     -- 성립일
     perf_date           TEXT,                     -- 업적 기준일 (내부 정책)
     perf_ym             TEXT,                     -- 업적 귀속 월
@@ -175,11 +199,13 @@ CREATE TABLE contract (
     premium             NUMERIC,                  -- 원 보험료
     premium_monthly     NUMERIC,                  -- 월납 환산
     converted_premium   NUMERIC,                  -- 환산보험료
-    status              TEXT NOT NULL DEFAULT 'inforce', -- inforce / lapsed / cancelled / withdrawn / matured
+    status              TEXT NOT NULL DEFAULT 'applied', -- applied / inforce / withdrawn / declined / lapsed / cancelled / matured
     status_date         TEXT,
+    withdrawal_date     TEXT,                     -- 청약철회일
     source_batch_id     INTEGER REFERENCES import_batch(batch_id),
     created_at          TEXT NOT NULL,
-    UNIQUE (insurer_id, policy_no)
+    UNIQUE (insurer_id, policy_no),
+    UNIQUE (insurer_id, application_no)
 );
 
 CREATE TABLE contract_status_history (
@@ -342,6 +368,129 @@ CREATE TABLE audit_log (
     after_json  TEXT
 );
 
+-- ---------- 기간별 업적 집계 ----------
+CREATE TABLE agent_performance_summary (
+    id                  INTEGER PRIMARY KEY,
+    run_id              INTEGER NOT NULL REFERENCES calc_run(run_id),
+    agent_id            INTEGER NOT NULL REFERENCES agent(agent_id),
+    org_id              INTEGER REFERENCES org_unit(org_id),   -- 기간 기준일 소속
+    period_type         TEXT NOT NULL,            -- month / quarter / half / year
+    period_key          TEXT NOT NULL,            -- 202610 / 2026Q4 / 2026H2 / 2026
+    applied_count       INTEGER NOT NULL DEFAULT 0, -- 청약 (예정 업적)
+    new_count           INTEGER NOT NULL DEFAULT 0, -- 성립
+    withdrawn_count     INTEGER NOT NULL DEFAULT 0, -- 철회
+    net_count           INTEGER NOT NULL DEFAULT 0,
+    monthly_premium     NUMERIC NOT NULL DEFAULT 0,
+    converted_premium   NUMERIC NOT NULL DEFAULT 0,
+    commission_amount   NUMERIC NOT NULL DEFAULT 0,
+    clawback_amount     NUMERIC NOT NULL DEFAULT 0,
+    UNIQUE (run_id, agent_id, period_type, period_key)
+);
+
+-- ---------- 외부 지표 (불완전판매, 민원, 교육 이수 등) ----------
+CREATE TABLE agent_external_metric (
+    id          INTEGER PRIMARY KEY,
+    agent_id    INTEGER NOT NULL REFERENCES agent(agent_id),
+    period_ym   TEXT NOT NULL,
+    metric      TEXT NOT NULL,                    -- mis_selling_count / complaint_count / training_completed / ...
+    value       NUMERIC NOT NULL,
+    source      TEXT,                             -- 보험사 / 협회 / 내부
+    batch_id    INTEGER REFERENCES import_batch(batch_id),
+    UNIQUE (agent_id, period_ym, metric)
+);
+
+-- ---------- 커리어패스 ----------
+CREATE TABLE career_level (
+    level_id    INTEGER PRIMARY KEY,
+    code        TEXT NOT NULL UNIQUE,             -- FC / SFC / SM / BM / DH
+    name        TEXT NOT NULL,
+    rank_order  INTEGER NOT NULL,                 -- 낮을수록 하위
+    description TEXT
+);
+
+CREATE TABLE career_promotion_criteria (
+    id              INTEGER PRIMARY KEY,
+    from_level_id   INTEGER NOT NULL REFERENCES career_level(level_id),
+    to_level_id     INTEGER NOT NULL REFERENCES career_level(level_id),
+    metric          TEXT NOT NULL,                -- converted_premium / new_count / persistency_13 / tenure_months / team_size / ...
+    period_type     TEXT NOT NULL,                -- month / quarter / half / year / rolling_12m
+    operator        TEXT NOT NULL,                -- >= / <= / =
+    value           NUMERIC NOT NULL,
+    effective_from  TEXT NOT NULL,
+    effective_to    TEXT
+);
+
+CREATE TABLE agent_career_history (
+    id              INTEGER PRIMARY KEY,
+    agent_id        INTEGER NOT NULL REFERENCES agent(agent_id),
+    level_id        INTEGER NOT NULL REFERENCES career_level(level_id),
+    effective_from  TEXT NOT NULL,                -- YYYYMM
+    effective_to    TEXT,
+    reason          TEXT,                         -- promotion / demotion / initial
+    approved_by     TEXT
+);
+
+CREATE TABLE agent_goal (
+    id              INTEGER PRIMARY KEY,
+    agent_id        INTEGER NOT NULL REFERENCES agent(agent_id),
+    period_type     TEXT NOT NULL,                -- month / quarter / half / year
+    period_key      TEXT NOT NULL,
+    metric          TEXT NOT NULL,
+    target_value    NUMERIC NOT NULL,
+    set_by          TEXT NOT NULL,                -- self / manager / hq
+    set_at          TEXT NOT NULL,
+    note            TEXT,
+    UNIQUE (agent_id, period_type, period_key, metric)
+);
+
+-- ---------- 인증 (MDRT, 우수인증설계사 등) ----------
+CREATE TABLE certification_program (
+    program_id      INTEGER PRIMARY KEY,
+    code            TEXT NOT NULL UNIQUE,         -- MDRT / COT / TOT / EXCELLENT_FC_LIFE / EXCELLENT_FC_NONLIFE / INTERNAL_*
+    name            TEXT NOT NULL,
+    issuer          TEXT,                         -- MDRT / 생명보험협회 / 손해보험협회 / 자사
+    basis_period    TEXT NOT NULL DEFAULT 'calendar_year', -- calendar_year / rolling_12m
+    active          INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE certification_criteria (
+    id              INTEGER PRIMARY KEY,
+    program_id      INTEGER NOT NULL REFERENCES certification_program(program_id),
+    year            INTEGER NOT NULL,             -- 매년 공식 공고 값 입력
+    metric          TEXT NOT NULL,                -- annual_commission / annual_first_premium / persistency_13 / tenure_months / mis_selling_count / ...
+    operator        TEXT NOT NULL,
+    value           NUMERIC NOT NULL,
+    criteria_group  TEXT NOT NULL DEFAULT 'all',  -- 그룹 내 AND, 그룹 간 OR (예: 수수료 기준 OR 보험료 기준)
+    evidence_path   TEXT,                         -- 공고문 경로
+    note            TEXT
+);
+
+CREATE TABLE agent_certification_status (
+    id                  INTEGER PRIMARY KEY,
+    run_id              INTEGER NOT NULL REFERENCES calc_run(run_id),
+    agent_id            INTEGER NOT NULL REFERENCES agent(agent_id),
+    program_id          INTEGER NOT NULL REFERENCES certification_program(program_id),
+    year                INTEGER NOT NULL,
+    as_of_ym            TEXT NOT NULL,
+    metric_json         TEXT NOT NULL,            -- 지표별 현재값 / 기준값 / 충족 여부
+    progress_rate       NUMERIC NOT NULL,         -- 0.0 ~ 1.0 (가장 가까운 그룹 기준)
+    achieved            INTEGER NOT NULL DEFAULT 0,
+    projected_achieved  INTEGER,                  -- 현재 추세 유지 시 연말 달성 예상
+    projected_ym        TEXT,                     -- 달성 예상 월
+    UNIQUE (run_id, agent_id, program_id, year)
+);
+
+CREATE TABLE agent_certification_award (
+    id              INTEGER PRIMARY KEY,
+    agent_id        INTEGER NOT NULL REFERENCES agent(agent_id),
+    program_id      INTEGER NOT NULL REFERENCES certification_program(program_id),
+    year            INTEGER NOT NULL,
+    awarded_at      TEXT,
+    certificate_no  TEXT,
+    evidence_path   TEXT,
+    UNIQUE (agent_id, program_id, year)
+);
+
 -- ---------- 인덱스 ----------
 CREATE INDEX idx_contract_agent_ym ON contract(agent_id, perf_ym);
 CREATE INDEX idx_contract_status ON contract(status);
@@ -350,6 +499,9 @@ CREATE INDEX idx_calc_match ON commission_calc(period_ym, contract_id, commissio
 CREATE INDEX idx_diff_status ON reconciliation_diff(period_ym, status);
 CREATE INDEX idx_rate_rule_lookup ON commission_rate_rule(insurer_id, commission_type, effective_from);
 CREATE INDEX idx_agent_code_lookup ON agent_insurer_code(insurer_id, insurer_agent_code);
+CREATE INDEX idx_contract_app ON contract(insurer_id, application_no);
+CREATE INDEX idx_perf_summary ON agent_performance_summary(period_type, period_key, agent_id);
+CREATE INDEX idx_cert_status ON agent_certification_status(program_id, year, agent_id);
 
 -- ---------- Mart 뷰 ----------
 -- 설계사별 월 수수료 합계 (최신 완료 run 기준)
@@ -372,3 +524,14 @@ SELECT d.period_ym, i.code AS insurer_code,
 FROM reconciliation_diff d
 JOIN insurer i ON i.insurer_id = d.insurer_id
 GROUP BY d.period_ym, i.code;
+
+-- 조직별 기간 실적 (최신 완료 run 기준)
+CREATE VIEW v_org_performance AS
+SELECT s.period_type, s.period_key, s.org_id, o.name AS org_name,
+       SUM(s.applied_count) AS applied_count, SUM(s.new_count) AS new_count,
+       SUM(s.withdrawn_count) AS withdrawn_count, SUM(s.net_count) AS net_count,
+       SUM(s.converted_premium) AS converted_premium, SUM(s.commission_amount) AS commission_amount
+FROM agent_performance_summary s
+JOIN calc_run r ON r.run_id = s.run_id AND r.status = 'done'
+LEFT JOIN org_unit o ON o.org_id = s.org_id
+GROUP BY s.period_type, s.period_key, s.org_id, o.name;
