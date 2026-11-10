@@ -1,0 +1,61 @@
+# 본부 계약 현황 엑셀 → 표준 컬럼
+# 원본에는 열이 더 많지만 여기 적힌 열만 뽑아 쓴다.
+# 핵심 추출 항목: 사번, 성명, 원수사, 상품, 구분, 보험료, 인정보험료, 건수
+source: internal
+data_type: org_contract
+versions:
+  - version: 1
+    effective_from: "202601"
+    file:
+      sheet: "계약현황"
+      header_row: 3
+      skip_if:
+        - column: "사번"
+          in: ["", "소계", "합계", "총계"]
+    columns:
+      "본부":         hq_name
+      "지점":         branch_name
+      "사번":         internal_code
+      "성명":         agent_name
+      "원수사":       insurer_name
+      "상품명":       product_name
+      "구분":         category_name
+      "청약번호":     application_no
+      "증권번호":     policy_no
+      "청약일":       application_date
+      "계약일":       contract_date
+      "상태":         status
+      "상태변경일":   status_date
+      "납입주기":     payment_mode
+      "납입기간":     payment_term
+      "보험료":       premium
+      "인정보험료":   recognized_premium
+      "건수":         policy_count
+      "계약자":       policyholder_name
+    transforms:
+      internal_code: [as_text, strip, upper]
+      agent_name: [as_text, strip]
+      insurer_name: [as_text, strip]
+      product_name: [as_text, strip]
+      category_name: [as_text, strip]
+      application_no: [as_text, strip, upper]
+      policy_no: [as_text, strip, {remove: ["-", " ", "."]}, upper]
+      application_date: [parse_date]
+      contract_date: [parse_date]
+      status_date: [parse_date]
+      status:
+        - map: {"청약": applied, "성립": inforce, "철회": withdrawn, "반송": declined, "실효": lapsed, "해지": cancelled}
+          default: unknown
+      payment_mode:
+        - map: {"월납": monthly, "연납": annual, "일시납": single}
+          default: monthly
+      payment_term: [to_int]
+      premium: [parse_money]
+      recognized_premium: [parse_money]
+      policy_count: [to_float]
+    required: [internal_code, insurer_name, product_name, category_name, application_no, status, premium, recognized_premium, policy_count]
+    totals_check:
+      label_column: "사번"
+      label: "합계"
+      value_column: "인정보험료"
+      compare_to: recognized_premium

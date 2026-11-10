@@ -25,13 +25,13 @@ def compute_range(con, start_ym, end_ym):
                                    commission_amount=0, clawback_amount=0))
     # 청약 (예정 업적): 아직 applied 상태인 건
     for r in con.execute(
-        "SELECT agent_id, COUNT(*) n FROM contract WHERE status='applied' AND application_date>=? AND application_date<? GROUP BY agent_id",
+        "SELECT agent_id, SUM(policy_count) n FROM contract WHERE status='applied' AND application_date>=? AND application_date<? GROUP BY agent_id",
         (d_from, d_to),
     ):
         agg[r["agent_id"]]["applied_count"] += r["n"]
     # 성립 건 (이후 철회된 건도 성립 월에는 포함)
     for r in con.execute(
-        f"""SELECT agent_id, COUNT(*) n, SUM(premium_monthly) mp, SUM(converted_premium) cp FROM contract
+        f"""SELECT agent_id, SUM(policy_count) n, SUM(premium_monthly) mp, SUM(converted_premium) cp FROM contract
             WHERE status IN {ACTIVE_STATUSES} AND contract_date>=? AND contract_date<? GROUP BY agent_id""",
         (d_from, d_to),
     ):
@@ -41,7 +41,7 @@ def compute_range(con, start_ym, end_ym):
         a["converted_premium"] += r["cp"] or 0
     # 철회 건: 철회 월에 차감
     for r in con.execute(
-        """SELECT agent_id, COUNT(*) n, SUM(premium_monthly) mp, SUM(converted_premium) cp FROM contract
+        """SELECT agent_id, SUM(policy_count) n, SUM(premium_monthly) mp, SUM(converted_premium) cp FROM contract
            WHERE status='withdrawn' AND withdrawal_date>=? AND withdrawal_date<? GROUP BY agent_id""",
         (d_from, d_to),
     ):
@@ -73,7 +73,10 @@ def run(con, period_ym, run_by="system"):
         start = period_start(ptype, period_ym)
         key = period_key(ptype, period_ym)
         agg = compute_range(con, start, period_ym)
+        for fc in con.execute("SELECT agent_id FROM agent WHERE job_type='fc'").fetchall():
+            agg[fc["agent_id"]]  # 실적이 없는 설계사도 0 으로 한 줄 남긴다
         for agent_id, a in agg.items():
+            a.setdefault("net_count", a["new_count"] - a["withdrawn_count"])
             con.execute(
                 """INSERT INTO agent_performance_summary(run_id, agent_id, org_id, period_type, period_key, applied_count, new_count,
                    withdrawn_count, net_count, monthly_premium, converted_premium, commission_amount, clawback_amount)

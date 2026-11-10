@@ -1,2 +1,3 @@
 ﻿insurer_code,product_code,product_name,product_category,conversion_rate,effective_from,effective_to
-SAM,P1001,무배당 종신보험,life,1.0,202401,
+SAM,SAM-WL,샘플생명 든든종신보험,whole_life,1.0,202401,
+HAN,HAN-AU,한빛손해 자동차보험,auto,0.1,202401,

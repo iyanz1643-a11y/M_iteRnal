@@ -1,0 +1,38 @@
+# 손해보험사 정산서: 구분이 한 글자 코드, 환수 금액이 양수로 오므로 음수로 뒤집는다, 날짜는 yyyymmdd
+source: HAN
+data_type: statement
+versions:
+  - version: 1
+    effective_from: "202601"
+    file:
+      sheet: "Sheet1"
+      header_row: 1
+      skip_if:
+        - column: "증권No"
+          in: ["", "TOTAL"]
+    columns:
+      "증권No":       policy_no
+      "모집인코드":   insurer_agent_code
+      "상품코드":     product_code
+      "종류":         commission_type
+      "회차":         installment_no
+      "기준액":       basis_amount
+      "율":           rate
+      "금액":         amount
+      "지급일":       pay_date
+    transforms:
+      policy_no: [as_text, strip, {remove: ["-", " ", "."]}, upper]
+      insurer_agent_code: [as_text, strip]
+      product_code: [as_text, strip]
+      commission_type:
+        - map: {"신": initial, "계": renewal, "환": clawback, "시": promo}
+          default: other
+      installment_no: [to_int]
+      basis_amount: [parse_money]
+      rate: [parse_percent]
+      amount: [parse_money]
+      pay_date: [parse_date]
+    post:
+      - negate_if: {field: amount, when_field: commission_type, equals: clawback}
+    required: [policy_no, commission_type, amount]
+    totals_check: {label_column: "증권No", label: "TOTAL", value_column: "금액", compare_to: amount, absolute: true}

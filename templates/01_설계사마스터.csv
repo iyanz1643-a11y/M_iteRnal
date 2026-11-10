@@ -1,2 +1,3 @@
-﻿internal_code,name,hire_date,termination_date,status,org_name,org_effective_from
-A0001,홍길동,2024-03-01,,active,서울지사 1팀,202403
+﻿internal_code,name,job_type,hire_date,termination_date,status,org_name,org_effective_from
+A0001,홍길동,fc,2024-03-01,,active,강남지점,202403
+M0002,이미경,manager,2014-03-01,,active,강남지점,202401

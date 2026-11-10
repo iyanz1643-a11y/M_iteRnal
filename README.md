@@ -13,9 +13,11 @@
 | `docs/04_점검체크리스트.md` | 수수료 대사, 구간시상, 업적 점검 절차와 차이 유형 분류 |
 | `docs/05_확장기능.md` | 시상 PDF 월별 관리, 본부 단위 계약 업로드(청약·철회 필터), 월·분기·반기 업적, 커리어패스, 우수인증설계사·MDRT 관리 |
 | `schema/schema.sql` | 표준 데이터베이스 DDL (SQLite / PostgreSQL 호환) |
-| `templates/*.csv` | 표준 업로드 템플릿 14종 (마스터, 계약, 정산서, 유지, 시상 PDF 추출 결과, 본부 계약, 외부 지표, 커리어패스, 인증 기준) |
-| `config/column_mapping_example.yaml` | 보험사별 원본 컬럼 → 표준 컬럼 매핑 예시 |
-| `app/`, `run_demo.py` | 동작하는 프로토타입 (계산 엔진 6종 + Streamlit 화면). 실행법은 `docs/06_프로토타입.md` |
+| `templates/*.csv` | 마스터 입력용 CSV 템플릿 (설계사, 상품, 수수료율, 시상 규칙, 커리어패스, 인증 기준, 조직 관리자 등) |
+| `docs/07_엑셀적재_PDF추출_조직_인증.md` | 엑셀 적재기, 시상 PDF 추출, 구분별 시상·추가시상, 조직·관리자, 임원제도·영업우수·명예의전당·인증, 전월 랭킹 공유 |
+| `config/mapping/*.yaml` | 원본 엑셀 열 → 표준 컬럼 매핑 (본부 계약현황, 유지율, 원수사 정산서 4종) |
+| `samples/` | 샘플 원본 파일: 본부 계약현황·유지율·정산서 엑셀, 시상 공문 PDF |
+| `app/`, `run_demo.py` | 동작하는 프로토타입 (엑셀 적재기 + PDF 추출기 + 계산 엔진 + Streamlit 화면). 실행법은 `docs/06_프로토타입.md` |
 
 ## 핵심 원칙
 
@@ -28,7 +30,7 @@
 
 ```bash
 pip install -r requirements.txt
-python run_demo.py          # 샘플 데이터 생성 + 202601~202610 수수료·업적·시상·대사·인증 계산
+python run_demo.py          # 샘플 엑셀·PDF 생성 → 적재·추출 → 202601~202610 수수료·업적·시상·랭킹·대사·인증 계산
 streamlit run app/ui.py     # 화면 열기
 ```
 

@@ -9,7 +9,16 @@ CREATE TABLE insurer (
     insurer_id      INTEGER PRIMARY KEY,
     code            TEXT NOT NULL UNIQUE,         -- 예: SAM, HAN
     name            TEXT NOT NULL,
+    sector          TEXT NOT NULL DEFAULT 'life', -- life(생명보험) / nonlife(손해보험)
     active          INTEGER NOT NULL DEFAULT 1
+);
+
+-- 상품 구분 마스터 (종신/건강/저축/연금/재물/자동차/일반)
+CREATE TABLE product_category (
+    code                TEXT PRIMARY KEY,         -- whole_life / health / savings / annuity / property / auto / general
+    name                TEXT NOT NULL UNIQUE,     -- 종신 / 건강 / ...
+    incentive_eligible  INTEGER NOT NULL DEFAULT 0, -- 시상 대상 기본값 (규칙별 대상 구분이 우선)
+    sort_order          INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE product (
@@ -17,7 +26,7 @@ CREATE TABLE product (
     insurer_id          INTEGER NOT NULL REFERENCES insurer(insurer_id),
     product_code        TEXT NOT NULL,
     product_name        TEXT NOT NULL,
-    product_category    TEXT NOT NULL,            -- life / health / longterm_pc / annuity / other
+    product_category    TEXT NOT NULL REFERENCES product_category(code),
     conversion_rate     NUMERIC NOT NULL DEFAULT 1.0,  -- 환산율
     effective_from      TEXT NOT NULL,            -- YYYYMM
     effective_to        TEXT,                     -- NULL = 현재 유효
@@ -28,7 +37,7 @@ CREATE TABLE org_unit (
     org_id      INTEGER PRIMARY KEY,
     parent_id   INTEGER REFERENCES org_unit(org_id),
     name        TEXT NOT NULL,
-    level       TEXT NOT NULL,                    -- hq / branch / office / team
+    level       TEXT NOT NULL,                    -- hq(본부) / branch(지점) / team(팀)
     active      INTEGER NOT NULL DEFAULT 1
 );
 
@@ -38,7 +47,18 @@ CREATE TABLE agent (
     name            TEXT NOT NULL,
     hire_date       TEXT,                         -- 위촉일 YYYY-MM-DD
     termination_date TEXT,                        -- 해촉일
-    status          TEXT NOT NULL DEFAULT 'active' -- active / terminated / suspended
+    status          TEXT NOT NULL DEFAULT 'active', -- active / terminated / suspended
+    job_type        TEXT NOT NULL DEFAULT 'fc'    -- fc(설계사) / manager(관리자: 지점장·본부장)
+);
+
+-- 조직 관리자 (본부장, 지점장) 이력
+CREATE TABLE org_manager (
+    id              INTEGER PRIMARY KEY,
+    org_id          INTEGER NOT NULL REFERENCES org_unit(org_id),
+    agent_id        INTEGER NOT NULL REFERENCES agent(agent_id),
+    role            TEXT NOT NULL,                -- hq_head(본부장) / branch_head(지점장)
+    effective_from  TEXT NOT NULL,                -- YYYYMM
+    effective_to    TEXT
 );
 
 CREATE TABLE agent_insurer_code (
@@ -110,6 +130,7 @@ CREATE TABLE incentive_rule (
     source_doc_id   INTEGER REFERENCES incentive_source_doc(doc_id),
     version         INTEGER NOT NULL DEFAULT 1,
     status          TEXT NOT NULL DEFAULT 'draft', -- draft / active / retired
+    rule_kind       TEXT NOT NULL DEFAULT 'base', -- base(기본시상) / extra(추가시상)
     period_type     TEXT NOT NULL,                -- month / quarter / half / year
     metric          TEXT NOT NULL,                -- converted_premium / count / monthly_premium / annual_premium
     scope           TEXT NOT NULL DEFAULT 'all',  -- all / insurer / product_category
@@ -119,6 +140,13 @@ CREATE TABLE incentive_rule (
     effective_to    TEXT,
     approved_by     TEXT,
     approved_at     TEXT
+);
+
+-- 규칙별 시상 대상 상품 구분 (행이 없으면 전 구분 대상)
+CREATE TABLE incentive_rule_category (
+    rule_id             INTEGER NOT NULL REFERENCES incentive_rule(rule_id),
+    product_category    TEXT NOT NULL REFERENCES product_category(code),
+    PRIMARY KEY (rule_id, product_category)
 );
 
 CREATE TABLE incentive_tier (
@@ -198,7 +226,8 @@ CREATE TABLE contract (
     payment_term        INTEGER,                  -- 납입 기간(년)
     premium             NUMERIC,                  -- 원 보험료
     premium_monthly     NUMERIC,                  -- 월납 환산
-    converted_premium   NUMERIC,                  -- 환산보험료
+    converted_premium   NUMERIC,                  -- 인정보험료(환산보험료)
+    policy_count        NUMERIC NOT NULL DEFAULT 1, -- 건수 (공동모집 0.5 등)
     status              TEXT NOT NULL DEFAULT 'applied', -- applied / inforce / withdrawn / declined / lapsed / cancelled / matured
     status_date         TEXT,
     withdrawal_date     TEXT,                     -- 청약철회일
@@ -232,13 +261,14 @@ CREATE TABLE premium_payment (
 CREATE TABLE persistency (
     id          INTEGER PRIMARY KEY,
     agent_id    INTEGER NOT NULL REFERENCES agent(agent_id),
+    insurer_id  INTEGER NOT NULL REFERENCES insurer(insurer_id),  -- 원수사별 (전체·생보·손보는 합산해 계산)
     period_ym   TEXT NOT NULL,
     kind        TEXT NOT NULL,                    -- p13 / p25
-    numerator   INTEGER NOT NULL,
-    denominator INTEGER NOT NULL,
+    numerator   INTEGER NOT NULL,                 -- 유지 건수
+    denominator INTEGER NOT NULL,                 -- 대상 건수
     rate        NUMERIC NOT NULL,
     batch_id    INTEGER REFERENCES import_batch(batch_id),
-    UNIQUE (agent_id, period_ym, kind)
+    UNIQUE (agent_id, insurer_id, period_ym, kind)
 );
 
 -- ---------- Core: 보험사 정산서 ----------
@@ -448,7 +478,13 @@ CREATE TABLE certification_program (
     program_id      INTEGER PRIMARY KEY,
     code            TEXT NOT NULL UNIQUE,         -- MDRT / COT / TOT / EXCELLENT_FC_LIFE / EXCELLENT_FC_NONLIFE / INTERNAL_*
     name            TEXT NOT NULL,
-    issuer          TEXT,                         -- MDRT / 생명보험협회 / 손해보험협회 / 자사
+    issuer          TEXT,                         -- MDRT / 생명보험협회 / 손해보험협회 / 원수사 / 자사
+    category        TEXT NOT NULL DEFAULT 'association_cert', -- mdrt / association_cert(협회 인증) / insurer_cert(원수사 인증) / executive_fc(설계사 임원제도) / executive_manager(관리자 임원제도) / award(영업우수·명예의전당)
+    target          TEXT NOT NULL DEFAULT 'agent', -- agent(설계사) / manager(관리자)
+    target_role     TEXT,                         -- 관리자 대상일 때 branch_head(지점장) / hq_head(본부장)
+    sector          TEXT NOT NULL DEFAULT 'all',  -- all / life / nonlife (지표 집계 범위)
+    insurer_id      INTEGER REFERENCES insurer(insurer_id),   -- 원수사 인증이면 해당 원수사
+    sort_order      INTEGER NOT NULL DEFAULT 0,
     basis_period    TEXT NOT NULL DEFAULT 'calendar_year', -- calendar_year / rolling_12m
     active          INTEGER NOT NULL DEFAULT 1
 );
@@ -457,7 +493,8 @@ CREATE TABLE certification_criteria (
     id              INTEGER PRIMARY KEY,
     program_id      INTEGER NOT NULL REFERENCES certification_program(program_id),
     year            INTEGER NOT NULL,             -- 매년 공식 공고 값 입력
-    metric          TEXT NOT NULL,                -- annual_commission / annual_first_premium / persistency_13 / tenure_months / mis_selling_count / ...
+    metric          TEXT NOT NULL,                -- annual_commission / annual_first_premium / annual_recognized_premium / persistency_13 / persistency_25 / tenure_months / mis_selling_count / rank_recognized_premium / award_count / org_recognized_premium / org_persistency_13 / org_headcount / org_active_ratio
+    metric_param    TEXT,                         -- award_count 의 대상 프로그램 코드 등
     operator        TEXT NOT NULL,
     value           NUMERIC NOT NULL,
     criteria_group  TEXT NOT NULL DEFAULT 'all',  -- 그룹 내 AND, 그룹 간 OR (예: 수수료 기준 OR 보험료 기준)
@@ -469,6 +506,7 @@ CREATE TABLE agent_certification_status (
     id                  INTEGER PRIMARY KEY,
     run_id              INTEGER NOT NULL REFERENCES calc_run(run_id),
     agent_id            INTEGER NOT NULL REFERENCES agent(agent_id),
+    org_id              INTEGER REFERENCES org_unit(org_id),   -- 관리자 대상이면 평가 조직
     program_id          INTEGER NOT NULL REFERENCES certification_program(program_id),
     year                INTEGER NOT NULL,
     as_of_ym            TEXT NOT NULL,
@@ -491,6 +529,21 @@ CREATE TABLE agent_certification_award (
     UNIQUE (agent_id, program_id, year)
 );
 
+-- ---------- 랭킹 (전체 설계사 순위, 전월분 공유) ----------
+CREATE TABLE ranking_snapshot (
+    id              INTEGER PRIMARY KEY,
+    run_id          INTEGER NOT NULL REFERENCES calc_run(run_id),
+    period_type     TEXT NOT NULL,                -- month / year(누적)
+    period_key      TEXT NOT NULL,
+    metric          TEXT NOT NULL,                -- recognized_premium / net_count
+    scope           TEXT NOT NULL DEFAULT 'all',  -- all / eligible(시상 대상 구분만)
+    rank_no         INTEGER NOT NULL,
+    agent_id        INTEGER NOT NULL REFERENCES agent(agent_id),
+    org_id          INTEGER REFERENCES org_unit(org_id),
+    value           NUMERIC NOT NULL,
+    UNIQUE (run_id, period_type, period_key, metric, scope, agent_id)
+);
+
 -- ---------- 인덱스 ----------
 CREATE INDEX idx_contract_agent_ym ON contract(agent_id, perf_ym);
 CREATE INDEX idx_contract_status ON contract(status);
@@ -502,6 +555,8 @@ CREATE INDEX idx_agent_code_lookup ON agent_insurer_code(insurer_id, insurer_age
 CREATE INDEX idx_contract_app ON contract(insurer_id, application_no);
 CREATE INDEX idx_perf_summary ON agent_performance_summary(period_type, period_key, agent_id);
 CREATE INDEX idx_cert_status ON agent_certification_status(program_id, year, agent_id);
+CREATE INDEX idx_persistency ON persistency(agent_id, period_ym, kind);
+CREATE INDEX idx_ranking ON ranking_snapshot(period_type, period_key, metric, scope, rank_no);
 
 -- ---------- Mart 뷰 ----------
 -- 설계사별 월 수수료 합계 (최신 완료 run 기준)
@@ -535,3 +590,15 @@ FROM agent_performance_summary s
 JOIN calc_run r ON r.run_id = s.run_id AND r.status = 'done'
 LEFT JOIN org_unit o ON o.org_id = s.org_id
 GROUP BY s.period_type, s.period_key, s.org_id, o.name;
+
+-- 업적 추출 데이터: 사번 / 성명 / 원수사 / 상품 / 구분 / 보험료 / 인정보험료 / 건수
+CREATE VIEW v_contract_extract AS
+SELECT c.contract_id, c.perf_ym AS 귀속월, a.internal_code AS 사번, a.name AS 성명, i.name AS 원수사, i.sector AS 업권,
+       COALESCE(p.product_name, c.product_code_raw) AS 상품, COALESCE(pc.name, '미분류') AS 구분, COALESCE(pc.incentive_eligible, 0) AS 시상대상구분,
+       c.premium_monthly AS 보험료, c.converted_premium AS 인정보험료, c.policy_count AS 건수,
+       c.status AS 상태, c.application_no AS 청약번호, c.policy_no AS 증권번호
+FROM contract c
+JOIN agent a ON a.agent_id = c.agent_id
+JOIN insurer i ON i.insurer_id = c.insurer_id
+LEFT JOIN product p ON p.product_id = c.product_id
+LEFT JOIN product_category pc ON pc.code = p.product_category;

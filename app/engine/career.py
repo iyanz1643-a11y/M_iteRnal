@@ -2,6 +2,7 @@
 import pandas as pd
 
 from app import db
+from app.engine import persist
 from app.periods import month_bounds, months_between, period_key, ym_add, ym_to_tuple
 
 
@@ -23,9 +24,7 @@ def _metric(con, agent, metric, ptype, ym):
     if metric == "tenure_months":
         return months_between(agent["hire_date"], month_bounds(ym)[1]) if agent["hire_date"] else 0
     if metric == "persistency_13":
-        row = con.execute("SELECT rate FROM persistency WHERE agent_id=? AND kind='p13' AND period_ym<=? ORDER BY period_ym DESC LIMIT 1",
-                          (agent["agent_id"], ym)).fetchone()
-        return row["rate"] if row else 0
+        return persist.rate(con, [agent["agent_id"]], "p13", ym)[0]
     if metric == "team_size":
         return 0
     key = last_full_quarter_key(ym) if ptype == "quarter" else period_key(ptype, ym)
@@ -44,7 +43,7 @@ def _cmp(op, a, b):
 
 def promotion_candidates(con, ym) -> pd.DataFrame:
     out = []
-    for agent in con.execute("SELECT * FROM agent WHERE status='active'"):
+    for agent in con.execute("SELECT * FROM agent WHERE status='active' AND job_type='fc'").fetchall():
         lvl = current_level(con, agent["agent_id"], ym)
         if not lvl:
             continue

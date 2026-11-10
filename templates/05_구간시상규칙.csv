@@ -1,5 +1,8 @@
-﻿rule_name,period_type,metric,scope,scope_value,clawback_months,effective_from,effective_to,tier_no,min_value,max_value,reward_type,reward_value,condition_type,condition_operator,condition_value
-2026 월간 환산P 시상,month,converted_premium,all,,6,202601,,1,3000000,5000000,rate,0.20,,,
-2026 월간 환산P 시상,month,converted_premium,all,,6,202601,,2,5000000,,rate,0.30,,,
-2026 월간 환산P 시상,month,converted_premium,all,,6,202601,,,,,,,persistency_13,>=,0.85
-2026 월간 환산P 시상,month,converted_premium,all,,6,202601,,,,,,,min_count,>=,3
+﻿source,period_from,period_to,source_pdf,rule_name,rule_kind,target_categories,period_type,metric,clawback_months,row_type,tier_no,min_value,max_value,reward_type,reward_value,condition_type,condition_operator,condition_value
+내부,202601,202612,samples/pdf/2026_본사_시상제도안내.pdf,월간 인정보험료 시상,base,종신|건강,month,converted_premium,6,tier,1,300000,600000,rate,0.10,,,
+내부,202601,202612,samples/pdf/2026_본사_시상제도안내.pdf,월간 인정보험료 시상,base,종신|건강,month,converted_premium,6,tier,2,600000,1000000,rate,0.20,,,
+내부,202601,202612,samples/pdf/2026_본사_시상제도안내.pdf,월간 인정보험료 시상,base,종신|건강,month,converted_premium,6,tier,3,1000000,,rate,0.30,,,
+내부,202601,202612,samples/pdf/2026_본사_시상제도안내.pdf,월간 인정보험료 시상,base,종신|건강,month,converted_premium,6,condition,,,,,,persistency_13,>=,0.85
+내부,202601,202612,samples/pdf/2026_본사_시상제도안내.pdf,월간 인정보험료 시상,base,종신|건강,month,converted_premium,6,condition,,,,,,min_count,>=,2
+내부,202601,202612,samples/pdf/2026_본사_시상제도안내.pdf,종신 집중 추가시상,extra,종신,month,converted_premium,6,tier,1,200000,500000,fixed,50000,,,
+내부,202601,202612,samples/pdf/2026_본사_시상제도안내.pdf,종신 집중 추가시상,extra,종신,month,converted_premium,6,tier,2,500000,,fixed,150000,,,

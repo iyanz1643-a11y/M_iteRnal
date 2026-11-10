@@ -1,0 +1,25 @@
+# 유지율 현황 엑셀 (원수사별 13회차·25회차)
+source: internal
+data_type: persistency
+versions:
+  - version: 1
+    effective_from: "202601"
+    file:
+      sheet: "유지율"
+      header_row: 2
+    columns:
+      "사번":          internal_code
+      "성명":          agent_name
+      "원수사":        insurer_name
+      "13회차 대상":   p13_den
+      "13회차 유지":   p13_num
+      "25회차 대상":   p25_den
+      "25회차 유지":   p25_num
+    transforms:
+      internal_code: [as_text, strip, upper]
+      insurer_name: [as_text, strip]
+      p13_den: [to_int]
+      p13_num: [to_int]
+      p25_den: [to_int]
+      p25_num: [to_int]
+    required: [internal_code, insurer_name, p13_den, p13_num]

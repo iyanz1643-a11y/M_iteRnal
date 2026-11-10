@@ -1,6 +1,9 @@
-﻿program_code,program_name,issuer,basis_period,year,criteria_group,metric,operator,value,evidence_path,note
-MDRT,MDRT 회원,MDRT,calendar_year,2026,commission,annual_commission,>=,0,docs/criteria/2026_MDRT_KR.pdf,공식 공고 값으로 매년 교체
-MDRT,MDRT 회원,MDRT,calendar_year,2026,premium,annual_first_premium,>=,0,docs/criteria/2026_MDRT_KR.pdf,공식 공고 값으로 매년 교체
-EXCELLENT_FC_LIFE,우수인증설계사(생보),생명보험협회,calendar_year,2026,all,tenure_months,>=,0,docs/criteria/2026_excellent_life.pdf,공식 공고 값으로 매년 교체
-EXCELLENT_FC_LIFE,우수인증설계사(생보),생명보험협회,calendar_year,2026,all,persistency_13,>=,0,docs/criteria/2026_excellent_life.pdf,공식 공고 값으로 매년 교체
-EXCELLENT_FC_LIFE,우수인증설계사(생보),생명보험협회,calendar_year,2026,all,mis_selling_count,=,0,docs/criteria/2026_excellent_life.pdf,
+﻿program_code,program_name,issuer,category,target,target_role,sector,insurer_code,year,criteria_group,metric,metric_param,operator,value,note
+MDRT,MDRT 회원,MDRT,mdrt,agent,,all,,2026,commission,annual_commission,,>=,0,공식 공고 값으로 매년 교체
+MDRT,MDRT 회원,MDRT,mdrt,agent,,all,,2026,premium,annual_first_premium,,>=,0,공식 공고 값으로 매년 교체
+EXCELLENT_FC_LIFE,우수인증설계사(생명보험),생명보험협회,association_cert,agent,,life,,2026,all,persistency_13,,>=,0,공식 공고 값으로 매년 교체
+SAM_ACE,샘플생명 ACE 클럽,샘플생명,insurer_cert,agent,,life,SAM,2026,all,annual_recognized_premium,,>=,0,원수사 공문 값
+EXEC_FC_DIRECTOR,설계사 임원제도: 명예이사,자사,executive_fc,agent,,all,,2026,all,annual_recognized_premium,,>=,0,사내 규정 값
+EXEC_MGR_BRANCH,관리자 임원제도: 이사 지점장,자사,executive_manager,manager,branch_head,all,,2026,all,org_recognized_premium,,>=,0,사내 규정 값
+SALES_EXCELLENT,영업우수설계사,자사,award,agent,,all,,2026,all,rank_recognized_premium,,<=,5,연 누적 인정보험료 순위
+HALL_OF_FAME,명예의전당,자사,award,agent,,all,,2026,all,award_count,SALES_EXCELLENT,>=,3,영업우수설계사 누적 수상 횟수

@@ -1,2 +1,3 @@
-﻿period_ym,internal_code,kind,numerator,denominator,rate
-202610,A0001,p13,17,20,0.85
+﻿period_ym,internal_code,insurer_code,kind,numerator,denominator
+202610,A0001,SAM,p13,9,10
+202610,A0001,SAM,p25,7,9

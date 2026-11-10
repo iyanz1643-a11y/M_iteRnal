@@ -1,4 +1,4 @@
 ﻿insurer_code,product_code,product_category,commission_type,installment_from,installment_to,basis,rate,effective_from,effective_to,priority,note
-SAM,,life,initial,1,1,monthly_premium,8.5,202401,,100,생명 상품군 초회 850%
-SAM,,life,renewal,2,12,monthly_premium,0.3,202401,,100,
-SAM,P1001,,initial,1,1,monthly_premium,9.0,202407,,10,P1001 개별 요율
+SAM,,whole_life,initial,1,1,monthly_premium,8.0,202401,,100,종신 상품군 초회 800%
+SAM,,whole_life,renewal,2,12,monthly_premium,0.3,202401,,100,
+SAM,SAM-WL,,initial,1,1,monthly_premium,9.0,202407,,10,상품 개별 요율이 상품군 요율보다 우선

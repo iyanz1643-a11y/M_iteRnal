@@ -2,7 +2,8 @@
 import json
 
 from app import db
-from app.periods import month_bounds, months_between, period_key, period_start, ym_diff
+from app.engine import persist
+from app.periods import month_bounds, months_between, period_end, period_key, period_start, ym_diff
 
 ACTIVE = ("inforce", "lapsed", "cancelled", "matured")  # 시상 측정 시점 기준 유효 계약 (철회 제외)
 
@@ -10,7 +11,7 @@ ACTIVE = ("inforce", "lapsed", "cancelled", "matured")  # 시상 측정 시점 �
 def _metric_contracts(con, rule, start_ym, end_ym):
     d_from, _ = month_bounds(start_ym)
     _, d_to = month_bounds(end_ym)
-    sql = f"""SELECT c.contract_id, c.agent_id, c.converted_premium, c.premium_monthly, pr.product_category
+    sql = f"""SELECT c.contract_id, c.agent_id, c.converted_premium, c.premium_monthly, c.policy_count, pr.product_category
               FROM contract c LEFT JOIN product pr ON pr.product_id=c.product_id
               JOIN insurer i ON i.insurer_id=c.insurer_id
               WHERE c.status IN {ACTIVE} AND c.contract_date>=? AND c.contract_date<?"""
@@ -23,13 +24,15 @@ def _metric_contracts(con, rule, start_ym, end_ym):
         params.append(rule["scope_value"])
     excluded = [c["value"] for c in con.execute(
         "SELECT value FROM incentive_condition WHERE rule_id=? AND condition_type='exclude_product_category'", (rule["rule_id"],))]
+    # 규칙별 대상 구분 (예: 종신·건강만). 지정이 없으면 전 구분 대상
+    included = [c["product_category"] for c in con.execute("SELECT product_category FROM incentive_rule_category WHERE rule_id=?", (rule["rule_id"],))]
     rows = con.execute(sql, params).fetchall()
-    return [r for r in rows if r["product_category"] not in excluded]
+    return [r for r in rows if r["product_category"] not in excluded and (not included or r["product_category"] in included)]
 
 
 def _metric_value(rule, rows):
     if rule["metric"] == "count":
-        return len(rows)
+        return sum(r["policy_count"] or 0 for r in rows)
     if rule["metric"] == "converted_premium":
         return sum(r["converted_premium"] or 0 for r in rows)
     if rule["metric"] == "monthly_premium":
@@ -51,12 +54,9 @@ def _check_conditions(con, rule, agent, rows, period_ym):
             continue
         if ctype in ("persistency_13", "persistency_25"):
             kind = "p13" if ctype == "persistency_13" else "p25"
-            row = con.execute(
-                "SELECT rate FROM persistency WHERE agent_id=? AND kind=? AND period_ym<=? ORDER BY period_ym DESC LIMIT 1",
-                (agent["agent_id"], kind, period_ym)).fetchone()
-            actual = row["rate"] if row else 0
+            actual = persist.rate(con, [agent["agent_id"]], kind, period_ym)[0]
         elif ctype == "min_count":
-            actual = len(rows)
+            actual = sum(r["policy_count"] or 0 for r in rows)
         elif ctype == "tenure_months":
             actual = months_between(agent["hire_date"], month_bounds(period_ym)[1]) if agent["hire_date"] else 0
         else:
@@ -78,7 +78,6 @@ def _rules_for(con, period_ym):
     for r in con.execute(
         "SELECT * FROM incentive_rule WHERE status='active' AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)",
         (period_ym, period_ym)):
-        from app.periods import period_end
         if r["period_type"] != "month" and period_end(r["period_type"], period_ym) != period_ym:
             continue
         out.append(r)
@@ -88,7 +87,7 @@ def _rules_for(con, period_ym):
 def run(con, period_ym, run_by="system"):
     rules = _rules_for(con, period_ym)
     run_id = db.new_run(con, "incentive", period_ym, run_by, json.dumps({"incentive_rule": [r["rule_id"] for r in rules]}))
-    agents = con.execute("SELECT * FROM agent WHERE status='active' OR termination_date>=?", (month_bounds(period_ym)[0],)).fetchall()
+    agents = con.execute("SELECT * FROM agent WHERE job_type='fc' AND (status='active' OR termination_date>=?)", (month_bounds(period_ym)[0],)).fetchall()
     n = 0
     from app.engine.performance import org_at
     for rule in rules:
