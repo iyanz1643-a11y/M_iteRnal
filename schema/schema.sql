@@ -183,7 +183,7 @@ CREATE TABLE quality_issue (
 CREATE TABLE contract (
     contract_id         INTEGER PRIMARY KEY,
     insurer_id          INTEGER NOT NULL REFERENCES insurer(insurer_id),
-    policy_no           TEXT NOT NULL,            -- 정규화된 증권번호
+    policy_no           TEXT,                     -- 정규화된 증권번호 (청약 단계는 NULL)
     product_id          INTEGER REFERENCES product(product_id),
     product_code_raw    TEXT,                     -- 마스터에 없을 때 보존
     agent_id            INTEGER REFERENCES agent(agent_id),

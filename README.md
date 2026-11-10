@@ -15,6 +15,7 @@
 | `schema/schema.sql` | 표준 데이터베이스 DDL (SQLite / PostgreSQL 호환) |
 | `templates/*.csv` | 표준 업로드 템플릿 14종 (마스터, 계약, 정산서, 유지, 시상 PDF 추출 결과, 본부 계약, 외부 지표, 커리어패스, 인증 기준) |
 | `config/column_mapping_example.yaml` | 보험사별 원본 컬럼 → 표준 컬럼 매핑 예시 |
+| `app/`, `run_demo.py` | 동작하는 프로토타입 (계산 엔진 6종 + Streamlit 화면). 실행법은 `docs/06_프로토타입.md` |
 
 ## 핵심 원칙
 
@@ -23,14 +24,12 @@
 3. **마감된 월은 바꾸지 않는다.** 수정이 필요하면 보정 레코드를 추가한다.
 4. **보험사마다 다른 형식은 매핑으로 흡수한다.** 앱 내부는 하나의 표준 스키마만 안다.
 
-## 시작하기
+## 시작하기 (샘플 데이터로 바로 실행)
 
 ```bash
-# SQLite로 표준 스키마 생성
-sqlite3 ga.db < schema/schema.sql
-
-# 템플릿 확인 (UTF-8 BOM 포함, Excel에서 바로 열림)
-ls templates/
+pip install -r requirements.txt
+python run_demo.py          # 샘플 데이터 생성 + 202601~202610 수수료·업적·시상·대사·인증 계산
+streamlit run app/ui.py     # 화면 열기
 ```
 
 자세한 내용은 `docs/01_앱구성.md`부터 읽으면 됩니다.
