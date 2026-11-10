@@ -1,0 +1,5 @@
+﻿rule_name,period_type,metric,scope,scope_value,clawback_months,effective_from,effective_to,tier_no,min_value,max_value,reward_type,reward_value,condition_type,condition_operator,condition_value
+2026 월간 환산P 시상,month,converted_premium,all,,6,202601,,1,3000000,5000000,rate,0.20,,,
+2026 월간 환산P 시상,month,converted_premium,all,,6,202601,,2,5000000,,rate,0.30,,,
+2026 월간 환산P 시상,month,converted_premium,all,,6,202601,,,,,,,persistency_13,>=,0.85
+2026 월간 환산P 시상,month,converted_premium,all,,6,202601,,,,,,,min_count,>=,3

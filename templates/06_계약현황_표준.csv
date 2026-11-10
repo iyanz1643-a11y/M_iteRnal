@@ -1,0 +1,2 @@
+﻿insurer_code,policy_no,product_code,insurer_agent_code,policyholder_name,contract_date,payment_mode,payment_term,premium,status,status_date
+SAM,SAM2026100001,P1001,00012345,홍*동,2026-10-05,monthly,20,150000,inforce,2026-10-05

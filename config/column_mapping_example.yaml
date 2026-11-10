@@ -1,0 +1,83 @@
+# 보험사별 원본 컬럼 → 표준 컬럼 매핑 예시
+# 파일 위치 규칙: config/mapping/{보험사코드}_{데이터유형}.yaml
+# 같은 보험사 형식이 바뀌면 effective_from을 올린 새 블록을 추가하고 이전 블록은 남긴다.
+
+insurer: SAM
+data_type: statement            # statement / newbiz / inforce / payment / clawback / agentcode
+versions:
+  - version: 2
+    effective_from: "202607"    # 이 월부터 이 매핑 사용
+    file:
+      sheet: "지급명세"
+      header_row: 3             # 1부터 시작
+      skip_if:                  # 소계·합계 행 제외 조건
+        - column: "증권번호"
+          equals: ["", "소계", "합계", "총계"]
+    columns:                    # 원본 헤더 → 표준 컬럼
+      "증권번호":        policy_no
+      "설계사코드":      insurer_agent_code
+      "상품코드":        product_code
+      "수수료구분":      commission_type
+      "회차":            installment_no
+      "기준보험료":      basis_amount
+      "지급률":          rate
+      "지급액":          amount
+      "지급일":          pay_date
+    transforms:
+      policy_no:
+        - strip
+        - remove: ["-", " ", "."]
+        - upper
+      insurer_agent_code:
+        - as_text               # 앞자리 0 보존
+        - strip
+      commission_type:
+        map:                    # 보험사 코드 → 표준 코드
+          "신계약":   initial
+          "초회":     initial
+          "계속":     renewal
+          "유지":     persistency
+          "시책":     promo
+          "환수":     clawback
+        default: other
+      installment_no:
+        - to_int
+      basis_amount:
+        - parse_money           # "1,234,000" / "(1,000)" 처리
+        - multiply: 1           # 천원 단위 파일이면 1000
+      rate:
+        - parse_percent         # "85%" → 0.85, "0.85" 그대로
+      amount:
+        - parse_money
+        - negate_if:            # 환수는 음수로 통일
+            column: commission_type
+            equals: clawback
+      pay_date:
+        - parse_date: ["%Y-%m-%d", "%Y.%m.%d", "%Y%m%d", excel_serial]
+    required: [policy_no, insurer_agent_code, commission_type, amount]
+    totals_check:               # 파일 하단 총액과 대조
+      sheet: "지급명세"
+      cell: "H2"
+      compare_to: amount
+
+  - version: 1
+    effective_from: "202401"
+    effective_to: "202606"
+    file:
+      sheet: "Sheet1"
+      header_row: 1
+    columns:
+      "증권No":          policy_no
+      "FC코드":          insurer_agent_code
+      "상품":            product_code
+      "구분":            commission_type
+      "회차":            installment_no
+      "금액":            amount
+    transforms:
+      policy_no: [strip, {remove: ["-", " "]}, upper]
+      insurer_agent_code: [as_text, strip]
+      commission_type:
+        map: {"신": initial, "계": renewal, "환": clawback}
+        default: other
+      amount: [parse_money]
+    required: [policy_no, insurer_agent_code, commission_type, amount]

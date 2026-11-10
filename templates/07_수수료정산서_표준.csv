@@ -1,0 +1,3 @@
+﻿period_ym,insurer_code,policy_no,insurer_agent_code,product_code,commission_type,installment_no,basis_amount,rate,amount,pay_date,raw_ref
+202610,SAM,SAM2026100001,00012345,P1001,initial,1,150000,8.5,1275000,2026-11-10,지급명세!R12
+202610,SAM,SAM2026090010,00012345,P1001,clawback,,,,-300000,2026-11-10,지급명세!R13
