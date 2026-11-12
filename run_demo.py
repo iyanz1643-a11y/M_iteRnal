@@ -7,7 +7,7 @@ import sys
 
 from app import db, masters, samples
 from app.engine import career, certification, commission, incentive, payments, performance, ranking, reconcile
-from app.loader import excel_loader, pdf_incentive
+from app.loader import excel_loader, incentive_plan, pdf_incentive
 from app.samples import AS_OF, MONTHS
 
 RAW = db.ROOT / "data" / "raw"
@@ -35,6 +35,10 @@ def main(path=db.DEFAULT_DB):
             pdf_incentive.approve(con, doc_id, "정산담당(데모)")
             state = "승인"
         print(f"[pdf] {p.name}: 규칙 {len(parsed['sections'])}개, 구간 {n_t}개, 적용 {parsed['effective_from']}~{parsed['effective_to']} → {state}")
+
+    # 2-1) 보험사별 시상안 엑셀 → 시상안 원장 (원문 보존 + 해석 초안)
+    plan = incentive_plan.load(con, samples.write_incentive_plan(RAW), AS_OF)
+    incentive_plan.print_summary(incentive_plan.summary(con, plan["plan_doc_id"]))
 
     # 3) 월별: 엑셀 적재 → 납입 반영 → 수수료 → 업적 → 시상 → 랭킹
     for ym in MONTHS:

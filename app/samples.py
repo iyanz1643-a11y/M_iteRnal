@@ -335,3 +335,67 @@ def write_incentive_pdfs(raw_dir):
         SimpleDocTemplate(str(path), pagesize=A4, title=spec["title"]).build(story)
         out.append(path)
     return out
+
+
+# ------------------------------------------------------------------ 보험사별 시상안 엑셀 (표준 6열, 병합 셀)
+PLAN_HEADERS = ["보험사", "시상대상", "분류", "기간", "달성기준", "시상내용"]
+PLAN_SHEETS = [
+    ("1.생보사", "1. 생보사", [
+        ("샘플생명", "총괄", "판매활성화 시책", "2026년 10월", "종신보험 전 상품", "월초P * 50%(13회차 지급)"),
+        ("", "", "", "", "건강보험 (간편·갱신 포함)", "월초P * 100%(13회차 지급)"),
+        ("", "지사", "판매활성화 시책", "2026년 10월", "종신보험 전 상품", "익월 15% + 13회 100%"),
+        ("", "FC", "현금 시책", "2026년 10월 (청약월 기준)", "건강보험", "월납보험료 * 200%(1차년)"),
+        ("", "", "", "", "종신보험 7년납",
+         "1. 월납보험료 * 250%(1차년)\n2. 월납보험료 * 150%(1차년)"),
+        ("", "", "건강보험 가동 시책 (13회차 입금시)", "2026년 10월 01일 ~ 12일", "", ""),
+        ("", "", "9~10월 연속 가동 시책", "2026년 9~10월 / 10~11월", "건강보험", ""),
+        ("", "비고", "※ 2회차 보험료 미입금 시 미지급", "", "※ 13회차 미유지 시 전액 환수", ""),
+        ("대한생명", "FC", "기본 시책", "2026년 10월", "보장성 전 상품", "월초P * 300%(익월) + 월초P * 200%(13회)"),
+        ("", "", "업적 구간 시책", "2026년 10월", "※ 구간별 중복지급 없음", ""),
+    ]),
+    ("2.손보사", "2. 손보사", [
+        ("한빛손해", "GA", "인보험 대표시상", "2026년 10월", "인보험 (단체 포함)\n※ 실손·펫보험 제외", "190%"),
+        ("한빛손해", "FC", "인보험", "2026년 10월", "인보험", "200% (익월)"),
+        ("", "", "재물보험", "2026년 10월", "장기재물", "80% (보장P 10% 미만시 부지급)"),
+        ("", "", "인보험 주차 시상", "2026년 10월 01일 ~ 11일", "", "13회차 유지"),
+        ("미래화재", "FC *첨부파일 반드시 참조", "인보험 활성화 시상", "2026년 10월", "인보험 (단체·실손 제외)", "200%"),
+        ("", "", "3분기 클럽 시상", "2026년 08월~10월", "", "13회 유지시 지급"),
+        ("", "비고", "", "", "※ 시상금 지급 후 7회차 미유지 시 전액 환수", ""),
+    ]),
+]
+
+
+def write_incentive_plan(raw_dir, ym=AS_OF):
+    """병합 셀·셀 안 줄바꿈·비표준 시트가 섞인 시상안 엑셀을 만든다."""
+    from openpyxl.styles import Alignment
+
+    path = pathlib.Path(raw_dir) / "incentive_plan" / f"{ym}_보험사별_시상안.xlsx"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    for title, banner, rows in PLAN_SHEETS:
+        ws = wb.create_sheet(title)
+        ws["A1"] = banner
+        ws["A1"].font = Font(bold=True, size=14)
+        ws["A2"] = "※ 시상 원안과 상이 할 경우 원안을 준수하여 주시기 바랍니다."
+        ws.append(PLAN_HEADERS)
+        first = ws.max_row + 1
+        for r in rows:
+            ws.append([v if v != "" else None for v in r])
+        for col in (1, 2, 3, 4):                                   # 위 칸과 같은 값이면 병합한다 (빈칸 = 위와 같음)
+            start = first
+            for rno in range(first + 1, ws.max_row + 2):
+                blank = rno <= ws.max_row and ws.cell(rno, col).value is None and ws.cell(rno, 2).value != "비고" \
+                    and (col <= 2 or (ws.cell(rno, 1).value is None and ws.cell(rno, 2).value is None and ws.cell(rno, 3).value is None))
+                if not blank:
+                    if rno - 1 > start:
+                        ws.merge_cells(start_row=start, start_column=col, end_row=rno - 1, end_column=col)
+                    start = rno
+        for row in ws.iter_rows(min_row=first):
+            for c in row:
+                c.alignment = Alignment(wrap_text=True, vertical="center")
+    ws = wb.create_sheet("3.주차시상 비교")                          # 표준 양식이 아닌 시트: 적재하지 않고 사유를 남긴다
+    ws.append(["구분", "보험사", "기간", "대상", "시상율", "구간별 실적 및 시상"])
+    ws.append(["1주", "한빛", "10월 1일 ~ 5일", "인보험", "200%", "5만↑ 15만원"])
+    wb.save(path)
+    return path

@@ -9,7 +9,7 @@ import streamlit as st
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from app import db  # noqa: E402
 from app.engine import career, certification, commission, incentive, payments, performance, persist, ranking, reconcile  # noqa: E402
-from app.loader import excel_loader, pdf_incentive  # noqa: E402
+from app.loader import excel_loader, incentive_plan, pdf_incentive  # noqa: E402
 from app.periods import period_key, ym_add  # noqa: E402
 
 st.set_page_config(page_title="GA 수수료·시상·업적관리", layout="wide")
@@ -87,7 +87,7 @@ if page == "대시보드":
 # ================================================================ 데이터 수집
 elif page == "데이터 수집":
     st.title("데이터 수집")
-    t = st.tabs(["본부 계약 엑셀 업로드", "추출 데이터", "품질검증", "시상 공문 PDF", "원수사 정산서 업로드", "적재 배치 이력"])
+    t = st.tabs(["본부 계약 엑셀 업로드", "추출 데이터", "품질검증", "시상 공문 PDF", "원수사 정산서 업로드", "적재 배치 이력", "보험사별 시상안"])
     with t[0]:
         st.caption("본부 계약현황 엑셀에서 사번 · 성명 · 원수사 · 상품 · 구분 · 보험료 · 인정보험료 · 건수를 뽑아 계약 원장에 반영한다. "
                    "청약은 예정 업적, 성립만 확정 업적, 철회는 제외·차감된다. 매핑: config/mapping/internal_org_contract.yaml")
@@ -174,6 +174,70 @@ elif page == "데이터 수집":
         show(q("""SELECT b.batch_id, COALESCE(i.code, o.name, '내부') 출처, b.data_type 유형, b.period_ym 대상월, b.version 버전, b.file_name 파일,
                   substr(b.file_hash,1,10) 해시, b.mapping_version 매핑, b.row_count 행수, b.status 상태, b.loaded_by 적재자
                   FROM import_batch b LEFT JOIN insurer i ON i.insurer_id=b.insurer_id LEFT JOIN org_unit o ON o.org_id=b.upload_org_id ORDER BY b.batch_id DESC"""))
+
+    with t[6]:
+        st.caption("보험사별 시상안 엑셀(보험사 · 시상대상 · 분류 · 기간 · 달성기준 · 시상내용)을 원문 그대로 시상안 원장에 쌓고, "
+                   "줄마다 유형 · 기간 · 지급률 · 지급 시점을 해석한다. 해석은 초안이며 승인한 줄만 계산 규칙으로 넘길 수 있다.")
+        a, b = st.columns([1, 3])
+        plan_ym = a.text_input("시상안 귀속월 (YYYYMM)", value=ym, key="plan_ym")
+        up = b.file_uploader("시상안 엑셀 (.xlsx) 또는 드라이브 본문 추출본 (.json · .txt)", type=["xlsx", "json", "txt"], key="plan")
+        if up and st.button("시상안 적재"):
+            try:
+                res = incentive_plan.load(con, save_upload(up), plan_ym, loaded_by="ui")
+                st.success(f"plan_doc {res['plan_doc_id']}: 원장 {res['lines']}줄 적재, 적재하지 않은 시트 {len(res['skipped'])}개")
+            except incentive_plan.DuplicatePlan as e:
+                st.warning(str(e))
+        pdocs = q("SELECT plan_doc_id, period_ym 귀속월, file_name 파일, source_kind 원본종류, row_count 줄수, status 상태, loaded_at 적재시각 FROM incentive_plan_doc ORDER BY plan_doc_id DESC")
+        show(pdocs)
+        if not pdocs.empty:
+            pid = int(st.selectbox("시상안 선택", pdocs["plan_doc_id"].tolist(),
+                                   format_func=lambda x: f"{x} · {pdocs.set_index('plan_doc_id').loc[x, '귀속월']} · {pdocs.set_index('plan_doc_id').loc[x, '파일']}"))
+            sm = incentive_plan.summary(con, pid)
+            n_auto = sum(x["n"] for x in sm["by_kind"] if x["parse_status"] == "auto")
+            n_manual = sum(x["n"] for x in sm["by_kind"] if x["parse_status"] == "manual")
+            n_note = sum(x["n"] for x in sm["by_kind"] if x["parse_status"] == "note")
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("원장 줄 수", sm["doc"]["row_count"])
+            c2.metric("자동 해석", n_auto)
+            c3.metric("사람 확인 필요", n_manual)
+            c4.metric("비고", n_note)
+            c5.metric("보험사", sum(x["insurers"] for x in sm["by_sheet"]))
+            for x in sm["skipped"]:
+                st.caption(f"적재하지 않은 시트 · {x['sheet']}: {x['reason']}")
+            a, b = st.columns(2)
+            a.dataframe(pd.DataFrame([{"유형": incentive_plan.KIND_KO[x["line_kind"]], "해석": incentive_plan.STATUS_KO[x["parse_status"]], "줄": x["n"]} for x in sm["by_kind"]]), hide_index=True)
+            b.dataframe(pd.DataFrame([{"확인이 필요한 이유": x["parse_note"], "줄": x["n"]} for x in sm["by_note"]]), hide_index=True)
+            lines = q("""SELECT l.line_id, l.sheet 시트, l.insurer_name 보험사, l.recipient_level lv, l.category_raw 분류, l.period_raw 기간원문, l.period_from 시작일, l.period_to 종료일,
+                         l.criteria_raw 달성기준, l.reward_raw 시상내용, l.pay_timing tm, l.line_kind kind, l.parse_status ps, l.parse_note 확인사유, l.review_status 검토,
+                         (SELECT GROUP_CONCAT(COALESCE(c.option_label || ') ', '') || c.basis || ' × ' || ROUND(c.rate * 100, 2) || '% @' || c.pay_timing, ' | ')
+                            FROM incentive_plan_component c WHERE c.line_id=l.line_id) 지급률해석
+                         FROM incentive_plan_line l WHERE l.plan_doc_id=? ORDER BY l.line_id""", (pid,))
+            lines["수령계층"] = lines["lv"].map(incentive_plan.LEVEL_KO)
+            lines["유형"] = lines["kind"].map(incentive_plan.KIND_KO)
+            lines["해석"] = lines["ps"].map(incentive_plan.STATUS_KO)
+            lines["지급시점"] = lines["tm"].map(incentive_plan.TIMING_KO)
+            f1, f2, f3, f4 = st.columns(4)
+            fi = f1.multiselect("보험사", sorted(lines["보험사"].unique()), key="plan_f_ins")
+            fl = f2.multiselect("수령 계층", sorted(lines["수령계층"].unique()), key="plan_f_lv")
+            fk = f3.multiselect("유형", sorted(lines["유형"].unique()), key="plan_f_kind")
+            fs = f4.multiselect("해석", sorted(lines["해석"].unique()), key="plan_f_ps")
+            view = lines
+            for col, sel in (("보험사", fi), ("수령계층", fl), ("유형", fk), ("해석", fs)):
+                if sel:
+                    view = view[view[col].isin(sel)]
+            st.caption(f"{len(view)}줄 표시")
+            show(view[["line_id", "보험사", "수령계층", "분류", "기간원문", "시작일", "종료일", "달성기준", "시상내용", "유형", "지급시점", "지급률해석", "해석", "확인사유", "검토"]])
+            who = st.text_input("검토자", key="plan_rev")
+            ids = st.multiselect("검토할 line_id", view["line_id"].tolist(), key="plan_ids")
+            a, b = st.columns(2)
+            if a.button("선택한 줄 승인", disabled=not (who and ids)):
+                for i in ids:
+                    incentive_plan.review(con, int(i), True, who)
+                st.rerun()
+            if b.button("선택한 줄 반려", disabled=not (who and ids)):
+                for i in ids:
+                    incentive_plan.review(con, int(i), False, who)
+                st.rerun()
 
 # ================================================================ 조직
 elif page == "조직":

@@ -602,3 +602,64 @@ JOIN agent a ON a.agent_id = c.agent_id
 JOIN insurer i ON i.insurer_id = c.insurer_id
 LEFT JOIN product p ON p.product_id = c.product_id
 LEFT JOIN product_category pc ON pc.code = p.product_category;
+
+-- ---------------------------------------------------------------------------
+-- 시상안 원장: 보험사별 시상안(엑셀)을 원문 그대로 한 줄씩 보존하고 해석 결과를 곁에 둔다.
+-- 해석은 초안이며, 승인된 줄만 commission_rate_rule(promo) / incentive_rule 로 넘긴다.
+-- ---------------------------------------------------------------------------
+CREATE TABLE incentive_plan_doc (
+    plan_doc_id     INTEGER PRIMARY KEY,
+    period_ym       TEXT NOT NULL,
+    title           TEXT,
+    file_name       TEXT NOT NULL,
+    file_hash       TEXT NOT NULL UNIQUE,
+    source_kind     TEXT NOT NULL,                -- xlsx / drive_extract
+    received_at     TEXT NOT NULL,
+    loaded_at       TEXT,
+    loaded_by       TEXT,
+    row_count       INTEGER,
+    skipped_sheets  TEXT,                         -- 적재하지 않은 시트와 사유(JSON)
+    status          TEXT NOT NULL DEFAULT 'loaded', -- loaded / reviewed / superseded
+    note            TEXT
+);
+
+CREATE TABLE incentive_plan_line (
+    line_id         INTEGER PRIMARY KEY,
+    plan_doc_id     INTEGER NOT NULL REFERENCES incentive_plan_doc(plan_doc_id),
+    sheet           TEXT NOT NULL,
+    row_no          INTEGER NOT NULL,
+    sector          TEXT,                         -- life / nonlife
+    insurer_raw     TEXT,                         -- 원문 (병합 셀이면 빈칸)
+    insurer_name    TEXT NOT NULL,                -- 병합 셀을 채운 보험사명
+    insurer_id      INTEGER REFERENCES insurer(insurer_id),   -- 마스터와 이름이 맞을 때만
+    recipient_raw   TEXT,
+    recipient_level TEXT NOT NULL,                -- ga / hq(총괄) / branch(지사) / fc / note(비고) / unknown
+    category_raw    TEXT,
+    period_raw      TEXT,
+    period_from     TEXT,                         -- YYYY-MM-DD (일 단위)
+    period_to       TEXT,
+    criteria_raw    TEXT,
+    reward_raw      TEXT,
+    pay_timing      TEXT NOT NULL DEFAULT 'unspecified', -- next_month(익월) / inst13(13회차) / next_month+inst13 / year1 / year2 / mixed / unspecified
+    line_kind       TEXT NOT NULL,                -- rate_promo / activity / consecutive / tier / note / unknown
+    parse_status    TEXT NOT NULL,                -- auto(자동 해석) / manual(사람 확인 필요) / note(비고)
+    parse_note      TEXT,
+    review_status   TEXT NOT NULL DEFAULT 'draft', -- draft / approved / rejected
+    reviewed_by     TEXT,
+    reviewed_at     TEXT,
+    linked_rate_rule_id      INTEGER REFERENCES commission_rate_rule(rule_id),
+    linked_incentive_rule_id INTEGER REFERENCES incentive_rule(rule_id)
+);
+CREATE INDEX idx_plan_line_doc ON incentive_plan_line(plan_doc_id, insurer_name, recipient_level);
+
+-- 정률 시책의 지급 조각: 기준 보험료 × 지급률, 지급 시점
+CREATE TABLE incentive_plan_component (
+    component_id    INTEGER PRIMARY KEY,
+    line_id         INTEGER NOT NULL REFERENCES incentive_plan_line(line_id),
+    seq             INTEGER NOT NULL,
+    option_label    TEXT,                         -- 조건이 여럿일 때의 번호(1, 2, ①)
+    basis           TEXT NOT NULL,                -- initial_premium(월초P) / monthly_premium / paid_premium / base_premium / premium / unspecified
+    rate            NUMERIC NOT NULL,
+    pay_timing      TEXT NOT NULL,                -- next_month / inst13 / next_month+inst13 / year1 / year2 / unspecified
+    pay_condition   TEXT
+);
