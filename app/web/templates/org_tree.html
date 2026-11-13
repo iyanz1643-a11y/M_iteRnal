@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>조직 계층</h1>
+<div class="sub">범위: {{ SCOPES[ctx.scope] }} · 구조는 GA, 지사 또는 본부, 지점, 팀이다</div>
+<div class="box"><table><tr><th>조직</th><th>계층</th><th>조직장</th><th class="num">직속 인원</th></tr>
+{% for o in orgs %}<tr><td><span class="indent" style="width:{{ o.depth * 20 }}px"></span>{{ o.name }}</td><td><span class="tag">{{ LEVEL_KO.get(o.level, o.level) }}</span></td><td>{{ o.head or '미지정' }}</td><td class="num">{{ o.members }}</td></tr>{% endfor %}
+</table></div>
+<div class="note">샘플 조직은 지사·본부와 지점 두 계층뿐이다. GA와 팀 계층, 실제 조직 이름은 사원현황을 적재하면서 넣는다.</div>
+{% endblock %}

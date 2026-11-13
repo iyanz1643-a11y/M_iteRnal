@@ -9,6 +9,7 @@ from app import db, masters, samples
 from app.engine import career, certification, commission, incentive, payments, performance, ranking, reconcile
 from app.loader import excel_loader, incentive_plan, pdf_incentive
 from app.samples import AS_OF, MONTHS
+from app.web import auth as web_auth
 
 RAW = db.ROOT / "data" / "raw"
 
@@ -17,6 +18,7 @@ def main(path=db.DEFAULT_DB):
     con = db.init_db(path)
     info = masters.seed(con)
     hq_id = {r["name"]: r["org_id"] for r in con.execute("SELECT * FROM org_unit WHERE level='hq'")}
+    print(f"[accounts] 샘플 계정 {web_auth.seed_accounts(con)}개 (admin 과 사번, 비밀번호는 DEMO_PASSWORD 또는 demo1234)")
 
     # 1) 샘플 원본 파일 생성
     shutil.rmtree(RAW, ignore_errors=True)

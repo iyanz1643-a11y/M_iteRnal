@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>{{ item.name }}</h1>
+<div class="sub">{{ PHASES[item.phase] }} · 내가 보는 범위: {{ SCOPES[ctx.scope] }}</div>
+<div class="card"><div class="k">이 화면에 들어오는 것</div><p style="margin:6px 0 0">{{ item.desc }}</p></div>
+<h2>상태</h2>
+{% if item.status == 'legacy' %}<p><span class="tag accent">기존 운영 도구에 있음</span> 지금은 메인 관리자의 운영 도구에서 쓴다. {{ PHASES[item.phase] }}에서 이 자리로 옮긴다.</p>
+{% else %}<p><span class="tag">기획</span> {{ PHASES[item.phase] }}에서 만든다.</p>{% endif %}
+<h2>누가 보는가</h2>
+<div class="box"><table><tr><th>역할</th><th>범위</th></tr>
+{% for r, s in item.roles.items() %}<tr><td>{{ {'main':'메인 관리자','manager':'관리자','agent':'설계사'}[r] }}</td><td>{{ SCOPES[s] }}</td></tr>{% endfor %}
+</table></div>
+{% endblock %}

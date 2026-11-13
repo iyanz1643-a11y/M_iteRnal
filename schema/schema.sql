@@ -663,3 +663,21 @@ CREATE TABLE incentive_plan_component (
     pay_timing      TEXT NOT NULL,                -- next_month / inst13 / next_month+inst13 / year1 / year2 / unspecified
     pay_condition   TEXT
 );
+
+-- ---------------------------------------------------------------------------
+-- 계정: 로그인 단위. 역할은 여기 적지 않고 조직장 지정(org_manager)과 is_main_admin 에서 그때그때 정한다.
+-- ---------------------------------------------------------------------------
+CREATE TABLE user_account (
+    user_id         INTEGER PRIMARY KEY,
+    login_id        TEXT NOT NULL UNIQUE,         -- 설계사는 사번
+    password_hash   TEXT NOT NULL,                -- pbkdf2$반복수$salt$hash
+    agent_id        INTEGER UNIQUE REFERENCES agent(agent_id),   -- 메인 관리자 전용 계정이면 NULL
+    display_name    TEXT NOT NULL,
+    is_main_admin   INTEGER NOT NULL DEFAULT 0,
+    status          TEXT NOT NULL DEFAULT 'active', -- active / suspended
+    must_change_password INTEGER NOT NULL DEFAULT 1,
+    failed_count    INTEGER NOT NULL DEFAULT 0,
+    locked_until    TEXT,
+    last_login_at   TEXT,
+    created_at      TEXT NOT NULL
+);

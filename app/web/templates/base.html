@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ item.name if item else '홈' }}{% endblock %} · GA 업무 앱</title>
+<link rel="stylesheet" href="/static/app.css"></head>
+<body><div class="layout">
+<nav class="side" id="side">
+  <div class="brand">GA 업무 앱</div>
+  <div class="who"><b>{{ ctx.name }}</b> · {{ ctx.role_ko }}<br>
+    {% if ctx.heads %}{% for h in ctx.heads %}{{ h.name }} {{ HEAD_KO.get(h.role, '조직장') }}{% if not loop.last %}, {% endif %}{% endfor %}
+    {% elif ctx.home_org %}{{ ctx.home_org.name }}{% else %}전체{% endif %}
+    · <a href="/logout">나가기</a></div>
+  {% for g in groups %}
+  <div class="grp">{% if g['items']|length > 1 or g.id == 'common' %}<div class="grp-name">{{ g.icon }} {{ g.name }}</div>{% endif %}
+    {% for it in g['items'] %}<a class="it {{ 'on' if it.path == path }}" href="{{ it.path }}">{{ it.name }}</a>{% endfor %}
+  </div>
+  {% endfor %}
+</nav>
+<main class="main">
+{% if ctx.must_change_password and path != '/me' %}<div class="alert">초기 비밀번호를 쓰고 있습니다. <a href="/me">내 정보</a>에서 바꿔 주세요.</div>{% endif %}
+{% block body %}{% endblock %}
+</main></div>
+<div class="tabs">
+  {% for g in groups if g.id in mobile_tabs %}
+  <a class="{{ 'on' if item and item.group == g.id }}" href="{{ g['items'][0].path }}"><span class="ic">{{ g.icon }}</span>{{ g.name }}</a>
+  {% endfor %}
+  <button type="button" onclick="document.getElementById('side').classList.toggle('open')"><span class="ic">≡</span>더보기</button>
+</div>
+</body></html>

@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>팀원 현황</h1>
+<div class="sub">기준 월 {{ ctx.ym }} · 마지막 계약 적재 {{ last_load or '없음' }} · 범위: {{ SCOPES[ctx.scope] }} · 수수료와 시상 금액은 보이지 않습니다</div>
+<div class="box"><table><tr><th>사번</th><th>성명</th><th>소속</th><th>위촉일</th><th class="num">청약</th><th class="num">성립</th><th class="num">철회</th><th class="num">순건수</th><th class="num">인정보험료</th><th>가동</th></tr>
+{% for r in rows %}<tr><td>{{ r.code }}</td><td>{{ r.name }}</td><td>{{ r.org or '-' }}</td><td>{{ r.hire_date or '-' }}</td>
+<td class="num">{{ r.applied_count or 0 }}</td><td class="num">{{ r.new_count|n }}</td><td class="num">{{ r.withdrawn_count|n }}</td><td class="num">{{ r.net_count|n }}</td>
+<td class="num">{{ r.converted_premium|won }}</td><td>{% if (r.net_count or 0) > 0 %}<span class="tag good">가동</span>{% else %}<span class="tag warn">미가동</span>{% endif %}</td></tr>{% endfor %}
+</table></div>
+<div class="note">{{ rows|length }}명. 프로모션 달성, 교육, 정착 단계 열은 해당 파트를 만들 때 붙인다.</div>
+{% endblock %}

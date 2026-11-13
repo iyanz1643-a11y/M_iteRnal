@@ -1,0 +1,203 @@
+# 메뉴 구성의 원본. 화면의 메뉴, 권한 검사, 문서의 메뉴 표가 모두 이 파일을 따른다.
+# roles 값: all(전체) / org(자기 조직과 그 아래) / self(본인). 적지 않은 역할에게는 메뉴가 보이지 않는다.
+# phase: 1 운영 기반 / 2 사람별 화면 / 3 제도와 제안.  status: built(새 화면에 있음) / legacy(기존 운영 도구에 있음) / planned(기획)
+roles:
+  main: 메인 관리자
+  manager: 관리자
+  agent: 설계사
+
+mobile_tabs: [home, promo, my, sales]      # 설계사 휴대폰 하단 탭. 나머지는 더보기로 모은다.
+
+groups:
+  - id: home
+    name: 홈
+    icon: "⌂"
+    items:
+      - {id: home, name: 홈, path: /, roles: {main: all, manager: org, agent: self}, phase: 2, status: built,
+         desc: "역할별 요약, 할 일, 마감이 가까운 프로모션, 자료의 기준 시각"}
+
+  - id: my
+    name: 내 진척
+    icon: "◔"
+    items:
+      - {id: my-summary, name: 실적 요약, path: /my/summary, roles: {manager: self, agent: self}, phase: 2, status: planned,
+         desc: "월·분기·반기·연 실적과 구분별 집계. 청약은 예정, 성립은 확정으로 나눈다"}
+      - {id: my-awards, name: 시상 진척, path: /my/awards, roles: {manager: self, agent: self}, phase: 2, status: planned,
+         desc: "조직 부문 순위와 구간시상 달성 현황"}
+      - {id: my-persistency, name: 내 유지율, path: /my/persistency, roles: {manager: self, agent: self}, phase: 2, status: planned,
+         desc: "13회차·25회차 유지율과 위험 계약"}
+      - {id: my-education, name: 내 교육, path: /my/education, roles: {manager: self, agent: self}, phase: 2, status: planned,
+         desc: "필수 과정 수료 현황, 수료 이력, 기한"}
+      - {id: my-career, name: 커리어패스, path: /my/career, roles: {manager: self, agent: self}, phase: 3, status: planned,
+         desc: "현재 단계, 다음 단계의 기준, 남은 양, 목표 역산"}
+      - {id: my-cert, name: 인증, path: /my/cert, roles: {manager: self, agent: self}, phase: 3, status: planned,
+         desc: "MDRT와 우수인증 진척, 연말 예상"}
+
+  - id: promo
+    name: 프로모션
+    icon: "★"
+    items:
+      - {id: promo-list, name: 진행 중 프로모션, path: /promo/list, roles: {main: all, manager: org, agent: self}, phase: 2, status: planned,
+         desc: "승인한 시상안을 보험사·상품군·마감 임박으로 걸러 본다. 원문 보기 포함"}
+      - {id: promo-progress, name: 달성 현황, path: /promo/progress, roles: {main: all, manager: org, agent: self}, phase: 2, status: planned,
+         desc: "설계사는 내 예상액과 다음 구간까지 남은 금액, 관리자는 팀원의 구간 근접 현황"}
+      - {id: promo-org-awards, name: 조직 부문 시상, path: /promo/org-awards, roles: {main: all, manager: org, agent: self}, phase: 2, status: planned,
+         desc: "조직이 등록한 월간 부문과 현재 순위. 이터널은 인정업적 부문과 손해보험 건수 부문"}
+      - {id: promo-compare, name: 프로모션 비교, path: /promo/compare, roles: {main: all, manager: org, agent: self}, phase: 2, status: planned,
+         desc: "같은 상품군의 보험사별 지급률과 지급 시점. 내부 참고용"}
+      - {id: promo-archive, name: 지난 프로모션, path: /promo/archive, roles: {main: all, manager: org, agent: self}, phase: 2, status: planned,
+         desc: "월별 보관과 결과"}
+      - {id: promo-publish, name: 게시 관리, path: /promo/publish, roles: {main: all}, phase: 2, status: planned,
+         desc: "승인한 시상안 줄을 프로모션으로 게시하고 회수한다"}
+      - {id: promo-tiers, name: 구간 직접 입력, path: /promo/tiers, roles: {main: all}, phase: 2, status: planned,
+         desc: "금액이 그림에만 있는 시상의 구간표를 입력한다"}
+
+  - id: perf
+    name: 실적
+    icon: "▤"
+    items:
+      - {id: perf-period, name: 기간별 업적, path: /perf/period, roles: {main: all, manager: org, agent: self}, phase: 1, status: legacy,
+         desc: "월·분기·반기·연. 청약, 성립, 철회, 순건수, 보험료, 인정보험료"}
+      - {id: perf-category, name: 구분별 집계, path: /perf/category, roles: {main: all, manager: org, agent: self}, phase: 1, status: legacy,
+         desc: "종신, 건강, 저축, 연금, 재물, 자동차, 일반"}
+      - {id: perf-contracts, name: 계약 원장, path: /perf/contracts, roles: {main: all, manager: org, agent: self}, phase: 1, status: legacy,
+         desc: "권한 범위의 계약 목록과 상태 이력"}
+      - {id: perf-persistency, name: 유지율, path: /perf/persistency, roles: {main: all, manager: org}, phase: 1, status: legacy,
+         desc: "13회차·25회차, 보험사별과 조직별"}
+      - {id: perf-ranking, name: 랭킹, path: /perf/ranking, roles: {main: all, manager: org, agent: self}, phase: 1, status: legacy,
+         desc: "지표, 업권 조건, 조직 범위를 골라 순위를 낸다. 설계사에게는 상위 10명과 본인 순위"}
+      - {id: perf-hall, name: 명예의전당, path: /perf/hall, roles: {main: all, manager: org, agent: self}, phase: 2, status: legacy,
+         desc: "확정된 전월 순위와 수상 이력"}
+      - {id: perf-org-compare, name: 조직 비교, path: /perf/org-compare, roles: {main: all, manager: org}, phase: 2, status: planned,
+         desc: "지점별·팀별 실적과 가동률"}
+
+  - id: team
+    name: 팀 관리
+    icon: "☷"
+    items:
+      - {id: team-members, name: 팀원 현황, path: /team/members, roles: {main: all, manager: org}, phase: 2, status: built,
+         desc: "팀원별 실적, 프로모션 달성, 교육, 정착 단계. 금액은 가린다"}
+      - {id: team-education, name: 교육 진척도, path: /team/education, roles: {main: all, manager: org}, phase: 2, status: planned,
+         desc: "과정별 수료율, 미수료자, 수료 확인 처리"}
+      - {id: team-onboarding, name: 신인 정착, path: /team/onboarding, roles: {main: all, manager: org}, phase: 2, status: planned,
+         desc: "위촉 뒤 필수 교육, 첫 계약, 첫 가동까지의 체크리스트"}
+      - {id: team-coaching, name: 면담 기록, path: /team/coaching, roles: {manager: org}, phase: 3, status: planned,
+         desc: "팀원별 면담 날짜와 약속 사항, 다음 면담 알림"}
+      - {id: team-activity, name: 활동 깔때기, path: /team/activity, roles: {main: all, manager: org}, phase: 3, status: planned,
+         desc: "통화, 상담, 제안, 청약 건수와 전환율"}
+
+  - id: edu
+    name: 교육
+    icon: "✎"
+    items:
+      - {id: edu-courses, name: 과정, path: /edu/courses, roles: {main: all, manager: org, agent: self}, phase: 2, status: planned,
+         desc: "과정명, 유형, 필수 여부, 대상, 기한. 유형은 신인·보수·상품·준법"}
+      - {id: edu-sessions, name: 차수와 일정, path: /edu/sessions, roles: {main: all, manager: org, agent: self}, phase: 2, status: planned,
+         desc: "일시, 장소나 온라인, 정원, 신청"}
+      - {id: edu-completions, name: 수료 기록, path: /edu/completions, roles: {main: all, manager: org}, phase: 2, status: planned,
+         desc: "수료자 명부를 올리거나 관리자가 확인 처리한다"}
+
+  - id: program
+    name: 제도
+    icon: "▲"
+    items:
+      - {id: program-career, name: 커리어패스 운영, path: /program/career, roles: {main: all, manager: org}, phase: 3, status: legacy,
+         desc: "주관 기관별 기준, 회차, 후보, 승인, 결과"}
+      - {id: program-cert, name: 인증과 MDRT, path: /program/cert, roles: {main: all, manager: org}, phase: 3, status: legacy,
+         desc: "생명보험·손해보험 인증과 MDRT의 진척과 연말 예상"}
+      - {id: program-executive, name: 임원제도, path: /program/executive, roles: {main: all, manager: org}, phase: 3, status: legacy,
+         desc: "관리자 임원제도와 설계사 임원제도"}
+      - {id: program-excellence, name: 영업우수, path: /program/excellence, roles: {main: all, manager: org}, phase: 3, status: legacy,
+         desc: "영업우수설계사 선발과 수상 이력"}
+
+  - id: sales
+    name: 영업·제안
+    icon: "✆"
+    items:
+      - {id: sales-leads, name: 내 DB, path: /sales/leads, roles: {manager: self, agent: self}, phase: 3, status: planned,
+         desc: "배정받은 DB와 통화·상담·제안 기록"}
+      - {id: sales-assign, name: DB 배정과 성과, path: /sales/assign, roles: {main: all, manager: org}, phase: 3, status: planned,
+         desc: "지역 매칭 배정, 방치 DB 회수, 팀·지점·본부 단위 체결률"}
+      - {id: sales-customers, name: 고객, path: /sales/customers, roles: {manager: self, agent: self}, phase: 3, status: planned,
+         desc: "체결 고객의 계약, 기념일, 다음 할 일"}
+      - {id: sales-guide, name: 가이드 자료, path: /sales/guide, roles: {main: all, manager: org, agent: self}, phase: 3, status: planned,
+         desc: "보장분석 가이드, TA 스크립트, 니즈환기 자료"}
+      - {id: sales-report, name: 제안 리포트, path: /sales/report, roles: {manager: self, agent: self}, phase: 3, status: planned,
+         desc: "보장분석 보고서 제작지침에 따른 맞춤 제안 리포트"}
+      - {id: sales-cardnews, name: 카드뉴스, path: /sales/cardnews, roles: {main: all}, phase: 3, status: planned,
+         desc: "리포트를 카드뉴스로 만들어 심사 뒤 게시한다"}
+      - {id: sales-card, name: 모바일 명함, path: /sales/card, roles: {manager: self, agent: self}, phase: 3, status: planned,
+         desc: "내 명함, 인증과 수상 배지, 공유"}
+
+  - id: data
+    name: 데이터
+    icon: "⇪"
+    items:
+      - {id: data-contracts, name: 계약 엑셀, path: /data/contracts, roles: {main: all}, phase: 1, status: legacy,
+         desc: "본부 계약현황을 올려 계약 원장에 반영한다"}
+      - {id: data-staff, name: 사원현황, path: /data/staff, roles: {main: all}, phase: 1, status: planned,
+         desc: "조직, 설계사, 조직장, 인사 이동을 반영한다"}
+      - {id: data-plan, name: 시상안, path: /data/plan, roles: {main: all}, phase: 1, status: legacy,
+         desc: "보험사별 시상안을 원장에 쌓고 해석하고 승인한다"}
+      - {id: data-courses, name: 수료자 명부, path: /data/courses, roles: {main: all}, phase: 2, status: planned,
+         desc: "교육 수료를 반영한다"}
+      - {id: data-statement, name: 정산서와 유지율, path: /data/statement, roles: {main: all}, phase: 3, status: legacy,
+         desc: "원수사 정산서와 유지율 현황"}
+      - {id: data-quality, name: 품질검증, path: /data/quality, roles: {main: all}, phase: 1, status: legacy,
+         desc: "차단과 경고 목록, 처리 기록"}
+      - {id: data-batches, name: 적재 이력, path: /data/batches, roles: {main: all}, phase: 1, status: legacy,
+         desc: "파일별 적재 결과와 재적재"}
+
+  - id: settle
+    name: 수수료·점검
+    icon: "₩"
+    items:
+      - {id: settle-commission, name: 수수료 내역, path: /settle/commission, roles: {main: all, manager: self, agent: self}, phase: 3, status: legacy,
+         desc: "계약별 초회·계속·시책. 본인 것과 메인 관리자만 본다"}
+      - {id: settle-clawback, name: 환수, path: /settle/clawback, roles: {main: all, manager: self, agent: self}, phase: 3, status: legacy,
+         desc: "환수 대상과 금액"}
+      - {id: settle-recon, name: 대사, path: /settle/recon, roles: {main: all}, phase: 3, status: legacy,
+         desc: "정산서와 자체 계산의 차이"}
+      - {id: settle-adjust, name: 조정, path: /settle/adjust, roles: {main: all}, phase: 3, status: legacy,
+         desc: "차이의 처리 기록"}
+      - {id: settle-close, name: 마감, path: /settle/close, roles: {main: all}, phase: 3, status: legacy,
+         desc: "월 잠금과 해제 기록"}
+
+  - id: org
+    name: 조직·설정
+    icon: "⚙"
+    items:
+      - {id: org-tree, name: 조직 계층, path: /org/tree, roles: {main: all, manager: org}, phase: 1, status: built,
+         desc: "GA, 지사 또는 본부, 지점, 팀. 조직 추가·이동·폐지는 메인 관리자만"}
+      - {id: org-heads, name: 조직장과 대리, path: /org/heads, roles: {main: all}, phase: 1, status: planned,
+         desc: "조직장 지정과 기간제 대리 지정"}
+      - {id: org-accounts, name: 계정, path: /org/accounts, roles: {main: all}, phase: 1, status: built,
+         desc: "계정 발급, 초기 비밀번호, 잠금 해제, 중지"}
+      - {id: org-settings, name: 조직별 설정, path: /org/settings, roles: {main: all, manager: org}, phase: 3, status: planned,
+         desc: "실적 인정 기준, 시상 부문, 자격 요건, 순위 공유, DB 배정, 알림 기준"}
+      - {id: org-masters, name: 마스터, path: /org/masters, roles: {main: all}, phase: 1, status: legacy,
+         desc: "보험사, 상품, 구분"}
+      - {id: org-audit, name: 변경 기록, path: /org/audit, roles: {main: all}, phase: 1, status: built,
+         desc: "누가 언제 무엇을 바꿨는지, 로그인과 접근 거부 기록"}
+
+  - id: review
+    name: 심사함
+    icon: "⚖"
+    items:
+      - {id: review-requests, name: 심사 요청, path: /review/requests, roles: {main: all}, phase: 3, status: planned,
+         desc: "카드뉴스, 제안 리포트 서식, 안내문, 기준 문안을 7나이츠 심사에 올린다"}
+      - {id: review-results, name: 심사 결과와 결재, path: /review/results, roles: {main: all}, phase: 3, status: planned,
+         desc: "다빈치의 형상화, 일곱 본능의 의견, 회전 수, 사람의 최종 결재"}
+
+  - id: common
+    name: 공통
+    icon: "…"
+    items:
+      - {id: notifications, name: 알림함, path: /notifications, roles: {main: all, manager: org, agent: self}, phase: 2, status: planned,
+         desc: "프로모션 게시와 마감, 구간 근접, 교육 기한, 승인 대기"}
+      - {id: calendar, name: 일정, path: /calendar, roles: {main: all, manager: org, agent: self}, phase: 2, status: planned,
+         desc: "프로모션 기간, 교육 일정, 마감일, 13회차 도래"}
+      - {id: board, name: 공지와 자료실, path: /board, roles: {main: all, manager: org, agent: self}, phase: 2, status: planned,
+         desc: "공지, 시상안 원문, 교안, 양식"}
+      - {id: me, name: 내 정보, path: /me, roles: {main: all, manager: self, agent: self}, phase: 1, status: built,
+         desc: "비밀번호 변경, 알림 설정, 소속"}

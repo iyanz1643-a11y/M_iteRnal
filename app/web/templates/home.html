@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>{{ ctx.name }}님의 홈</h1>
+<div class="sub">기준 월 {{ ctx.ym[:4] }}년 {{ ctx.ym[4:]|int }}월 · 마지막 계약 적재 {{ d.last_load or '없음' }} · 실적은 적재 시점 기준입니다</div>
+
+{% if d.ops %}
+<h2>운영 상태</h2>
+<div class="cards">
+  <div class="card"><div class="k">이번 달 적재 파일</div><div class="v">{{ d.ops.batches }}</div></div>
+  <div class="card"><div class="k">품질 차단 · 경고</div><div class="v">{{ d.ops.block }} · {{ d.ops.warn }}</div><div class="n">차단은 적재에서 빠진 줄</div></div>
+  <div class="card"><div class="k">시상안 확인 필요</div><div class="v">{{ d.ops.plan_manual }}</div><div class="n">사람이 봐야 하는 줄</div></div>
+  <div class="card"><div class="k">쓰는 계정</div><div class="v">{{ d.ops.accounts }}</div></div>
+  <div class="card"><div class="k">월 마감</div><div class="v">{{ '마감됨' if d.ops.closed else '진행 중' }}</div></div>
+</div>
+{% endif %}
+
+{% if d.team %}
+<h2>{{ '전체 조직' if ctx.role == 'main' else '우리 조직' }}</h2>
+<div class="cards">
+  <div class="card"><div class="k">소속 인원</div><div class="v">{{ d.team.n }}</div></div>
+  <div class="card"><div class="k">가동 인원</div><div class="v">{{ d.team.active }}</div><div class="n">이번 달 순건수 1건 이상</div></div>
+  <div class="card"><div class="k">순건수</div><div class="v">{{ d.team.count|n }}</div></div>
+  <div class="card"><div class="k">인정보험료</div><div class="v">{{ d.team.premium|won }}</div></div>
+</div>
+<h2>인정보험료 상위</h2>
+<div class="box"><table><tr><th>사번</th><th>성명</th><th>소속</th><th class="num">순건수</th><th class="num">인정보험료</th></tr>
+{% for t in d.team.top %}<tr><td>{{ t.code }}</td><td>{{ t.name }}</td><td>{{ t.org or '-' }}</td><td class="num">{{ t.net_count|n }}</td><td class="num">{{ t.converted_premium|won }}</td></tr>{% endfor %}
+</table></div>
+{% endif %}
+
+{% if d.mine %}
+<h2>내 이번 달</h2>
+<div class="cards">
+  <div class="card"><div class="k">인정보험료</div><div class="v">{{ d.mine.converted_premium|won }}</div><div class="n">성립 건만 확정으로 센다</div></div>
+  <div class="card"><div class="k">성립 · 순건수</div><div class="v">{{ d.mine.new_count|n }} · {{ d.mine.net_count|n }}</div></div>
+  <div class="card"><div class="k">청약 대기</div><div class="v">{{ d.mine.applied_count or 0 }}</div><div class="n">예정 업적</div></div>
+  <div class="card"><div class="k">내 순위</div><div class="v">{{ d.my_rank or '-' }}</div><div class="n">인정보험료 기준, 집계 중</div></div>
+</div>
+{% endif %}
+
+<h2>마감이 가까운 프로모션</h2>
+{% if d.promos %}
+<div class="box"><table><tr><th>보험사</th><th>분류</th><th>기간</th><th>시상내용</th><th>지급</th></tr>
+{% for p in d.promos %}<tr><td>{{ p.insurer_name }}</td><td class="wrap">{{ p.category_raw }}</td><td>{{ p.period_raw }}</td>
+<td class="wrap">{{ p.reward_raw or '원문 확인 필요' }}</td><td>{{ {'next_month':'익월','inst13':'13회차','next_month+inst13':'익월+13회차','year1':'1차년','year2':'2차년'}.get(p.pay_timing, '-') }}</td></tr>{% endfor %}
+</table></div>
+<div class="note">설계사 몫 {{ d.promo_total }}줄 가운데 앞의 {{ d.promos|length }}줄. 시상안 원장의 미리보기이며, 게시와 내 달성 현황은 프로모션 메뉴에서 만든다. 원안과 다르면 원안을 따른다.</div>
+{% else %}<div class="note">적재된 시상안이 없습니다.</div>{% endif %}
+{% endblock %}
