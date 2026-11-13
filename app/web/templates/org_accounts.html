@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% block body %}
-<h1>계정</h1>
-<div class="sub">역할은 계정에 적지 않는다. 조직장으로 지정되면 관리자가 되고, 지정이 끝나면 설계사로 돌아간다</div>
-<div class="box"><table><tr><th>아이디</th><th>이름</th><th>역할</th><th>상태</th><th>마지막 접속</th><th></th></tr>
-{% for r in rows %}<tr><td>{{ r.login_id }}</td><td>{{ r.display_name }}</td>
-<td>{% if r.is_main_admin %}<span class="tag accent">메인 관리자</span>{% elif r.heads %}<span class="tag">관리자</span>{% else %}<span class="tag">설계사</span>{% endif %}</td>
-<td>{% if r.status != 'active' %}<span class="tag warn">중지</span>{% elif r.locked_until and r.locked_until > now %}<span class="tag warn">잠김</span>{% else %}<span class="tag good">사용</span>{% endif %}
-{% if r.must_change_password %}<span class="tag">초기 비밀번호</span>{% endif %}</td>
-<td>{{ r.last_login_at or '-' }}</td>
+<h1 class="display">계정</h1>
+<p class="lede">역할은 계정에 적지 않습니다. 조직장으로 지정되면 관리자가 되고, 지정이 끝나면 설계사로 돌아갑니다.</p>
+<div class="card tablecard" style="margin-top:32px"><table><tr><th>이름</th><th>아이디</th><th>역할</th><th>상태</th><th class="hide-sm">마지막 접속</th><th></th></tr>
+{% for r in rows %}<tr><td class="strong">{{ r.display_name }}</td><td>{{ r.login_id }}</td>
+<td>{% if r.is_main_admin %}<span class="chip blue">메인 관리자</span>{% elif r.heads %}<span class="chip">관리자</span>{% else %}<span class="chip">설계사</span>{% endif %}</td>
+<td>{% if r.status != 'active' %}<span class="chip bad">중지</span>{% elif r.locked_until and r.locked_until > now %}<span class="chip warn">잠김</span>{% else %}<span class="chip good">사용</span>{% endif %}
+{% if r.must_change_password %}<span class="chip">초기 비밀번호</span>{% endif %}</td>
+<td class="hide-sm">{{ r.last_login_at or '-' }}</td>
 <td><form method="post" action="/org/accounts" style="display:inline"><input type="hidden" name="user_id" value="{{ r.user_id }}">
 {% if r.locked_until and r.locked_until > now %}<button class="ghost" name="action" value="unlock">잠금 해제</button>{% endif %}
 {% if r.status == 'active' and r.user_id != ctx.user_id %}<button class="ghost" name="action" value="suspend">중지</button>{% elif r.status != 'active' %}<button class="ghost" name="action" value="activate">다시 사용</button>{% endif %}

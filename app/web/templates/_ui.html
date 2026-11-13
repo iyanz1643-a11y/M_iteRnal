@@ -1,0 +1,38 @@
+{% set ICONS = {
+ 'home': '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/>',
+ 'my': '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.5"/>',
+ 'promo': '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',
+ 'perf': '<path d="M5 20V10"/><path d="M12 20V4"/><path d="M19 20v-7"/>',
+ 'team': '<circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.5"/><path d="M16.5 14.2c2.6.5 4.5 2.8 4.5 5.8"/>',
+ 'edu': '<path d="M4 5h6a2 2 0 0 1 2 2v13a2 2 0 0 0-2-2H4z"/><path d="M20 5h-6a2 2 0 0 0-2 2v13a2 2 0 0 1 2-2h6z"/>',
+ 'program': '<path d="M5 21V4"/><path d="M5 4h12l-2.5 4 2.5 4H5"/>',
+ 'sales': '<path d="M4 5h16v11H10l-5 4v-4H4z"/>',
+ 'data': '<path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 20h16"/>',
+ 'settle': '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6"/><path d="M9 12h6"/>',
+ 'org': '<path d="M4 7h9"/><path d="M19 7h1"/><path d="M4 17h1"/><path d="M11 17h9"/><circle cx="16" cy="7" r="2.5"/><circle cx="8" cy="17" r="2.5"/>',
+ 'review': '<path d="M12 3l8 3v6c0 4.5-3.2 7.8-8 9-4.8-1.2-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
+ 'common': '<path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/>',
+ 'bell': '<path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21a2 2 0 0 0 4 0"/>',
+ 'close': '<path d="M6 6l12 12"/><path d="M18 6L6 18"/>',
+ 'person': '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/>'
+} %}
+{% macro icon(name) %}<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">{{ ICONS.get(name, ICONS['common'])|safe }}</svg>{% endmacro %}
+
+{% macro ring(pct, label, size=148, stroke=14, color='var(--blue)') %}
+{% set p = [[pct, 0]|max, 100]|min %}{% set r = (size - stroke) / 2 %}{% set c = 6.2832 * r %}{% set h = size / 2 %}
+<svg class="ring" width="{{ size }}" height="{{ size }}" viewBox="0 0 {{ size }} {{ size }}" role="img" aria-label="{{ label }} {{ pct|round|int }}퍼센트">
+  <circle cx="{{ h }}" cy="{{ h }}" r="{{ r }}" fill="none" stroke="var(--track)" stroke-width="{{ stroke }}"/>
+  <circle cx="{{ h }}" cy="{{ h }}" r="{{ r }}" fill="none" stroke="{{ color }}" stroke-width="{{ stroke }}" stroke-linecap="round"
+          stroke-dasharray="{{ (c * p / 100)|round(2) }} {{ c|round(2) }}" transform="rotate(-90 {{ h }} {{ h }})"/>
+  <text x="{{ h }}" y="{{ h }}" text-anchor="middle" dominant-baseline="central" font-size="{{ (size * 0.27)|round|int }}">{{ pct|round|int }}<tspan class="ring-unit">%</tspan></text>
+</svg>
+{% endmacro %}
+
+{% macro bars(rows, name_key, sub_key, val_key) %}
+{% set top = (rows|map(attribute=val_key)|map('default', 0, true)|max) or 1 %}
+<div class="bars">{% for r in rows %}
+  <div class="bar-row"><div class="bar-name">{{ r[name_key] }}<small>{{ r[sub_key] or '' }}</small></div>
+  <div class="bar"><i style="width:{{ ((r[val_key] or 0) / top * 100)|round(1) }}%"></i></div>
+  <div class="bar-val">{{ (r[val_key] or 0)|won }}</div></div>{% endfor %}
+</div>
+{% endmacro %}

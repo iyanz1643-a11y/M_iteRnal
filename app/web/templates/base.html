@@ -1,28 +1,42 @@
-<!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}{{ item.name if item else '홈' }}{% endblock %} · GA 업무 앱</title>
+{% import "_ui.html" as ui %}<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f5f5f7"><title>{% block title %}{{ item.name if item else '홈' }}{% endblock %} · GA 업무 앱</title>
 <link rel="stylesheet" href="/static/app.css"></head>
-<body><div class="layout">
-<nav class="side" id="side">
-  <div class="brand">GA 업무 앱</div>
-  <div class="who"><b>{{ ctx.name }}</b> · {{ ctx.role_ko }}<br>
-    {% if ctx.heads %}{% for h in ctx.heads %}{{ h.name }} {{ HEAD_KO.get(h.role, '조직장') }}{% if not loop.last %}, {% endif %}{% endfor %}
-    {% elif ctx.home_org %}{{ ctx.home_org.name }}{% else %}전체{% endif %}
-    · <a href="/logout">나가기</a></div>
-  {% for g in groups %}
-  <div class="grp">{% if g['items']|length > 1 or g.id == 'common' %}<div class="grp-name">{{ g.icon }} {{ g.name }}</div>{% endif %}
-    {% for it in g['items'] %}<a class="it {{ 'on' if it.path == path }}" href="{{ it.path }}">{{ it.name }}</a>{% endfor %}
+<body>
+<header class="nav">
+  <a class="brand" href="/">GA 업무 앱</a>
+  <nav class="nav-groups" aria-label="주 메뉴">
+    {% for g in groups if g.id != 'common' %}<a class="{{ 'on' if item and item.group == g.id }}" href="{{ g['items'][0].path }}">{{ g.name }}</a>{% endfor %}
+  </nav>
+  <div class="nav-right">
+    <a href="/notifications" aria-label="알림함">{{ ui.icon('bell') }}</a>
+    <a class="me" href="/me">{{ ui.icon('person') }}<span>{{ ctx.name }} · {{ ctx.role_ko }}</span></a>
+    <button class="all" type="button" data-sheet aria-label="전체 메뉴">{{ ui.icon('common') }}</button>
   </div>
-  {% endfor %}
-</nav>
-<main class="main">
+</header>
+{% set cur = (groups|selectattr('id', 'equalto', item.group)|list|first) if item else none %}
+{% if cur and cur['items']|length > 1 %}
+<nav class="subnav" aria-label="{{ cur.name }} 메뉴">{% for it in cur['items'] %}<a class="{{ 'on' if it.path == path }}" href="{{ it.path }}">{{ it.name }}</a>{% endfor %}</nav>
+{% endif %}
+<main class="wrap">
 {% if ctx.must_change_password and path != '/me' %}<div class="alert">초기 비밀번호를 쓰고 있습니다. <a href="/me">내 정보</a>에서 바꿔 주세요.</div>{% endif %}
 {% block body %}{% endblock %}
-</main></div>
-<div class="tabs">
-  {% for g in groups if g.id in mobile_tabs %}
-  <a class="{{ 'on' if item and item.group == g.id }}" href="{{ g['items'][0].path }}"><span class="ic">{{ g.icon }}</span>{{ g.name }}</a>
-  {% endfor %}
-  <button type="button" onclick="document.getElementById('side').classList.toggle('open')"><span class="ic">≡</span>더보기</button>
+</main>
+<nav class="tabbar" aria-label="아래 탭">
+  {% for gid in mobile_tabs %}{% for g in groups if g.id == gid %}
+  <a class="{{ 'on' if item and item.group == g.id }}" href="{{ g['items'][0].path }}">{{ ui.icon(g.id) }}{{ g.name }}</a>
+  {% endfor %}{% endfor %}
+  <button type="button" data-sheet>{{ ui.icon('common') }}더보기</button>
+</nav>
+<div class="sheet" id="sheet" role="dialog" aria-label="전체 메뉴">
+  <div class="sheet-head"><div><div class="eyebrow">{{ ctx.role_ko }}{% if ctx.heads %} · {% for h in ctx.heads %}{{ h.name }} {{ HEAD_KO.get(h.role, '조직장') }}{% if not loop.last %}, {% endif %}{% endfor %}{% elif ctx.home_org %} · {{ ctx.home_org.name }}{% endif %}</div>
+    <div class="mid" style="margin:0">{{ ctx.name }}</div></div>
+    <button class="ghost" type="button" data-sheet aria-label="닫기">닫기</button></div>
+  <div class="sheet-grid">
+  {% for g in groups %}<section class="card"><h3>{{ ui.icon(g.id) }}{{ g.name }}</h3>
+    {% for it in g['items'] %}<a class="row {{ 'on' if it.path == path }}" href="{{ it.path }}">{{ it.name }}</a>{% endfor %}
+    {% if g.id == 'common' %}<a class="row" href="/logout">나가기</a>{% endif %}</section>{% endfor %}
+  </div>
 </div>
+<script>document.querySelectorAll('[data-sheet]').forEach(function(b){b.addEventListener('click',function(){document.getElementById('sheet').classList.toggle('open');window.scrollTo(0,0)})})</script>
 </body></html>

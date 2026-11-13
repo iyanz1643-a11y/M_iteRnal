@@ -1,13 +1,14 @@
 {% extends "base.html" %}
 {% block body %}
-<h1>내 정보</h1>
-<div class="sub">{{ ctx.login_id }} · {{ ctx.role_ko }}{% if ctx.home_org %} · {{ ctx.home_org.name }}{% endif %}</div>
+<p class="eyebrow">{{ ctx.login_id }} · {{ ctx.role_ko }}{% if ctx.home_org %} · {{ ctx.home_org.name }}{% endif %}</p>
+<h1 class="display">내 정보</h1>
+<h2 class="sec">비밀번호 바꾸기</h2>
 {% if message %}<div class="okmsg">{{ message }}</div>{% endif %}{% if error %}<div class="alert">{{ error }}</div>{% endif %}
-<h2>비밀번호 바꾸기</h2>
 <form class="stack" method="post" action="/me">
   <input type="password" name="old" placeholder="지금 비밀번호" autocomplete="current-password" required>
   <input type="password" name="new" placeholder="새 비밀번호 (8자 이상)" autocomplete="new-password" required>
   <input type="password" name="new2" placeholder="새 비밀번호 한 번 더" autocomplete="new-password" required>
-  <button type="submit">바꾸기</button>
+  <button class="primary" type="submit">바꾸기</button>
 </form>
+<p style="margin-top:40px"><a href="/logout">나가기</a></p>
 {% endblock %}

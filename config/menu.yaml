@@ -6,7 +6,7 @@ roles:
   manager: 관리자
   agent: 설계사
 
-mobile_tabs: [home, promo, my, sales]      # 설계사 휴대폰 하단 탭. 나머지는 더보기로 모은다.
+mobile_tabs: [home, my, promo, sales]      # 설계사 휴대폰 하단 탭. 나머지는 더보기로 모은다.
 
 groups:
   - id: home
