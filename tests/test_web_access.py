@@ -205,8 +205,26 @@ def test_post_without_csrf_token_is_refused(env):
     assert raw.post("/org/accounts", data={"user_id": uid, "action": "unlock"}, headers={"X-CSRF-Token": after}).status_code == 303
 
 
+# guard 없이 열리는 주소. 로그인과 나가기, 그리고 자료가 없는 브라우저 아이콘뿐이다.
+# scripts/check_context.py 의 NON_MENU_ROUTES 에서 마지막 라우트를 뺀 것과 같아야 한다
+OPEN_ROUTES = {"/login", "/logout", "/favicon.ico"}
+
+
+def test_open_routes_match_check_context():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("check_context", db.ROOT / "scripts" / "check_context.py")
+    cc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cc)
+    assert cc.NON_MENU_ROUTES - {"/{rest:path}"} == OPEN_ROUTES
+
+
+def test_favicon_returns_nothing(env):
+    r = TestClient(env["app"], follow_redirects=False).get("/favicon.ico")
+    assert r.status_code == 204 and r.content == b""
+
+
 def test_every_screen_goes_through_guard(env):
-    """로그인과 나가기를 뺀 모든 주소가 guard 를 거친다. 라우터를 나눠도 빠지는 화면이 없어야 한다."""
+    """OPEN_ROUTES 를 뺀 모든 주소가 guard 를 거친다. 라우터를 나눠도 빠지는 화면이 없어야 한다."""
     from fastapi.routing import APIRoute
 
     from app.web.deps import guard
@@ -218,7 +236,7 @@ def test_every_screen_goes_through_guard(env):
     routes = [r for r in env["app"].routes if isinstance(r, APIRoute)]
     assert routes[-1].path == "/{rest:path}"                                                         # 기획 화면 처리는 마지막
     for r in routes:
-        if r.path not in ("/login", "/logout"):
+        if r.path not in OPEN_ROUTES:
             assert guard in set(deps_of(r.dependant)), r.path
 
 

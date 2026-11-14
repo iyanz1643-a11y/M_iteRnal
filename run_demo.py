@@ -1,7 +1,12 @@
 """샘플 원본 파일(엑셀·PDF)을 만들고, 적재기로 읽어 전체 파이프라인을 돌린다.
 
-    python run_demo.py      # data/raw/ 에 샘플 파일 생성 → data/demo.db 적재·계산 → 요약 출력
+    python run_demo.py      # data/raw/sample/ 에 샘플 파일 생성 → data/demo.db 적재·계산 → 요약 출력
+    python run_demo.py <DB 경로> <샘플 폴더>      # 다른 곳에 만들어 볼 때
+
+샘플 파일은 data/raw/sample 에만 만들고 다시 돌릴 때 그 폴더만 지운다. data/raw 의 다른 폴더는
+연결 어댑터가 보관한 원본(data/raw/<종류>/<월>/)과 화면의 업로드 폴더라서 건드리지 않는다.
 """
+import pathlib
 import shutil
 import sys
 
@@ -11,22 +16,30 @@ from app.loader import excel_loader, incentive_plan, pdf_incentive
 from app.samples import AS_OF, MONTHS
 from app.web import auth as web_auth
 
-RAW = db.ROOT / "data" / "raw"
+RAW = db.ROOT / "data" / "raw" / "sample"
 
 
-def main(path=db.DEFAULT_DB):
+def _show_path(p):
+    try:
+        return f"{p.relative_to(db.ROOT)}/"
+    except ValueError:
+        return f"{p}/"
+
+
+def main(path=db.DEFAULT_DB, raw=None):
+    raw = pathlib.Path(raw) if raw else RAW
     con = db.init_db(path)
     info = masters.seed(con)
     hq_id = {r["name"]: r["org_id"] for r in con.execute("SELECT * FROM org_unit WHERE level='hq'")}
     print(f"[accounts] 샘플 계정 {web_auth.seed_accounts(con)}개 (admin 과 사번, 비밀번호는 DEMO_PASSWORD 또는 demo1234)")
 
     # 1) 샘플 원본 파일 생성
-    shutil.rmtree(RAW, ignore_errors=True)
+    shutil.rmtree(raw, ignore_errors=True)                 # 샘플 폴더만 지운다
     truth = samples.build_truth(con, info)
-    org_files = samples.write_org_contract_files(truth, info, RAW)
-    per_files = samples.write_persistency_files(con, info, RAW)
-    pdfs = samples.write_incentive_pdfs(RAW)
-    print(f"[samples] 본부 계약현황 {len(org_files)}개, 유지율 {len(per_files)}개, 시상 PDF {len(pdfs)}개 → {RAW.relative_to(db.ROOT)}/")
+    org_files = samples.write_org_contract_files(truth, info, raw)
+    per_files = samples.write_persistency_files(con, info, raw)
+    pdfs = samples.write_incentive_pdfs(raw)
+    print(f"[samples] 본부 계약현황 {len(org_files)}개, 유지율 {len(per_files)}개, 시상 PDF {len(pdfs)}개 → {_show_path(raw)}")
 
     # 2) 시상 공문 PDF 추출 → 초안. 본사 제도·샘플생명 10월 시책은 승인, 11월 한빛손해 공문은 검토 대기로 둔다
     for p in pdfs:
@@ -39,7 +52,7 @@ def main(path=db.DEFAULT_DB):
         print(f"[pdf] {p.name}: 규칙 {len(parsed['sections'])}개, 구간 {n_t}개, 적용 {parsed['effective_from']}~{parsed['effective_to']} → {state}")
 
     # 2-1) 보험사별 시상안 엑셀 → 시상안 원장 (원문 보존 + 해석 초안)
-    plan = incentive_plan.load(con, samples.write_incentive_plan(RAW), AS_OF)
+    plan = incentive_plan.load(con, samples.write_incentive_plan(raw), AS_OF)
     incentive_plan.print_summary(incentive_plan.summary(con, plan["plan_doc_id"]))
 
     # 3) 월별: 엑셀 적재 → 납입 반영 → 수수료 → 업적 → 시상 → 랭킹
@@ -61,7 +74,7 @@ def main(path=db.DEFAULT_DB):
     print(f"[org award] 샘플 조직 부문 {samples.seed_org_awards(con)}개 등록 (본부별 인정업적·손해보험 건수 부문, 지점 부문 예시)")
 
     # 4) 원수사 정산서 엑셀 생성 → 적재 → 대사
-    stmt_files, injected = samples.write_statement_files(con, AS_OF, RAW)
+    stmt_files, injected = samples.write_statement_files(con, AS_OF, raw)
     for f in stmt_files:
         s = excel_loader.load_statement(con, f["path"], f["icode"], AS_OF)
         print(f"[statement] {f['path'].name}: {s['rows']}행 (차단 {s['block']}, 경고 {s['warn']})")
@@ -95,4 +108,4 @@ def main(path=db.DEFAULT_DB):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else db.DEFAULT_DB)
+    main(sys.argv[1] if len(sys.argv) > 1 else db.DEFAULT_DB, sys.argv[2] if len(sys.argv) > 2 else None)

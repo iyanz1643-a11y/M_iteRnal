@@ -261,14 +261,33 @@ def test_agent_cannot_open_manager_or_admin_screens(env):
     assert c.post("/me", data={"old": PW, "new": "x-new-pass-1", "new2": "x-new-pass-1", "csrf_token": "wrong"}).status_code == 403
 
 
-@pytest.mark.xfail(strict=True, reason="브라우저가 로그인 화면을 연 뒤 저절로 부르는 /favicon.ico 가 마지막 라우트의 guard 로 가고, "
-                                       "app/web/deps.py current() 가 로그인 전 세션을 비워 CSRF 토큰까지 지운다. 실제 브라우저에서 로그인이 403 으로 막힌다")
 def test_login_survives_browser_favicon_request(env):
+    """크롬이 로그인 화면을 열며 부르는 /favicon.ico 때문에 로그인 폼의 CSRF 토큰이 지워지던 문제의 재현."""
     os.environ["APP_DB"] = str(env["tmp"] / "real.db")
     c = TestClient(env["app"], follow_redirects=False)
     token = TOKEN.search(c.get("/login").text).group(1)
     c.get("/favicon.ico")                                                    # 크롬과 사파리가 페이지를 열면 따로 부른다
     assert c.post("/login", data={"login_id": "admin", "password": PW, "csrf_token": token}).status_code == 303
+
+
+def test_unknown_path_before_login_keeps_csrf_but_not_login(env):
+    """로그인 전 아무 주소나 열어도 로그인 폼의 토큰은 남는다. 로그아웃 뒤에는 화면이 열리지 않고 범위 밖은 여전히 403 이다."""
+    os.environ["APP_DB"] = str(env["tmp"] / "real.db")
+    c = TestClient(env["app"], follow_redirects=False)
+    token = TOKEN.search(c.get("/login").text).group(1)
+    for path in ("/apple-touch-icon.png", "/robots.txt", "/team/members"):     # 마지막 라우트와 guard 를 거치는 주소
+        r = c.get(path)
+        assert r.status_code == 303 and r.headers["location"] == "/login", path
+    assert c.post("/login", data={"login_id": "admin", "password": PW, "csrf_token": token}).status_code == 303
+    assert c.get("/org/tree").status_code == 200
+    assert c.get("/logout").status_code == 303
+    r = c.get("/org/tree")
+    assert r.status_code == 303 and r.headers["location"] == "/login"
+    con = env["con"]
+    heads = {r[0] for r in con.execute("SELECT agent_id FROM org_manager")}
+    code = next(c for a, c in _codes(con).items()
+                if a not in heads and con.execute("SELECT status FROM agent WHERE agent_id=?", (a,)).fetchone()[0] == "active")
+    assert login(env, code).get("/org/tree").status_code == 403
 
 
 # ------------------------------------------------------------------ 3. 민감 정보
@@ -336,8 +355,6 @@ def _rollup_of(tmp_path, org_id):
         con.close()
 
 
-@pytest.mark.xfail(strict=True, reason="run_demo.py 가 data/raw 를 통째로 지운다. 연결 어댑터가 보관한 원본(data/raw/<종류>/<월>/)과 "
-                                       "사원현황 업로드(data/raw/uploads)도 함께 지워진다. 원본은 지우지 않는다는 규칙 7 에 어긋난다")
 def test_run_demo_keeps_connector_originals(tmp_path, monkeypatch):
     """run_demo 가 지우려는 폴더만 가로채 본다. 실제로 지우지 않는다."""
     import run_demo

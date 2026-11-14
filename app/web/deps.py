@@ -44,9 +44,21 @@ def current(request: Request, con=Depends(get_con)) -> dict:
     uid = request.session.get("uid")
     ctx = auth.context(con, uid) if uid else None
     if not ctx:
-        request.session.clear()
+        clear_login(request)
         raise NeedLogin()
     return ctx
+
+
+def clear_login(request: Request) -> None:
+    """로그인 정보와 그에 딸린 값을 비운다. CSRF 토큰만 남긴다.
+
+    로그인 전 세션에는 로그인 폼의 토큰이 들어 있다. 브라우저가 스스로 부르는 주소가 여기로 와서
+    토큰까지 지우면 이어지는 로그인 POST 가 막힌다. 로그인에 성공하면 renew_csrf 로 토큰을 바꾼다.
+    """
+    tok = request.session.get(CSRF_KEY)
+    request.session.clear()
+    if tok:
+        request.session[CSRF_KEY] = tok
 
 
 def guard(request: Request, ctx: dict = Depends(current), con=Depends(get_con)) -> dict:
