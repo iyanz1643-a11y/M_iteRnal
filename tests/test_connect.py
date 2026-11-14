@@ -438,8 +438,9 @@ def test_card_client_sends_only_get(tmp_path):
     c.admin_list()
     c.suggest_links([(1, FAKE_NAMES[0])])
     assert site.requests and {r.method for r in site.requests} == {"GET"}
-    # D-44 로 승인과 반려만 생겼다. 내리기와 수료 코드 발급은 없다
-    assert not any(hasattr(c, m) for m in ("remove", "remove_live", "issue_codes", "codes"))
+    # D-44 로 승인과 반려가, 명함 연동 2차로 수료 코드 발급이 생겼다. 내리기는 없다
+    assert not any(hasattr(c, m) for m in ("remove", "remove_live"))
+    assert hasattr(c, "issue_codes")
     assert not c.write_enabled                                                     # 쓰기는 기본으로 꺼져 있다
 
 
@@ -1426,3 +1427,332 @@ def test_card_html_cleaner_blocks_active_content():
     assert h["content-security-policy"].startswith("sandbox;") and h["x-content-type-options"] == "nosniff"
     tag = iframe_tag(srcdoc=page)
     assert tag.startswith('<iframe sandbox="" ') and "allow-" not in tag and "<script" not in tag
+
+
+# ------------------------------------------------------------------ 명함 수료 코드 발급 (S2 명함 연동 2차)
+CODE_MARK = "ZK7W"                                  # 가짜 코드 원문의 표시. DB, 로그, 연결 상태에 남으면 안 된다
+
+
+class CodeSite(WriteSite):
+    """수료 코드를 발급하는 가짜 명함 사이트. 사이트의 issueCodes 처럼 검사하고, 일련번호를 매기고, 발급 기록을 남긴다.
+    codes_fail 은 POST 에 차례로 적용한다. (예외, 처리했는가) 짝이면 처리 여부를 정한 뒤 예외를 올리고, 숫자면 그 상태로 답한다.
+    log_fail 은 GET /api/admin/codes 에 차례로 적용한다."""
+
+    def __init__(self, codes_fail=None, log_fail=None, log=None, **kw):
+        super().__init__(**kw)
+        self.codes_fail = list(codes_fail or [])
+        self.log_fail = list(log_fail or [])
+        self.log = list(log or [])
+        self.code_bodies = []
+        self.n = 0
+
+    def _issue(self, body):
+        import re as _re
+        course, ym, people = str(body.get("course") or "ABC").upper(), str(body.get("ym") or ""), body.get("people") or []
+        if not _re.match(r"^[A-Z]{2,6}$", course):
+            return 400, {"error": "bad_course"}
+        if not _re.match(r"^\d{4}-\d{2}$", ym):
+            return 400, {"error": "bad_ym"}
+        if not people or len(people) > 200:
+            return 400, {"error": "bad_people"}
+        prefix = course + ym[2:4] + ym[5:7] + "-"
+        seq = max([int(r["serial"][len(prefix):]) for r in self.log if r["serial"].startswith(prefix)] or [0])
+        rows = []
+        for p in people:
+            name = "".join(str(p.get("name") or "").split())
+            if not name:
+                continue
+            self.n += 1
+            seq += 1
+            row = {"serial": f"{prefix}{seq:03d}", "course": course, "ym": ym, "name": name, "phone": str(p.get("phone") or ""),
+                   "code": f"{course}-{CODE_MARK}-{self.n:04d}", "at": "2026-11-14T00:00:00Z", "status": "발급"}
+            self.log.append(row)
+            rows.append(row)
+        return 200, {"ok": True, "rows": rows}
+
+    def __call__(self, request):
+        if request.url.path == "/api/admin/codes":
+            self.requests.append(request)
+            if request.headers.get("x-admin-key") != KEY:
+                return httpx.Response(401, json={"error": "unauthorized"})
+            if request.method == "GET":
+                if self.log_fail:
+                    f = self.log_fail.pop(0)
+                    if isinstance(f, Exception):
+                        raise f
+                    return httpx.Response(f, json={"error": "server_error"})
+                return httpx.Response(200, json={"log": self.log})
+            body = json.loads(request.content or b"{}")
+            self.code_bodies.append(body)
+            if self.codes_fail:
+                f = self.codes_fail.pop(0)
+                if isinstance(f, Exception):
+                    raise f
+                if isinstance(f, tuple):
+                    exc, applied = f
+                    if applied:
+                        self._issue(body)
+                    raise exc
+                return httpx.Response(f, json={"error": "server_error"})
+            st, data = self._issue(body)
+            return httpx.Response(st, json=data)
+        return super().__call__(request)
+
+    def code_posts(self):
+        return [r for r in self.requests if r.method == "POST" and r.url.path == "/api/admin/codes"]
+
+    def code_gets(self):
+        return [r for r in self.requests if r.method == "GET" and r.url.path == "/api/admin/codes"]
+
+
+@pytest.fixture()
+def codes_env(decide_env):
+    """decide_env 위에 명함 과정 하나와 수료 셋. a1, a2 는 2026-10 수료, a_dep 는 2026-09 수료다."""
+    from app.engine import education as edu
+    env = decide_env
+    con = env["con"]
+    edu.ensure(con)
+    abc = edu.save_course(con, by=MAIN, code="ABC", name="ABC 과정", kind="product", required=False, card_course_code="ABC")
+    plain = edu.save_course(con, by=MAIN, code="PL", name="일반 과정", kind="product", required=False)
+    done = lambda a, day, cid=abc: edu.record_completion(con, agent_id=a, course_id=cid, completed_on=day, by=MAIN, agent_ids=None)["completion_id"]
+    c1, c2, c3 = done(env["a1"], "2026-10-17"), done(env["a2"], "2026-10-20"), done(env["a_dep"], "2026-09-05")
+    c_plain = done(env["a1"], "2026-10-01", plain)
+    site = CodeSite()
+    client = _client(site, env["tmp"], write=True)
+    env.update(code_site=site, code_client=client, c1=c1, c2=c2, c3=c3, c_plain=c_plain)
+    return env
+
+
+def _issue(env, ids, actor=MAIN, *, is_main=True, client=None):
+    from app.connect.card_codes import issue_card_codes
+    return issue_card_codes(env["con"], client or env["code_client"], completion_ids=ids, actor=actor, is_main=is_main)
+
+
+def _code_rows(con):
+    return [dict(r) for r in con.execute("SELECT issue_id, completion_id, status, serial, code_sha256, fail_reason FROM edu_card_code ORDER BY issue_id")]
+
+
+def _code_audit(con):
+    return [(r[0], r[1], json.loads(r[2])) for r in
+            con.execute("SELECT actor, target, after_json FROM audit_log WHERE action='card_code_issue' ORDER BY id")]
+
+
+def test_card_codes_issue_keeps_only_serial_and_hash(codes_env, caplog):
+    import logging
+
+    from app.connect.card_codes import ISSUED
+    from app.engine import education as edu
+    env = codes_env
+    caplog.set_level(logging.DEBUG)
+    out = _issue(env, [env["c1"], env["c2"], env["c3"]])
+    assert out.status == OK, out.reason
+    rows = {r.completion_id: r for r in out.value.rows}
+    assert {r.result for r in rows.values()} == {ISSUED}
+    assert rows[env["c1"]].serial == "ABC2610-001" and rows[env["c2"]].serial == "ABC2610-002" and rows[env["c3"]].serial == "ABC2609-001"
+    # 원문은 화면에 한 번 보여 줄 값으로만 돌려준다
+    codes = [r.code for r in out.value.rows]
+    assert all(CODE_MARK in c for c in codes)
+    assert CODE_MARK not in repr(out) and CODE_MARK not in json.dumps(out.value.to_dict(), ensure_ascii=False)
+    # 과정과 수료월마다 한 번씩 보냈다. 명단에는 이름만 있다
+    bodies = sorted(env["code_site"].code_bodies, key=lambda b: b["ym"])
+    assert [(b["course"], b["ym"], len(b["people"])) for b in bodies] == [("ABC", "2026-09", 1), ("ABC", "2026-10", 2)]
+    assert all(set(p) == {"name"} for b in bodies for p in b["people"])
+    # 앱에는 일련번호와 해시만 있다
+    db_rows = _code_rows(env["con"])
+    assert [r["status"] for r in db_rows] == ["issued"] * 3
+    by_serial = {r.serial: r.code for r in out.value.rows}
+    assert all(r["code_sha256"] == edu.card_code_hash(by_serial[r["serial"]]) for r in db_rows)
+    # 변경 기록에는 과정, 수료월, 건수, 결과, actor 만 있다
+    audit = _code_audit(env["con"])
+    assert {(a, t) for a, t, _ in audit} == {(MAIN, "card_code:ABC:2026-10"), (MAIN, "card_code:ABC:2026-09")}
+    for _, _, after in audit:
+        assert set(after) <= {"course", "ym", "result", "count", "issued", "failed", "unknown", "already"}
+    # 원문과 이름은 DB, 연결 상태, 로그 어디에도 없다
+    env["con"].commit()
+    lines = _dump(env["path"]) + _dump(env["tmp"] / "state.db")
+    assert not any(CODE_MARK in line for line in lines)
+    audit_lines = [line for line in lines if "audit_log" in line or "connection_state" in line]
+    assert not any(FAKE_NAMES[0] in line for line in audit_lines)
+    assert CODE_MARK not in caplog.text and FAKE_NAMES[0] not in caplog.text
+    for p in env["tmp"].rglob("*"):
+        if p.is_file():
+            assert CODE_MARK.encode() not in p.read_bytes(), p.name
+    st = StateStore(env["tmp"] / "state").get(card_site.CONN_WRITE)
+    assert st["last_status"] == OK and CODE_MARK not in json.dumps(st, ensure_ascii=False)
+
+
+def test_card_codes_main_admin_only(codes_env):
+    from app.connect.card_decide import DENIED
+    env = codes_env
+    for actor, main in ((MGR, False), (MGR, True), (DEP, False), ("nobody", True), (MAIN, False)):
+        out = _issue(env, [env["c1"]], actor, is_main=main)
+        assert out.status == DENIED, (actor, main)
+    assert env["code_site"].requests == [] and _code_rows(env["con"]) == []
+    env["con"].execute("UPDATE user_account SET status='suspended' WHERE login_id=?", (MAIN,))
+    assert _issue(env, [env["c1"]]).status == DENIED
+    assert env["code_site"].requests == [] and _code_rows(env["con"]) == []
+
+
+def test_card_codes_write_switch_off_sends_nothing(codes_env, monkeypatch):
+    from app.connect.card_site import WRITE_OFF
+    env = codes_env
+    off = _client(env["code_site"], env["tmp"])                    # 환경 변수 없음. 기본은 꺼짐
+    assert off.write_enabled is False
+    out = _issue(env, [env["c1"], env["c2"]], client=off)
+    assert out.status == WRITE_OFF and {r.result for r in out.value.rows} == {WRITE_OFF}
+    monkeypatch.setenv(card_site.ENV_WRITE, "true")                  # 1 이 아니면 꺼짐
+    assert _issue(env, [env["c1"]], client=_client(env["code_site"], env["tmp"])).status == WRITE_OFF
+    out = _issue(env, [env["c1"]], client=_client(env["code_site"], env["tmp"], key="", write=True))
+    assert out.status == NOT_CONFIGURED
+    assert env["code_site"].requests == [] and _code_rows(env["con"]) == []
+    assert StateStore(env["tmp"] / "state").get(card_site.CONN_WRITE)["last_status"] == NOT_CONFIGURED
+
+
+def test_card_codes_never_twice(codes_env):
+    from app.connect.card_codes import ISSUED, NOT_ELIGIBLE
+    from app.connect.card_decide import ALREADY
+    env = codes_env
+    out = _issue(env, [env["c1"], env["c1"], str(env["c1"])])          # 같은 수료를 겹쳐 골라도 한 번만
+    assert out.status == OK and [r.result for r in out.value.rows] == [ISSUED]
+    again = _issue(env, [env["c1"]])
+    assert again.status == ALREADY and len(env["code_site"].code_posts()) == 1
+    # 명함 과정이 없는 과정의 수료와 없는 수료는 보내지 않는다
+    out = _issue(env, [env["c_plain"], 99999])
+    assert out.status == FAILED and {r.result for r in out.value.rows} == {NOT_ELIGIBLE}
+    assert len(env["code_site"].code_posts()) == 1
+    # 다른 곳에서 먼저 요청이 생겼으면 유일 색인이 막는다
+    from app.engine import education as edu
+    edu.request_card_code(env["con"], env["c2"], by=MAIN)
+    out = _issue(env, [env["c2"]])
+    assert out.status == ALREADY and len(env["code_site"].code_posts()) == 1
+    assert [r["status"] for r in _code_rows(env["con"])] == ["issued", "requested"]
+
+
+def test_card_codes_no_response_confirms_by_get(codes_env):
+    from app.connect.card_codes import ISSUED
+    env = codes_env
+    site = env["code_site"]
+    site.codes_fail = [(httpx.ReadTimeout("timed out"), True)]       # 사이트는 처리했지만 응답이 오지 않았다
+    out = _issue(env, [env["c1"], env["c2"]])
+    assert out.status == OK, out.reason
+    assert [r.result for r in out.value.rows] == [ISSUED, ISSUED] and all(CODE_MARK in r.code for r in out.value.rows)
+    assert len(site.code_posts()) == 1 and len(site.code_gets()) == 2      # 보내기 전 한 번, 확인 한 번
+    assert [r["status"] for r in _code_rows(env["con"])] == ["issued", "issued"]
+
+
+def test_card_codes_not_applied_is_failed_and_can_retry(codes_env):
+    env = codes_env
+    site = env["code_site"]
+    site.codes_fail = [(httpx.ReadTimeout("timed out"), False)]
+    out = _issue(env, [env["c1"]])
+    assert out.status == FAILED and len(site.code_posts()) == 1 and len(site.code_gets()) == 2
+    assert [r["status"] for r in _code_rows(env["con"])] == ["failed"]
+    # 연결이 안 됐으면 닿지 않은 것이라 확인 없이 실패다
+    site.codes_fail = [httpx.ConnectError("refused")]
+    out = _issue(env, [env["c1"]])
+    assert out.status == FAILED and len(site.code_posts()) == 2 and len(site.code_gets()) == 3
+    # 400 은 사이트가 아무것도 만들지 않은 것이다
+    site.codes_fail = [400]
+    assert _issue(env, [env["c1"]]).status == FAILED and len(site.code_gets()) == 4
+    # 실패로 두었으므로 다시 발급할 수 있다
+    out = _issue(env, [env["c1"]])
+    assert out.status == OK and [r["status"] for r in _code_rows(env["con"])] == ["failed", "failed", "failed", "issued"]
+
+
+def test_card_codes_server_error_confirms_and_unknown_stays_requested(codes_env):
+    from app.connect.card_codes import release_card_code_request
+    from app.connect.card_decide import ALREADY, DENIED
+    from app.connect.card_site import UNKNOWN
+    env = codes_env
+    site = env["code_site"]
+    site.codes_fail = [500]
+    out = _issue(env, [env["c1"]])
+    assert out.status == FAILED and len(site.code_gets()) == 2                # 500 이라도 기록을 읽어 확인했다
+    # 응답도 없고 확인도 못 하면 요청 상태로 두고 다시 보내지 않는다
+    site.codes_fail = [(httpx.ReadTimeout("timed out"), False)]
+    calls = {"n": 0}                                                          # 보내기 전 읽기는 통과하고 확인 읽기만 끊긴다
+    real = site.__call__
+
+    def flaky(request):
+        if request.method == "GET" and request.url.path == "/api/admin/codes":
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise httpx.ReadTimeout("timed out")
+        return real(request)
+    client = _client(flaky, env["tmp"], write=True)
+    out = _issue(env, [env["c1"]], client=client)
+    assert out.status == UNKNOWN and [r.result for r in out.value.rows] == [UNKNOWN]
+    posts = len(site.code_posts())
+    assert _issue(env, [env["c1"]]).status == ALREADY and len(site.code_posts()) == posts
+    stuck = [r for r in _code_rows(env["con"]) if r["status"] == "requested"]
+    assert len(stuck) == 1
+    # 메인 관리자가 확인한 뒤에만 푼다
+    assert release_card_code_request(env["con"], issue_id=stuck[0]["issue_id"], actor=MGR, is_main=False).status == DENIED
+    assert release_card_code_request(env["con"], issue_id=stuck[0]["issue_id"], actor=MAIN, is_main=True).status == OK
+    assert _issue(env, [env["c1"]]).status == OK
+
+
+def test_card_codes_baseline_read_failure_sends_nothing(codes_env):
+    env = codes_env
+    site = env["code_site"]
+    site.log_fail = [500, 500, 500]
+    out = _issue(env, [env["c1"]])
+    assert out.status == FAILED and site.code_posts() == []
+    assert [r["status"] for r in _code_rows(env["con"])] == ["failed"]
+
+
+def test_card_codes_client_checks_before_sending(tmp_path):
+    site = CodeSite()
+    client = _client(site, tmp_path, write=True)
+    for course, ym, names in (("abc1", "2026-10", ["가"]), ("ABC", "202610", ["가"]), ("ABC", "2026-13", ["가"]),
+                              ("ABC", "2026-10", []), ("ABC", "2026-10", ["가", " "]), ("ABC", "2026-10", ["가"] * 201)):
+        out = client.issue_codes(course, ym, names)
+        assert out.status == FAILED and out.value.sent == 0, (course, ym, len(names))
+    assert site.requests == []
+
+
+def test_card_code_log_drops_names_and_codes(tmp_path):
+    from app.engine import education as edu
+    site = CodeSite(log=[{"serial": "ABC2610-001", "course": "ABC", "ym": "2026-10", "name": FAKE_NAMES[0], "phone": FAKE_MOBILE,
+                          "code": f"ABC-{CODE_MARK}-0001", "at": "2026-11-01T00:00:00Z", "status": "발급"}])
+    out = _client(site, tmp_path).code_log()                      # 읽기는 쓰기 스위치와 상관없다
+    assert out.status == OK
+    (c,) = out.value
+    assert c.serial == "ABC2610-001" and c.code_sha256 == edu.card_code_hash(f"ABC-{CODE_MARK}-0001")
+    text = repr(out)
+    assert CODE_MARK not in text and FAKE_NAMES[0] not in text and FAKE_MOBILE not in text
+    assert _client(site, tmp_path, key="").code_log().status == NOT_CONFIGURED
+
+
+def test_card_codes_reconcile_by_serial_and_hash(codes_env):
+    from app.connect.card_codes import reconcile_card_codes
+    from app.connect.card_decide import DENIED
+    from app.engine import education as edu
+    env = codes_env
+    con, site = env["con"], env["code_site"]
+    assert _issue(env, [env["c1"], env["c2"], env["c3"]]).status == OK
+    rows = {r["completion_id"]: r for r in _code_rows(con)}
+    s1, s2, s3 = rows[env["c1"]]["serial"], rows[env["c2"]]["serial"], rows[env["c3"]]["serial"]
+    # 사이트 관리 화면에서 바로 발급한 줄, 해시가 다른 줄, 앱에서 내린 줄, 결과를 모르는 요청을 만든다
+    site.log.append({"serial": "ABC2611-001", "course": "ABC", "ym": "2026-11", "name": FAKE_NAMES[1], "phone": "",
+                     "code": f"ABC-{CODE_MARK}-9999", "at": "2026-11-14T00:00:00Z", "status": "발급"})
+    next(r for r in site.log if r["serial"] == s2)["code"] = f"ABC-{CODE_MARK}-8888"
+    edu.revoke_card_code(con, rows[env["c3"]]["issue_id"], by=MAIN, reason="시험")
+    c4 = edu.record_completion(con, agent_id=env["a_mgr"], course_id=con.execute("SELECT course_id FROM edu_course WHERE code='ABC'").fetchone()[0],
+                               completed_on="2026-10-02", by=MAIN, agent_ids=None)["completion_id"]
+    stuck = edu.request_card_code(con, c4, by=MAIN)
+    site.log = [r for r in site.log if r["serial"] != s1] + [next(r for r in site.log if r["serial"] == s1)]   # 차례는 상관없다
+    gets = len(site.code_gets())
+    assert reconcile_card_codes(con, env["code_client"], actor=MGR, is_main=False).status == DENIED
+    assert len(site.code_gets()) == gets
+    out = reconcile_card_codes(con, env["code_client"], actor=MAIN, is_main=True)
+    assert out.status == OK
+    rec = out.value
+    assert rec.matched == (s1,) and rec.hash_mismatch == (s2,) and rec.revoked_on_app == (s3,)
+    assert rec.site_only == ("ABC2611-001",) and rec.unconfirmed == (stuck,) and rec.app_only == () and not rec.clean
+    text = json.dumps(rec.to_dict(), ensure_ascii=False) + repr(out)
+    assert CODE_MARK not in text and FAKE_NAMES[1] not in text
+    # 앱에만 있는 일련번호
+    site.log = [r for r in site.log if r["serial"] != s1]
+    assert reconcile_card_codes(con, env["code_client"], actor=MAIN, is_main=True).value.app_only == (s1,)
+    assert len(site.code_posts()) == 2                                               # 대조는 보내지 않는다. 발급 두 묶음뿐이다
