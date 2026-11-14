@@ -114,6 +114,21 @@ def summary(con, batch_id, **extra):
     return out
 
 
+def org_members(con, org_id, period_ym) -> set:
+    """그 달에 org_id 조직과 그 아래 모든 하위 조직(지점, 센터, 팀)에 소속된 설계사 agent_id.
+    조직 계층의 깊이는 config/org_levels.yaml 을 따르므로 한 단계만 보지 않고 재귀로 내려간다."""
+    if org_id is None:
+        return set()
+    return {r[0] for r in con.execute(
+        """WITH RECURSIVE sub(org_id) AS (
+               SELECT org_id FROM org_unit WHERE org_id=?
+               UNION
+               SELECT o.org_id FROM org_unit o JOIN sub s ON o.parent_id=s.org_id)
+           SELECT DISTINCT h.agent_id FROM agent_org_history h JOIN sub s ON s.org_id=h.org_id
+           WHERE h.effective_from<=? AND (h.effective_to IS NULL OR h.effective_to>=?)""",
+        (org_id, period_ym, period_ym))}
+
+
 # ------------------------------------------------------------------ 본부 계약 현황
 def load_org_contract(con, path, period_ym, upload_org_id, by="system"):
     """본부 계약 엑셀 적재. 사번·성명·원수사·상품·구분·보험료·인정보험료·건수를 뽑아 계약 원장에 반영한다.
@@ -130,10 +145,7 @@ def load_org_contract(con, path, period_ym, upload_org_id, by="system"):
     insurers = {r["name"]: r for r in con.execute("SELECT * FROM insurer")}
     products = {(r["insurer_id"], r["product_name"]): r for r in con.execute("SELECT * FROM product")}
     categories = {r["name"]: r["code"] for r in con.execute("SELECT * FROM product_category")}
-    hq_members = {r["agent_id"] for r in con.execute(
-        """SELECT h.agent_id FROM agent_org_history h JOIN org_unit o ON o.org_id=h.org_id
-           WHERE (o.org_id=? OR o.parent_id=?) AND h.effective_from<=? AND (h.effective_to IS NULL OR h.effective_to>=?)""",
-        (upload_org_id, upload_org_id, period_ym, period_ym))}
+    hq_members = org_members(con, upload_org_id, period_ym)
     seen, inserted, updated, skipped = {}, 0, 0, 0
     for r in rows:
         n = r["_row"]

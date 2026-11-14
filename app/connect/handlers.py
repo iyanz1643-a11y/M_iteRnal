@@ -8,10 +8,9 @@
 already_loaded(con, file_hash) -> bool 은 같은 파일을 두 번 넣지 않으려고 먼저 묻는다.
 duplicate_errors 는 적재기가 같은 파일이라며 던지는 예외다. 둘 다 '이미 넣은 파일' 로 돌려준다.
 
-사원현황은 DB 반영 함수가 아직 없다. auth-org 가 만들면 아래처럼 등록한다.
-    from app.connect import register_handler
+사원현황은 app/loader/employee_handler.py 가 아래처럼 기본 등록부에 넣는다. 이 파일 끝에서 부른다.
     register_handler("employee", load_fn, already_loaded=check_fn)
-등록이 없으면 '처리기 없음' 으로 돌려주고 원본은 보관해 둔다.
+default_registry() 로 새로 만든 등록부에는 사원현황이 없다. 등록이 없으면 '처리기 없음' 으로 돌려주고 원본은 보관해 둔다.
 """
 from __future__ import annotations
 
@@ -95,7 +94,7 @@ def default_registry() -> Registry:
     r = Registry()
     r.register("contract", _contract_load, already_loaded=_contract_loaded, duplicate_errors=(DuplicateFile,))
     r.register("plan", _plan_load, already_loaded=_plan_loaded, duplicate_errors=(DuplicatePlan,))
-    # employee: auth-org 의 사원현황 반영 함수가 생기면 register_handler 로 등록한다
+    # employee: 아래 _register_loaders 가 기본 등록부에만 넣는다
     return r
 
 
@@ -105,3 +104,13 @@ DEFAULT_REGISTRY = default_registry()
 def register_handler(kind, load, already_loaded=None, duplicate_errors=(), needs_period=True) -> Handler:
     """기본 등록부에 처리기를 넣는다. 같은 종류가 있으면 바꾼다."""
     return DEFAULT_REGISTRY.register(kind, load, already_loaded, duplicate_errors, needs_period)
+
+
+def _register_loaders() -> None:
+    """적재기 쪽에서 register_handler 로 넣는 처리기. register_handler 가 정의된 뒤에 부른다."""
+    from app.loader import employee_handler
+
+    employee_handler.register()
+
+
+_register_loaders()

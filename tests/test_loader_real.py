@@ -307,3 +307,137 @@ def test_org_path_kept_and_identified_by_path(env):
     p = org_path.contract_org_path(con, cid)
     assert len(p) == 5 and all(p)
     assert org_path.path_text(p) == con.execute("SELECT org_path FROM contract WHERE contract_id=?", (cid,)).fetchone()[0]
+
+
+# ------------------------------------------------------------------ 본부 업로드의 소속 검사
+def _org_contract_xlsx(path, rows):
+    """본부 계약현황 샘플 양식(config/mapping/internal_org_contract.yaml). 3행이 머리글이다."""
+    from app.samples import ORG_HEADERS
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "계약현황"
+    ws["A1"] = "시험 계약 현황"
+    ws.append([])
+    ws.append(ORG_HEADERS)
+    for r in rows:
+        ws.append([r.get(h, "") for h in ORG_HEADERS])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(path)
+    return path
+
+
+def test_center_and_team_members_pass_hq_upload_check(tmp_path):
+    """본부 아래 지점, 센터, 팀 어디에 붙은 설계사든 본부 업로드에서 소속 경고가 없다. 다른 본부 사람만 경고한다."""
+    from datetime import date
+
+    from app.loader import excel_loader
+    from app.org import sync
+
+    con = db.init_db(tmp_path / "t.db")
+    for i, (code, name, elig) in enumerate(masters.CATEGORIES):
+        con.execute("INSERT INTO product_category(code, name, incentive_eligible, sort_order) VALUES(?,?,?,?)", (code, name, elig, i))
+    ins = con.execute("INSERT INTO insurer(code, name, sector) VALUES('SAM', '샘플생명', 'life')").lastrowid
+    con.execute("INSERT INTO product(insurer_id, product_code, product_name, product_category, conversion_rate, effective_from) "
+                "VALUES(?, 'P1', '시험상품', 'health', 1.0, '202601')", (ins,))
+    con.commit()
+    roster = fe.fake_roster()
+    emp_path, _ = fe.make_employee_file(tmp_path / "emp.xlsx", roster)
+    staff = ee.parse_employee_file(emp_path)["rows"]
+    sync.sync_staff(con, staff, YM)
+    active = {r["employee_no"] for r in staff if not r["termination_date"]}
+
+    hq_name = roster[0]["path"][1]
+    hq_id = con.execute("SELECT org_id FROM org_unit WHERE path_key=?", (f"hq:{hq_name}",)).fetchone()[0]
+    inside = [a for a in roster if a["path"][1] == hq_name and a["code"] in active]
+    outside = next(a for a in roster if a["path"][1] != hq_name and a["code"] in active)
+    levels_inside = {con.execute("""SELECT o.level FROM agent_org_history h JOIN agent g ON g.agent_id=h.agent_id
+                                    JOIN org_unit o ON o.org_id=h.org_id WHERE g.internal_code=? AND h.effective_to IS NULL""",
+                                 (a["code"],)).fetchone()[0] for a in inside}
+    assert {"branch", "center", "team"} <= levels_inside       # 한 단계 아래만 보던 검사가 놓치던 사람이 들어 있다
+
+    d = date(2026, 2, 10)
+    rows = [{"본부": hq_name, "사번": a["code"], "원수사": "샘플생명", "상품명": "시험상품", "구분": "건강",
+             "청약번호": f"APP{i:05d}", "청약일": d, "계약일": d, "상태": "성립", "상태변경일": d, "납입주기": "월납",
+             "납입기간": 20, "보험료": 100000, "인정보험료": 100000, "건수": 1}
+            for i, a in enumerate(inside + [outside])]
+    path = _org_contract_xlsx(tmp_path / "org_contract.xlsx", rows)
+    s = excel_loader.load_org_contract(con, path, YM, hq_id)
+    assert s["block"] == 0 and s["inserted"] == len(rows) and s["skipped"] == 0
+    bad = [r[0] for r in con.execute("SELECT row_no FROM quality_issue WHERE batch_id=? AND check_code='org_mismatch'", (s["batch_id"],))]
+    assert bad == [3 + len(rows)]                              # 맨 끝 행, 다른 본부 사람 하나만
+    assert s["warn"] == 1
+    con.close()
+
+
+# ------------------------------------------------------------------ 사원현황 연결 처리기
+@pytest.fixture()
+def connect_env(tmp_path, monkeypatch):
+    from app.connect.pipeline import Pipeline
+    from app.connect.state import StateStore
+
+    monkeypatch.setenv("CONNECT_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("CONNECT_DATA_DIR", str(tmp_path / "data"))
+    con = db.init_db(tmp_path / "t.db")
+    pipe = Pipeline(con, data_dir=tmp_path / "data", state=StateStore(tmp_path / "state"))   # 기본 등록부를 쓴다
+    roster = fe.fake_roster()
+    emp_path, emp_rows = fe.make_employee_file(tmp_path / "in" / "사원현황.xlsx", roster)
+    yield {"con": con, "pipe": pipe, "tmp": tmp_path, "emp": emp_path, "emp_rows": emp_rows, "roster": roster}
+    con.close()
+
+
+def test_employee_file_goes_through_connect_pipeline_once(connect_env):
+    import json
+
+    from app.connect import DEFAULT_REGISTRY
+    from app.connect.base import DUPLICATE, LOADED
+    from app.connect.sources import UploadSource
+    from app.loader import employee_handler
+
+    env = connect_env
+    con, pipe = env["con"], env["pipe"]
+    assert DEFAULT_REGISTRY.get("employee").load is employee_handler._load
+
+    first = pipe.run(UploadSource.from_path(env["emp"], kind="employee", period_ym=YM))
+    r = first.results[0]
+    assert first.ok and r.status == LOADED, r.reason
+    st = r.detail["stats"]
+    assert r.detail["file_rows"] == st["rows"] == len(env["roster"]) == st["new_agents"]
+    assert r.detail["block"] == 0
+    assert con.execute("SELECT COUNT(*) FROM agent").fetchone()[0] == len(env["roster"])
+    by_level = {x[0]: x[1] for x in con.execute("SELECT level, COUNT(*) FROM org_unit GROUP BY level")}
+    assert by_level["ga"] == 1 and by_level["hq"] == 4 and by_level["branch"] == 8 and by_level["center"] >= 9 and by_level["team"] >= 8
+    for a in env["roster"]:                                    # 사람은 경로의 맨 아래 조직에 붙는다
+        if a["path"][4]:
+            lv = con.execute("""SELECT o.level FROM agent_org_history h JOIN agent g ON g.agent_id=h.agent_id
+                                JOIN org_unit o ON o.org_id=h.org_id WHERE g.internal_code=? ORDER BY h.id DESC""", (a["code"],)).fetchone()[0]
+            assert lv == "team"
+    b = con.execute("SELECT data_type, period_ym, status, row_count, received_via, file_path, file_hash FROM import_batch").fetchall()
+    assert len(b) == 1
+    assert tuple(b[0])[:5] == ("employee", YM, "active", len(env["roster"]), "upload")
+    assert b[0]["file_path"] == r.raw_path and b[0]["file_hash"] == r.file_hash
+    assert con.execute("SELECT COUNT(*) FROM raw_row").fetchone()[0] == 0     # 민감 열이 많은 원본 행은 남기지 않는다
+    # 결과에는 이름이 없다
+    names = {x["사원명"] for x in env["emp_rows"]}
+    text = json.dumps(r.to_dict(), ensure_ascii=False, default=str)
+    assert "changes" not in r.detail and not any(n in text for n in names)
+
+    tables = ("org_unit", "agent", "agent_org_history", "org_manager", "import_batch")
+    before = {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}
+    second = pipe.run(UploadSource.from_path(env["emp"], kind="employee", period_ym=YM))
+    assert [x.status for x in second.results] == [DUPLICATE]
+    assert employee_handler.already_loaded(con, r.file_hash)
+    assert {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables} == before
+
+
+def test_employee_file_with_wrong_header_fails_without_batch(connect_env):
+    from app.connect.base import FAILED
+    from app.connect.sources import UploadSource
+
+    env = connect_env
+    h = [x for x in fe.EMPLOYEE_HEADERS if x != "사원번호"]
+    path = fe.write_xlsx(env["tmp"] / "in" / "사원현황_틀림.xlsx", h, fe.fake_employee_rows(env["roster"]))
+    res = env["pipe"].run(UploadSource.from_path(path, kind="employee", period_ym=YM)).results[0]
+    assert res.status == FAILED and "머리글" in res.reason
+    assert env["con"].execute("SELECT COUNT(*) FROM import_batch").fetchone()[0] == 0
+    assert env["con"].execute("SELECT COUNT(*) FROM agent").fetchone()[0] == 0
