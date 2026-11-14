@@ -10,7 +10,7 @@ import pathlib
 import shutil
 import sys
 
-from app import db, masters, samples
+from app import db, masters, samples, samples_edu
 from app.engine import career, certification, commission, incentive, payments, performance, ranking, reconcile
 from app.loader import excel_loader, incentive_plan, pdf_incentive
 from app.samples import AS_OF, MONTHS
@@ -72,6 +72,10 @@ def main(path=db.DEFAULT_DB, raw=None):
     print(f"[promotion] 샘플 프로모션 {samples.seed_promotions(con)}건 게시 (시상안의 정률 시책과 주차·연계·여행·가동 예시)")
 
     print(f"[org award] 샘플 조직 부문 {samples.seed_org_awards(con)}개 등록 (본부별 인정업적·손해보험 건수 부문, 지점 부문 예시)")
+
+    edu = samples_edu.seed(con)
+    print(f"[education] 샘플 과정 {edu['courses']}개 (필수 {edu['required']}개), 차수 {edu['sessions']}개, 수료 {edu['completions']}건 (명부 양식 D-09 확인 전이라 샘플)")
+    print("\n".join(samples_edu.summary_lines(con)))
 
     # 4) 원수사 정산서 엑셀 생성 → 적재 → 대사
     stmt_files, injected = samples.write_statement_files(con, AS_OF, raw)

@@ -1018,3 +1018,102 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_card_request_pending ON card_approver_requ
 CREATE INDEX IF NOT EXISTS idx_card_request_login ON card_approver_request(login_id, requested_at);
 CREATE INDEX IF NOT EXISTS idx_card_request_status ON card_approver_request(status, requested_at);
 -- [card_request:end]
+
+-- ---------------------------------------------------------------------------
+-- 교육 (파트 E). 과정, 차수, 수료, 명함 수료 코드 발급 기록. 계산은 app/engine/education.py 다.
+-- 수료의 원본은 수료자 명부다. 과정 목록과 명부 양식을 묻는 D-09 가 열려 있어 칸 구성은 샘플 안의 가정이다.
+-- 진척도, 기한, 미수료, 기한 임박은 표에 남기지 않고 이 표들에서 그때그때 계산한다. 그래서 언제든 다시 만들 수 있다.
+-- 수료 줄은 지우지 않는다. 잘못 들어간 줄과 다시 올린 명부의 앞 배치는 voided_at 을 채워 뺀다.
+-- 사람 이름, 연락처, 금액, 수료 코드 원문은 넣지 않는다.
+-- 오래된 DB 에서도 이 묶음만 다시 돌릴 수 있게 모두 IF NOT EXISTS 로 쓴다. app/engine/education.py 의 ensure 가 이 묶음을 읽는다.
+-- [education:begin]
+-- ---------------------------------------------------------------------------
+-- 과정. 대상은 역할, 직급, 위촉일, 과정을 연 조직을 모두 만족하는 사람이다.
+CREATE TABLE IF NOT EXISTS edu_course (
+    course_id         INTEGER PRIMARY KEY,
+    code              TEXT NOT NULL UNIQUE,           -- 앱 안 과정 코드. 명부의 과정 칸과 맞춘다
+    name              TEXT NOT NULL,
+    kind              TEXT NOT NULL,                  -- newbie(신인) / refresher(보수) / product(상품) / compliance(준법)
+    required          INTEGER NOT NULL DEFAULT 0,     -- 1 이면 필수. 진척도는 필수 과정만 센다
+    target_role       TEXT NOT NULL DEFAULT 'fc',     -- fc(설계사) / manager(관리자) / all. agent.job_type 과 맞춘다
+    target_levels     TEXT,                           -- 직급 코드를 쉼표로 잇는다. career_level.code. 비면 모든 직급
+    target_hired_from TEXT,                           -- YYYY-MM-DD. 이날 이후 위촉한 사람만 대상. 비면 위촉일을 따지지 않는다
+    owner_org_id      INTEGER REFERENCES org_unit(org_id),  -- 과정을 연 조직. 그 조직과 아래가 대상. 비면 전체
+    deadline_rule     TEXT NOT NULL DEFAULT 'none',   -- none / hire_days(위촉 뒤 N일) / fixed(정한 날) / yearly(매년 MM-DD)
+    deadline_days     INTEGER,                        -- hire_days 의 N
+    deadline_date     TEXT,                           -- fixed 의 YYYY-MM-DD
+    deadline_md       TEXT,                           -- yearly 의 MM-DD. 그해 1월 1일부터 12월 31일까지의 수료가 그해 몫이다
+    card_course_code  TEXT,                           -- 명함 사이트 EDU_COURSES 의 키. 지금은 ABC 하나다. 비면 수료 코드가 없다
+    status            TEXT NOT NULL DEFAULT 'active', -- active / closed. 닫은 과정은 진척도에서 빠지고 수료 기록은 남는다
+    note              TEXT,
+    created_by        TEXT NOT NULL,
+    created_at        TEXT NOT NULL,
+    updated_by        TEXT,
+    updated_at        TEXT
+);
+
+-- 차수. 날짜와 장소 또는 온라인. 닫지 않고 status 로 취소를 표시한다.
+CREATE TABLE IF NOT EXISTS edu_session (
+    session_id  INTEGER PRIMARY KEY,
+    course_id   INTEGER NOT NULL REFERENCES edu_course(course_id),
+    session_no  INTEGER NOT NULL,                     -- 과정 안의 차수 번호. 1부터
+    date_from   TEXT NOT NULL,                        -- YYYY-MM-DD
+    date_to     TEXT NOT NULL,                        -- YYYY-MM-DD. 하루짜리면 date_from 과 같다
+    online      INTEGER NOT NULL DEFAULT 0,           -- 1 이면 온라인
+    place       TEXT,                                 -- 장소. 온라인이면 비워도 된다
+    capacity    INTEGER,                              -- 정원. 비면 정하지 않음
+    status      TEXT NOT NULL DEFAULT 'planned',      -- planned / held / cancelled
+    note        TEXT,
+    created_by  TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    UNIQUE (course_id, session_no)
+);
+
+-- 수료. 명부 한 줄 또는 관리자의 확인 처리 한 번이 한 줄이다.
+-- 같은 수료는 두 번 넣지 않는다. 같은 사람, 같은 과정, 같은 주기(cycle_key)의 살아 있는 줄은 하나다.
+-- cycle_key 는 매년 기한인 과정이면 수료한 해 YYYY, 그 밖은 once 다. 넣을 때 엔진이 정한다.
+CREATE TABLE IF NOT EXISTS edu_completion (
+    completion_id INTEGER PRIMARY KEY,
+    agent_id      INTEGER NOT NULL REFERENCES agent(agent_id),
+    course_id     INTEGER NOT NULL REFERENCES edu_course(course_id),
+    session_id    INTEGER REFERENCES edu_session(session_id),   -- 명부에 차수가 없으면 비운다
+    completed_on  TEXT NOT NULL,                      -- 수료일 YYYY-MM-DD
+    cycle_key     TEXT NOT NULL,                      -- once / YYYY
+    source        TEXT NOT NULL,                      -- roster(수료자 명부) / manual(관리자 확인 처리) / sample(샘플)
+    batch_id      INTEGER REFERENCES import_batch(batch_id),    -- 원본 명부 배치. import_batch.data_type 은 edu_roster
+    row_no        INTEGER,                            -- 명부의 줄 번호. 같은 배치를 다시 만들 때 쓴다
+    recorded_by   TEXT NOT NULL,
+    recorded_at   TEXT NOT NULL,
+    voided_at     TEXT,                               -- 뺀 때. 지우지 않는다
+    voided_by     TEXT,
+    void_reason   TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_edu_completion_live ON edu_completion(agent_id, course_id, cycle_key) WHERE voided_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_edu_completion_course ON edu_completion(course_id, session_id);
+CREATE INDEX IF NOT EXISTS idx_edu_completion_batch ON edu_completion(batch_id);
+
+-- 명함 수료 코드 발급 기록. 코드 원문은 저장하지 않고 명함 사이트의 일련번호와 코드의 SHA-256 만 둔다.
+-- 명함 사이트는 코드의 SHA-256 앞 20자로 코드를 찾는다. 발급과 내리기는 메인 관리자만 한다(D-44).
+-- 사이트에 실제로 보내는 일은 D-28 이 정해지고 CARD_SITE_WRITE 를 켠 뒤에 한다. 그 전에는 requested 에 머문다.
+-- 살아 있는 발급(requested, issued)은 사람과 명함 과정마다 하나다. 명함은 과정마다 수료 하나만 보여 주기 때문이다.
+CREATE TABLE IF NOT EXISTS edu_card_code (
+    issue_id         INTEGER PRIMARY KEY,
+    completion_id    INTEGER NOT NULL REFERENCES edu_completion(completion_id),
+    agent_id         INTEGER NOT NULL REFERENCES agent(agent_id),
+    card_course_code TEXT NOT NULL,                   -- 명함 사이트 EDU_COURSES 의 키
+    completed_ym     TEXT NOT NULL,                   -- 명함에 찍히는 수료월 YYYY-MM
+    status           TEXT NOT NULL DEFAULT 'requested', -- requested / issued / failed / revoked
+    serial           TEXT,                            -- 명함 사이트의 일련번호. 예: ABC2610-002
+    code_sha256      TEXT,                            -- 코드 원문(공백 없애고 대문자)의 SHA-256 16진수
+    requested_by     TEXT NOT NULL,
+    requested_at     TEXT NOT NULL,
+    issued_at        TEXT,
+    fail_reason      TEXT,
+    revoked_by       TEXT,
+    revoked_at       TEXT,
+    revoke_reason    TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_edu_card_code_live ON edu_card_code(agent_id, card_course_code) WHERE status IN ('requested', 'issued');
+CREATE UNIQUE INDEX IF NOT EXISTS idx_edu_card_code_serial ON edu_card_code(serial) WHERE serial IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_edu_card_code_hash ON edu_card_code(code_sha256) WHERE code_sha256 IS NOT NULL;
+-- [education:end]
