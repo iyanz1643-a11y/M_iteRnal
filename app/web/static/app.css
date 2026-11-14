@@ -166,7 +166,8 @@ button.ghost{border:none;border-radius:999px;background:var(--bg);color:var(--in
 form.wide{display:grid;gap:16px;max-width:none}
 .frow{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
 .frow.w3{grid-template-columns:1.2fr 1fr 1fr}.frow.t4{grid-template-columns:1fr 1fr 1fr 1.4fr}
-label.f{display:grid;gap:6px;font-size:13px;font-weight:600;color:var(--quiet)}
+label.f{display:grid;gap:6px;min-width:0;font-size:13px;font-weight:600;color:var(--quiet)}
+input[type=file]{display:block;width:100%;max-width:100%;min-width:0;min-height:48px;font:inherit;font-size:16px;color:var(--ink);overflow:hidden;text-overflow:ellipsis}
 input[type=date],input[type=number],select,textarea{width:100%;min-height:48px;padding:0 14px;border:1px solid var(--line);border-radius:12px;font:inherit;font-size:16px;background:var(--card);color:var(--ink)}
 input[type=text].sm{height:48px;border-radius:12px;font-size:16px}
 textarea{padding:12px 14px;min-height:88px;resize:vertical}

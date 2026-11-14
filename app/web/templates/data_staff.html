@@ -32,7 +32,7 @@
 <h2 class="sec">파일 올리기</h2>
 <form class="card wide" method="post" action="/data/staff" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
   <div class="frow">
-    <label class="f">사원현황 엑셀<input type="file" name="file" accept=".xlsx" required style="min-height:48px;font:inherit;font-size:16px"></label>
+    <label class="f">사원현황 엑셀<input type="file" name="file" accept=".xlsx" required></label>
     <label class="f">반영 월<input class="sm" type="text" name="effective_ym" value="{{ ym }}" pattern="20[0-9]{4}" required></label>
   </div>
   <div><button class="primary" name="action" value="preview">미리보기</button></div>
