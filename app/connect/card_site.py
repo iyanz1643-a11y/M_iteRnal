@@ -1,17 +1,25 @@
-"""모바일 명함 사이트 클라이언트. 1차: 읽기만.
+"""모바일 명함 사이트 클라이언트. 1차: 읽기. D-44: 승인과 반려 쓰기.
 
 명함 사이트의 API (netlify/functions/api.mjs 기준)
 - GET /api/status?slug=   공개. {slug, live, liveAt, status, reason, at, decidedAt}
                           status 는 pending / approved / rejected / removed / none
 - GET /api/admin/list     머리글 x-admin-key. {pending: [...], decided: [...], live: [...]}
                           요청 기록에는 이름과 연락처 전체가, 공개 기록에는 이름과 연락처 끝 네 자리가 있다
-승인, 반려, 내리기, 수료 코드 발급은 이 파일에 만들지 않는다. 2차와 3차에서 메인 관리자 확인과 함께 만든다.
-그래서 이 클라이언트는 GET 만 보낸다.
+- POST /api/admin/approve {slug}           머리글 x-admin-key. 성공 {ok, slug, at}. 대기 중이 아니면 404 no_pending
+- POST /api/admin/reject  {slug, reason}   머리글 x-admin-key. 성공 {ok}. reason 은 사이트가 200자로 자른다
+
+쓰기 규칙
+- 승인과 반려만 만든다. 내리기와 수료 코드 발급은 만들지 않는다.
+- 환경 변수 CARD_SITE_WRITE 가 1 일 때만 POST 를 보낸다. 아니면 보내지 않고 write_off 를 돌려준다. 기본은 꺼짐이다.
+- 쓰기는 자동으로 다시 보내지 않는다. 응답을 받지 못했거나 5xx 면 공개 상태를 한 번 GET 으로 확인해 결과를 정한다.
+- 화면은 이 클라이언트의 approve, reject 를 바로 부르지 않고 app/connect/card_decide.py 의 decide_card 를 부른다.
+  권한, 범위, 같은 요청 막기, 변경 기록은 그쪽에 있다.
 
 앱 쪽으로 넘기는 것은 주소, 공개 여부, 승인 시각, 대기와 반려 상태뿐이다.
 이름은 suggest_links 안에서 설계사와 잇는 데만 쓰고 결과와 상태 기록에 남기지 않는다. 연락처는 읽지 않는다.
 
-환경 변수: CARD_SITE_URL (사이트 주소), CARD_ADMIN_KEY (관리자 연동 키). 키는 관리자 호출에만 붙인다.
+환경 변수: CARD_SITE_URL (사이트 주소), CARD_ADMIN_KEY (관리자 연동 키), CARD_SITE_WRITE (1 이면 쓰기 켬).
+키는 관리자 호출에만 붙인다.
 """
 from __future__ import annotations
 
@@ -22,12 +30,13 @@ from typing import Iterable, Protocol
 
 import httpx
 
-from app.connect.base import FAILED, NOT_CONFIGURED, OK, NotConfigured, Outcome
+from app.connect.base import FAILED, NOT_CONFIGURED, OK, NotConfigured, Outcome, describe
 from app.connect.retry import Retryable, call_with_retry
 from app.connect.state import StateStore
 
 ENV_URL = "CARD_SITE_URL"
 ENV_KEY = "CARD_ADMIN_KEY"
+ENV_WRITE = "CARD_SITE_WRITE"
 ADMIN_HEADER = "x-admin-key"
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,29}$")     # 명함 사이트 lib.mjs 와 같은 규칙
 STATES = ("pending", "approved", "rejected", "removed", "none")
@@ -35,6 +44,14 @@ STATE_KO = {"pending": "승인 대기", "approved": "승인", "rejected": "반�
 
 CONN_STATUS = "card_site.status"
 CONN_ADMIN = "card_site.admin"
+CONN_WRITE = "card_site.write"
+
+# 쓰기 결과 상태. OK, FAILED, NOT_CONFIGURED 와 함께 쓴다
+WRITE_OFF = "write_off"           # CARD_SITE_WRITE 가 꺼져 있어 보내지 않았다
+NO_PENDING = "no_pending"         # 사이트에 대기 중인 요청이 없다
+WRITE_ACTIONS = ("approve", "reject")
+TARGET_STATE = {"approve": "approved", "reject": "rejected"}
+REASON_MAX = 200                  # 사이트가 자르는 길이와 같다
 
 
 class CardSiteError(Exception):
@@ -85,6 +102,15 @@ class CardEntry:
 
 
 @dataclass(frozen=True)
+class WriteResult:
+    """승인이나 반려 한 번의 결과. 사유 원문은 담지 않는다."""
+    slug: str
+    action: str                   # approve / reject
+    decided_at: str | None = None
+    confirmed_by_status: bool = False   # 응답을 받지 못해 공개 상태를 읽어 결과를 확인했다
+
+
+@dataclass(frozen=True)
 class LinkSuggestion:
     """명함 주소와 이을 만한 설계사. 메인 관리자가 확인하고 잇는다. 이름은 담지 않는다."""
     slug: str
@@ -97,7 +123,7 @@ class LinkSuggestion:
 class CardSiteClient:
     def __init__(self, base_url: str | None = None, admin_key: str | None = None, *, timeout: float = 10.0,
                  attempts: int = 3, backoff: float = 1.0, transport: httpx.BaseTransport | None = None,
-                 state: StateStore | None = None, sleep=None):
+                 state: StateStore | None = None, sleep=None, write: bool | None = None):
         self.base_url = (base_url if base_url is not None else os.environ.get(ENV_URL, "")).rstrip("/")
         self._admin_key = admin_key if admin_key is not None else os.environ.get(ENV_KEY, "")
         self.timeout = timeout
@@ -106,9 +132,12 @@ class CardSiteClient:
         self.transport = transport
         self.state = state or StateStore()
         self._sleep = sleep
+        # 쓰기 스위치. 넘기지 않으면 환경 변수 CARD_SITE_WRITE 가 정확히 1 일 때만 켠다
+        self.write_enabled = (os.environ.get(ENV_WRITE, "").strip() == "1") if write is None else bool(write)
 
     def __repr__(self) -> str:   # 키가 로그에 찍히지 않게 한다
-        return f"CardSiteClient(base_url={self.base_url!r}, admin={'set' if self._admin_key else 'unset'})"
+        return (f"CardSiteClient(base_url={self.base_url!r}, admin={'set' if self._admin_key else 'unset'}, "
+                f"write={'on' if self.write_enabled else 'off'})")
 
     @property
     def configured(self) -> bool:
@@ -121,7 +150,7 @@ class CardSiteClient:
     def card_url(self, slug: str) -> str | None:
         return f"{self.base_url}/{slug}/" if self.base_url and SLUG_RE.match(slug or "") else None
 
-    # ---------------------------------------------------------- 보내기. GET 만
+    # ---------------------------------------------------------- 읽기. GET
     def _get_json(self, path: str, params: dict | None = None, admin: bool = False) -> dict:
         if not self.base_url:
             raise NotConfigured(f"설정 안 됨: 환경 변수 {ENV_URL} 가 없습니다")
@@ -209,6 +238,90 @@ class CardSiteClient:
                     out.append(LinkSuggestion(slug=slug, agent_ids=ids, live=e.live, request_status=e.request_status))
             return out
         return self._call(CONN_ADMIN, go)
+
+    # ---------------------------------------------------------- 쓰기. 승인과 반려만
+    def approve(self, slug: str) -> Outcome:
+        """승인 요청을 한 번 보낸다. 돌려주는 값은 Outcome(value=WriteResult).
+        상태는 ok / no_pending / write_off / not_configured / failed. 화면은 decide_card 를 거쳐 부른다."""
+        return self._write("approve", slug, {})
+
+    def reject(self, slug: str, reason: str = "") -> Outcome:
+        """반려 요청을 한 번 보낸다. 사유는 앞뒤 공백을 지우고 200자로 자른다. 사유 원문은 결과와 상태 기록에 남기지 않는다."""
+        return self._write("reject", slug, {"reason": str(reason or "").strip()[:REASON_MAX]})
+
+    def _write(self, action: str, slug, extra: dict) -> Outcome:
+        slug = str(slug or "").strip().lower()
+        if action not in WRITE_ACTIONS:
+            return Outcome(FAILED, reason="승인과 반려만 보낼 수 있습니다")
+        if not SLUG_RE.match(slug):
+            return Outcome(FAILED, reason="명함 주소는 영문 소문자, 숫자, 하이픈 2자에서 30자입니다")
+        if not self.write_enabled:
+            out = Outcome(WRITE_OFF, reason=f"쓰기가 꺼져 있습니다. 환경 변수 {ENV_WRITE} 가 1 이 아니라 명함 사이트에 보내지 않았습니다")
+            self._record(CONN_WRITE, NOT_CONFIGURED, out.reason)
+            return out
+        if not self.admin_configured:
+            missing = [k for k, v in ((ENV_URL, self.base_url), (ENV_KEY, self._admin_key)) if not v]
+            out = Outcome(NOT_CONFIGURED, reason=f"설정 안 됨: 환경 변수 {', '.join(missing)} 가 없어 보내지 않았습니다")
+            self._record(CONN_WRITE, NOT_CONFIGURED, out.reason)
+            return out
+        out = self._post_once(action, slug, {"slug": slug, **extra})
+        # 대기 없음은 사이트가 제대로 답한 것이라 연결은 성공으로 적는다
+        self._record(CONN_WRITE, OK if out.status in (OK, NO_PENDING) else FAILED, out.reason)
+        return out
+
+    def _post_once(self, action: str, slug: str, body: dict) -> Outcome:
+        """POST 를 한 번만 보낸다. 다시 보내지 않는다.
+        응답을 받지 못했거나 5xx 면 서버가 처리했는지 모르므로 공개 상태를 한 번 읽어 결과를 정한다."""
+        headers = {"accept": "application/json", "user-agent": "ga-app-connect/1", ADMIN_HEADER: self._admin_key}
+        try:
+            with httpx.Client(base_url=self.base_url, timeout=self.timeout, transport=self.transport) as c:
+                r = c.request("POST", f"/api/admin/{action}", json=body, headers=headers)
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            # 연결 자체가 안 됐다. 요청이 서버에 닿지 않았으므로 처리되지 않았다
+            return Outcome(FAILED, reason=f"명함 사이트에 닿지 않아 보내지 못했습니다. {describe(e)}"[:300], attempts=1)
+        except httpx.TransportError as e:
+            return self._confirm(action, slug, f"응답을 받지 못했습니다. {describe(e)}")
+        data = {}
+        try:
+            data = r.json() if r.content else {}
+        except ValueError:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        if 200 <= r.status_code < 300:
+            return Outcome(OK, value=WriteResult(slug=slug, action=action, decided_at=data.get("at")), attempts=1)
+        if r.status_code == 404 and data.get("error") == "no_pending":
+            return Outcome(NO_PENDING, value=WriteResult(slug=slug, action=action),
+                           reason="대기 중인 요청이 없습니다. 이미 처리되었을 수 있습니다", attempts=1)
+        if r.status_code == 401:
+            return Outcome(FAILED, reason="관리자 키가 맞지 않습니다 (401)", attempts=1)
+        if r.status_code == 429:
+            return Outcome(FAILED, reason="명함 사이트가 요청이 많다고 받지 않았습니다 (429). 잠시 뒤 다시 해 주세요", attempts=1)
+        if r.status_code >= 500:
+            return self._confirm(action, slug, f"명함 사이트가 {r.status_code} 를 돌려줬습니다")
+        return Outcome(FAILED, reason=f"명함 사이트가 요청을 받지 않았습니다 ({r.status_code})", attempts=1)
+
+    def _confirm(self, action: str, slug: str, why: str) -> Outcome:
+        """결과를 모를 때 공개 상태를 한 번 읽는다. 다시 보내지는 않는다."""
+        try:
+            d = self._get_json("/api/status", params={"slug": slug})
+        except Exception as e:
+            return Outcome(FAILED, reason=f"{why}. 결과를 확인하지 못했습니다. 명함 사이트 관리 화면에서 상태를 확인해 주세요 ({describe(e)})"[:300],
+                           attempts=1)
+        st = _state(d.get("status"))
+        if st == TARGET_STATE[action]:
+            return Outcome(OK, value=WriteResult(slug=slug, action=action, decided_at=d.get("decidedAt"), confirmed_by_status=True),
+                           reason=f"{why}. 공개 상태로 반영을 확인했습니다"[:300], attempts=1)
+        if st == "pending":
+            return Outcome(FAILED, reason=f"{why}. 아직 승인 대기입니다. 다시 시도해 주세요"[:300], attempts=1)
+        return Outcome(FAILED, reason=f"{why}. 지금 상태는 {STATE_KO.get(st, st)} 입니다. 명함 사이트 관리 화면에서 확인해 주세요"[:300],
+                       attempts=1)
+
+    def _record(self, conn: str, status: str, reason: str = "") -> None:
+        try:
+            self.state.record(conn, status, reason=reason)
+        except Exception:
+            pass
 
     def _not_configured(self) -> Outcome:
         missing = [k for k, v in ((ENV_URL, self.base_url), (ENV_KEY, self._admin_key)) if not v]

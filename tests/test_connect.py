@@ -28,7 +28,7 @@ FAKE_PHONE = "x-test-phone"
 @pytest.fixture(autouse=True)
 def _isolate(tmp_path, monkeypatch):
     """바깥 환경과 실제 네트워크를 막는다."""
-    for k in (card_site.ENV_URL, card_site.ENV_KEY, "GDRIVE_SERVICE_ACCOUNT_FILE", "GDRIVE_FOLDER_ID"):
+    for k in (card_site.ENV_URL, card_site.ENV_KEY, card_site.ENV_WRITE, "GDRIVE_SERVICE_ACCOUNT_FILE", "GDRIVE_FOLDER_ID"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("CONNECT_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("CONNECT_STATE_DB", str(tmp_path / "state.db"))   # 연결 상태가 data/demo.db 로 가지 않게 한다
@@ -438,7 +438,9 @@ def test_card_client_sends_only_get(tmp_path):
     c.admin_list()
     c.suggest_links([(1, FAKE_NAMES[0])])
     assert site.requests and {r.method for r in site.requests} == {"GET"}
-    assert not any(hasattr(c, m) for m in ("approve", "reject", "remove", "issue_codes"))
+    # D-44 로 승인과 반려만 생겼다. 내리기와 수료 코드 발급은 없다
+    assert not any(hasattr(c, m) for m in ("remove", "remove_live", "issue_codes", "codes"))
+    assert not c.write_enabled                                                     # 쓰기는 기본으로 꺼져 있다
 
 
 def test_card_wrong_key_is_not_retried(tmp_path):
@@ -722,3 +724,304 @@ def test_card_link_keeps_no_name_or_phone(links_env):
     assert mine and not any(n in line for line in mine for n in FAKE_NAMES)
     out = json.dumps([links.get(x) for x in a], ensure_ascii=False)
     assert not any(n in out for n in (*FAKE_NAMES, FAKE_PHONE))
+
+
+# ------------------------------------------------------------------ 명함 승인과 반려 (D-44)
+MAIN, MGR, DEP, FC, OUT_MGR = "admin", "mgr-login", "dep-login", "fc-only", "gone-mgr"
+# 개인정보 꼴의 가짜 값. 컨텍스트 점검이 원문을 찾지 않도록 실행할 때 조각을 이어 만든다
+FAKE_RRN = "-".join(("000101", "3" + "0" * 6))
+FAKE_MOBILE = "-".join(("010", "0" * 4, "0" * 4))
+
+
+class WriteSite(FakeSite):
+    """승인과 반려를 받는 가짜 명함 사이트. 사이트처럼 대기 중이 아니면 404 no_pending 이다."""
+
+    def __init__(self, pending=("card-a", "card-c", "card-x"), post_fail=None, stale=False, **kw):
+        super().__init__(**kw)
+        self.pending = {s: f"2026-11-1{i}T01:00:00Z" for i, s in enumerate(pending)}
+        self.decided = {}
+        self.post_fail = list(post_fail or [])
+        self.stale = stale                          # 참이면 공개 상태가 늦게 바뀌는 사이트를 흉내 낸다
+        self.bodies = []
+
+    def __call__(self, request):
+        path = request.url.path
+        if request.method == "POST" and path.startswith("/api/admin/"):
+            self.requests.append(request)
+            if request.headers.get("x-admin-key") != KEY:
+                return httpx.Response(401, json={"error": "unauthorized"})
+            body = json.loads(request.content or b"{}")
+            self.bodies.append(body)
+            op, slug = path.rsplit("/", 1)[1], body.get("slug")
+            if self.post_fail:
+                f = self.post_fail.pop(0)
+                if isinstance(f, tuple):                  # (예외, 서버가 처리했는가)
+                    exc, applied = f
+                    if applied:
+                        self._apply(op, slug)
+                    raise exc
+                return httpx.Response(f, json={"error": "server_error"})
+            if slug not in self.pending:
+                return httpx.Response(404, json={"error": "no_pending", "message": "대기 중인 요청이 없습니다."})
+            at = self._apply(op, slug)
+            return httpx.Response(200, json={"ok": True, "slug": slug, "at": at} if op == "approve" else {"ok": True})
+        if request.method == "GET" and path == "/api/status":
+            self.requests.append(request)
+            slug = request.url.params.get("slug")
+            if slug in self.pending or (self.stale and slug in self.decided):
+                at = self.pending.get(slug) or self.decided[slug][1]
+                return httpx.Response(200, json={"slug": slug, "live": False, "liveAt": None, "status": "pending", "reason": "",
+                                                 "at": at, "decidedAt": None})
+            if slug in self.decided:
+                st, at = self.decided[slug]
+                return httpx.Response(200, json={"slug": slug, "live": st == "approved", "liveAt": "2026-11-14T00:00:00Z" if st == "approved" else None,
+                                                 "status": st, "reason": "", "at": at, "decidedAt": "2026-11-14T00:00:00Z"})
+            return httpx.Response(200, json={"slug": slug, "live": False, "liveAt": None, "status": "none", "reason": "", "at": None, "decidedAt": None})
+        if request.method == "GET" and path == "/api/admin/list":
+            self.requests.append(request)
+            if request.headers.get("x-admin-key") != KEY:
+                return httpx.Response(401, json={"error": "unauthorized"})
+            return httpx.Response(200, json={
+                "pending": [{"slug": s, "name": FAKE_NAMES[0], "phone": FAKE_MOBILE, "title": "", "at": at, "status": "pending",
+                             "reason": "", "files": ["index.html"]} for s, at in self.pending.items()],
+                "decided": [], "live": [{"slug": "card-a", "name": FAKE_NAMES[0], "phone4": "5791", "at": "2026-10-01T00:00:00Z"}]})
+        return super().__call__(request)
+
+    def _apply(self, op, slug):
+        at = self.pending.pop(slug, None)
+        if at:
+            self.decided[slug] = ("approved" if op == "approve" else "rejected", at)
+        return "2026-11-14T00:00:00Z"
+
+    def posts(self):
+        return [r for r in self.requests if r.method == "POST"]
+
+
+@pytest.fixture()
+def decide_env(tmp_path):
+    """조직 둘. 관리자는 조직 1의 팀장이고, 대리는 조직 1의 대리다. 설계사 a1 은 범위 안, a2 는 범위 밖이다."""
+    from app.connect.card_link import CardLinkTable
+    con = db.init_db(tmp_path / "d.db")
+    o1 = con.execute("INSERT INTO org_unit(name, level) VALUES('시험 팀 1', 'team')").lastrowid
+    o2 = con.execute("INSERT INTO org_unit(name, level) VALUES('시험 팀 2', 'team')").lastrowid
+    ids = [con.execute("INSERT INTO agent(internal_code, name) VALUES(?,?)", (f"D{i:03d}", f"{FAKE_NAMES[0]}{i}")).lastrowid for i in range(6)]
+    a_mgr, a1, a2, a_dep, a_fc, a_gone = ids
+    con.execute("INSERT INTO org_manager(org_id, agent_id, role, effective_from) VALUES(?,?,?,?)", (o1, a_mgr, "team_head", "202401"))
+    con.execute("INSERT INTO org_manager(org_id, agent_id, role, effective_from, effective_to) VALUES(?,?,?,?,?)",
+                (o2, a_gone, "team_head", "202401", "202402"))                     # 지난 조직장
+    con.execute("INSERT INTO org_deputy(org_id, agent_id, date_from, date_to, created_by, created_at) VALUES(?,?,?,?,?,?)",
+                (o1, a_dep, "2000-01-01", "2999-12-31", MAIN, db.now()))
+    for login, agent_id, main in ((MAIN, None, 1), (MGR, a_mgr, 0), (DEP, a_dep, 0), (FC, a_fc, 0), (OUT_MGR, a_gone, 0)):
+        con.execute("INSERT INTO user_account(login_id, password_hash, agent_id, display_name, is_main_admin, created_at) VALUES(?,?,?,?,?,?)",
+                    (login, "x", agent_id, "시험 계정", main, db.now()))
+    con.commit()
+    links = CardLinkTable(con)
+    links.link(a1, "card-a", by=MAIN)
+    links.link(a2, "card-c", by=MAIN)                                               # card-x 는 이어지지 않았다
+    site = WriteSite()
+    client = _client(site, tmp_path, write=True)
+    scope = [a_mgr, a1, a_dep]                                                       # guard 가 관리자에게 주는 목록
+    yield {"con": con, "links": links, "site": site, "client": client, "a1": a1, "a2": a2, "scope": scope,
+           "path": tmp_path / "d.db", "tmp": tmp_path}
+    con.close()
+
+
+def _decide(env, slug, action, actor, *, is_main=False, reason="", client=None):
+    from app.connect.card_decide import decide_card
+    return decide_card(env["con"], client or env["client"], slug=slug, action=action, actor=actor,
+                       scope_agent_ids=[] if is_main else env["scope"], is_main=is_main, reason=reason, link_table=env["links"])
+
+
+def _card_audit(con):
+    return [(r[0], r[1], r[2], json.loads(r[3])) for r in
+            con.execute("SELECT actor, action, target, after_json FROM audit_log WHERE action IN ('card_approve','card_reject') ORDER BY id")]
+
+
+def test_card_decide_manager_approves_in_scope(decide_env):
+    from app.connect.card_decide import DECIDE_KO
+    env = decide_env
+    out = _decide(env, "card-a", "approve", MGR)
+    assert out.status == OK and out.value.agent_id == env["a1"] and out.value.decided_at == "2026-11-14T00:00:00Z"
+    assert out.value.to_dict()["result_ko"] == DECIDE_KO[OK]
+    posts = env["site"].posts()
+    assert [(r.url.path, json.loads(r.content)) for r in posts] == [("/api/admin/approve", {"slug": "card-a"})]
+    assert posts[0].headers["x-admin-key"] == KEY
+    row = env["links"].get(env["a1"])
+    assert row["last_status"] == "approved" and row["last_live"] is True and row["last_checked_at"]
+    assert _card_audit(env["con"]) == [(MGR, "card_approve", f"agent:{env['a1']}",
+                                        {"slug": "card-a", "result": OK, "requested_at": "2026-11-10T01:00:00Z", "scope": "manager"})]
+    assert StateStore(env["tmp"] / "state").get(card_site.CONN_WRITE)["last_status"] == OK
+
+
+def test_card_decide_deputy_rejects_in_scope_with_trimmed_reason(decide_env):
+    env = decide_env
+    long_reason = "  사진이 흐립니다 " + "가" * 300 + "  "
+    out = _decide(env, "card-a", "reject", DEP, reason=long_reason)
+    assert out.status == OK and out.value.reason_len == 200
+    body = env["site"].bodies[-1]
+    assert body["slug"] == "card-a" and len(body["reason"]) == 200 and body["reason"].startswith("사진이 흐립니다")
+    assert env["links"].get(env["a1"])["last_status"] == "rejected"
+    (actor, action, target, after), = _card_audit(env["con"])
+    assert (actor, action, target, after["result"], after["reason_len"]) == (DEP, "card_reject", f"agent:{env['a1']}", OK, 200)
+
+
+@pytest.mark.parametrize("slug, actor, why", [
+    ("card-c", MGR, "범위 밖"),                     # 이어진 설계사가 범위 밖
+    ("card-x", MGR, "메인 관리자만"),               # 이어지지 않은 주소
+    ("card-x", DEP, "메인 관리자만"),
+    ("card-a", FC, "조직장이나 대리가 아니라"),       # 조직장도 대리도 아닌 계정
+    ("card-a", OUT_MGR, "조직장이나 대리가 아니라"),  # 지난 조직장
+    ("card-a", "no-such-login", "활성 계정이 아니라"),
+])
+def test_card_decide_denied_without_sending(decide_env, slug, actor, why):
+    env = decide_env
+    for action in ("approve", "reject"):
+        out = _decide(env, slug, action, actor, reason="사진 확인")
+        assert out.status == "denied" and why in out.reason
+    assert env["site"].requests == []                                                # 사이트에는 아무것도 보내지 않았다
+    audit = _card_audit(env["con"])
+    assert len(audit) == 2 and all(a[3]["result"] == "denied" for a in audit)
+
+
+def test_card_decide_suspended_account_and_fake_main_are_denied(decide_env):
+    env = decide_env
+    env["con"].execute("UPDATE user_account SET status='suspended' WHERE login_id=?", (MGR,))
+    env["con"].commit()
+    assert _decide(env, "card-a", "approve", MGR).status == "denied"
+    assert _decide(env, "card-x", "approve", DEP, is_main=True).status == "denied"     # 화면이 메인이라 해도 DB 가 아니면 막는다
+    assert env["site"].requests == []
+
+
+def test_card_decide_main_admin_handles_any_slug(decide_env):
+    env = decide_env
+    assert _decide(env, "card-x", "approve", MAIN, is_main=True).status == OK          # 이어지지 않은 주소
+    assert _decide(env, "card-c", "reject", MAIN, is_main=True, reason="다시 올려 주세요").status == OK   # 누구의 범위든
+    assert [r.url.path for r in env["site"].posts()] == ["/api/admin/approve", "/api/admin/reject"]
+    audit = _card_audit(env["con"])
+    assert [(a[2], a[3]["scope"]) for a in audit] == [("agent:none", "main"), (f"agent:{env['a2']}", "main")]
+
+
+def test_card_decide_write_switch_off_sends_nothing(decide_env, monkeypatch):
+    env = decide_env
+    off = _client(env["site"], env["tmp"])                                             # 환경 변수가 없으면 꺼짐
+    assert not off.write_enabled
+    monkeypatch.setenv(card_site.ENV_WRITE, "true")                                    # 1 이 아니면 꺼짐
+    assert not _client(env["site"], env["tmp"]).write_enabled
+    out = _decide(env, "card-a", "approve", MGR, client=off)
+    assert out.status == card_site.WRITE_OFF and "쓰기가 꺼져 있습니다" in out.reason
+    assert off.approve("card-a").status == card_site.WRITE_OFF and off.reject("card-a", "x").status == card_site.WRITE_OFF
+    assert env["site"].requests == []
+    st = StateStore(env["tmp"] / "state").get(card_site.CONN_WRITE)
+    assert st["last_status"] == NOT_CONFIGURED and card_site.ENV_WRITE in st["last_failure_reason"]
+    monkeypatch.setenv(card_site.ENV_WRITE, "1")
+    assert _client(env["site"], env["tmp"]).write_enabled
+    assert _card_audit(env["con"])[0][3]["result"] == card_site.WRITE_OFF
+
+
+def test_card_decide_no_pending(decide_env):
+    env = decide_env
+    env["site"].pending.pop("card-a")                                                 # 사이트에서 이미 처리됨
+    out = _decide(env, "card-a", "approve", MGR)
+    assert out.status == card_site.NO_PENDING and env["site"].posts() == []           # 미리 읽은 상태로 보내지 않는다
+    # 상태 읽기와 보내기 사이에 처리되어 사이트가 404 no_pending 을 돌려주는 경우
+    raw = _client(env["site"], env["tmp"], write=True).approve("card-a")
+    assert raw.status == card_site.NO_PENDING and len(env["site"].posts()) == 1
+    assert StateStore(env["tmp"] / "state").get(card_site.CONN_WRITE)["last_status"] == OK   # 연결은 정상이다
+
+
+def test_card_decide_never_sends_twice(decide_env):
+    env = decide_env
+    site = WriteSite(stale=True)                      # 처리한 뒤에도 공개 상태가 한동안 대기로 보이는 사이트
+    env["site"] = site
+    client = _client(site, env["tmp"], write=True)
+    assert _decide(env, "card-a", "approve", MGR, client=client).status == OK
+    again = _decide(env, "card-a", "approve", MGR, client=client)                     # 두 번 누름
+    other = _decide(env, "card-a", "reject", DEP, client=client, reason="x")          # 다른 관리자가 같은 신청을 반려
+    assert again.status == "already_done" and other.status == "already_done"
+    assert len(site.posts()) == 1
+
+
+def test_card_write_is_not_retried(decide_env):
+    env = decide_env
+    # 5xx: 다시 보내지 않고 상태를 한 번 읽는다. 아직 대기면 실패로 돌려준다
+    site = WriteSite(post_fail=[503, 503, 503])
+    out = _client(site, env["tmp"], write=True, attempts=3).approve("card-a")
+    assert out.status == FAILED and "아직 승인 대기" in out.reason and len(site.posts()) == 1
+    # 응답을 못 받았지만 서버는 처리한 경우: 상태로 반영을 확인한다
+    site = WriteSite(post_fail=[(httpx.ReadTimeout("느림"), True)])
+    out = _client(site, env["tmp"], write=True).reject("card-a", "x")
+    assert out.status == OK and out.value.confirmed_by_status and len(site.posts()) == 1
+    # 연결 자체가 안 된 경우: 서버에 닿지 않았으니 처리되지 않았고 다시 보내지 않는다
+    site = WriteSite(post_fail=[(httpx.ConnectError("끊김"), False)])
+    out = _client(site, env["tmp"], write=True).approve("card-a")
+    assert out.status == FAILED and "닿지 않아" in out.reason and len(site.posts()) == 1
+    assert StateStore(env["tmp"] / "state").get(card_site.CONN_WRITE)["last_status"] == FAILED
+    # 키가 틀리면 한 번만
+    site = WriteSite()
+    out = _client(site, env["tmp"], key="wrong-key", write=True).approve("card-a")
+    assert out.status == FAILED and "401" in out.reason and len(site.posts()) == 1
+
+
+def test_card_decide_in_flight_blocks_second_call(decide_env):
+    from app.connect import card_decide
+    env = decide_env
+    with card_decide._LOCK:
+        card_decide._INFLIGHT.add("card-a")
+    try:
+        out = _decide(env, "card-a", "approve", MGR)
+    finally:
+        card_decide._INFLIGHT.discard("card-a")
+    assert out.status == "in_flight" and env["site"].posts() == []
+
+
+@pytest.mark.parametrize("bad", [FAKE_MOBILE, "연락 " + FAKE_MOBILE.replace("-", "") + " 주세요", "+82 " + FAKE_MOBILE[1:],
+                                 "02-000-0000", FAKE_RRN, FAKE_RRN.replace("-", "")])
+def test_card_reject_reason_with_pii_is_refused(decide_env, bad):
+    env = decide_env
+    out = _decide(env, "card-a", "reject", MGR, reason=f"사유 {bad}")
+    assert out.status == "denied" and "전화번호나 주민번호" in out.reason
+    assert env["site"].requests == []
+    dumped = json.dumps(_card_audit(env["con"]), ensure_ascii=False) + repr(out)
+    assert bad not in dumped
+
+
+def test_card_reject_reason_keeps_ordinary_numbers():
+    from app.connect.card_decide import clean_reason
+    for ok_text in ("2026-11-14 사진 다시", "3번째 사진", "제목 30자 초과"):
+        assert clean_reason(ok_text) == (ok_text, None)
+
+
+def test_card_decide_audit_has_no_name_phone_or_reason(decide_env):
+    env = decide_env
+    secret_reason = "사진 속 배경이 어둡습니다 확인부탁"
+    _decide(env, "card-a", "reject", MGR, reason=secret_reason)
+    _decide(env, "card-c", "approve", MGR)
+    _decide(env, "card-x", "approve", MAIN, is_main=True)
+    _decide(env, "card-a", "reject", MGR, reason=f"{FAKE_NAMES[1]} {FAKE_MOBILE}")
+    env["con"].commit()
+    lines = [line for line in _dump(env["path"]) if '"audit_log"' in line or '"card_link"' in line or '"connection_state"' in line]
+    lines += [line for line in _dump(env["tmp"] / "state.db") if '"connection_state"' in line]
+    assert any("card_reject" in line for line in lines)
+    for secret in (secret_reason, *FAKE_NAMES, FAKE_MOBILE, KEY):
+        assert not any(secret in line for line in lines)
+
+
+def test_pending_for_scope_filters_and_hides_phone(decide_env):
+    from app.connect.card_decide import PendingCard, pending_for_scope
+    env = decide_env
+    mgr = pending_for_scope(env["client"], env["links"], env["scope"], is_main=False)
+    assert mgr.status == OK
+    assert [(p.slug, p.agent_id) for p in mgr.value["linked"]] == [("card-a", env["a1"])] and mgr.value["unlinked"] == []
+    assert mgr.value["linked"][0].live and mgr.value["linked"][0].live_url == f"{BASE}/card-a/"
+    main = pending_for_scope(env["client"], env["links"], [], is_main=True)
+    assert sorted(p.slug for p in main.value["linked"]) == ["card-a", "card-c"]
+    assert [(p.slug, p.agent_id) for p in main.value["unlinked"]] == [("card-x", None)]
+    fields = {f.name for f in dataclasses.fields(PendingCard)}
+    assert not fields & {"name", "phone", "phone4", "title", "reason"}
+    dumped = json.dumps({k: [p.to_dict() for p in v] for out in (mgr, main) for k, v in out.value.items()}, ensure_ascii=False)
+    for secret in (FAKE_MOBILE, "5791", *FAKE_NAMES):
+        assert secret not in dumped
+    assert {r.method for r in env["site"].requests} == {"GET"}
+    # 키가 없으면 빈 목록과 설정 안 됨
+    none = pending_for_scope(_client(env["site"], env["tmp"], key=""), env["links"], env["scope"], is_main=False)
+    assert none.status == NOT_CONFIGURED and none.value == {"linked": [], "unlinked": []}
