@@ -2,6 +2,7 @@
 import json
 
 from app import db
+from app.engine import classify
 
 
 def _rule_sql():
@@ -36,10 +37,17 @@ def basis_amount(contract, basis):
     raise ValueError(basis)
 
 
+def _category(row):
+    """행의 구분 코드. 아래 조회는 classify.CATEGORY 를 category 로 싣는다.
+    contract.* 를 함께 읽으면 계약의 product_category 칸과 이름이 겹치므로 category 를 먼저 본다."""
+    keys = row.keys() if hasattr(row, "keys") else row
+    return row["category"] if "category" in keys else row["product_category"]
+
+
 def initial_commission(con, contract):
     """계약의 초회 수수료 (환수 기준액)."""
     rule = find_rate_rule(
-        con, contract["insurer_id"], contract["product_id"], contract["product_category"], "initial", 1, contract["perf_ym"]
+        con, contract["insurer_id"], contract["product_id"], _category(contract), "initial", 1, contract["perf_ym"]
     )
     if not rule:
         return 0, None
@@ -51,9 +59,9 @@ def compute(con, period_ym):
     rows = []
     # 1) 해당 월 납입 회차 → 초회/계속 수수료
     payments = con.execute(
-        """
+        f"""
         SELECT p.contract_id, p.installment_no, c.insurer_id, c.policy_no, c.product_id, c.agent_id,
-               c.premium_monthly, c.converted_premium, c.perf_ym, pr.product_category, pr.product_code
+               c.premium_monthly, c.converted_premium, c.perf_ym, {classify.CATEGORY} AS category, pr.product_code
         FROM premium_payment p
         JOIN contract c ON c.contract_id = p.contract_id
         LEFT JOIN product pr ON pr.product_id = c.product_id
@@ -63,7 +71,7 @@ def compute(con, period_ym):
     ).fetchall()
     for p in payments:
         ctype = "initial" if p["installment_no"] == 1 else "renewal"
-        rule = find_rate_rule(con, p["insurer_id"], p["product_id"], p["product_category"], ctype, p["installment_no"], period_ym)
+        rule = find_rate_rule(con, p["insurer_id"], p["product_id"], p["category"], ctype, p["installment_no"], period_ym)
         if not rule:
             continue
         basis = basis_amount(p, rule["basis"])
@@ -77,8 +85,8 @@ def compute(con, period_ym):
         )
     # 2) 해당 월에 실효/해지/철회된 계약 → 환수
     ended = con.execute(
-        """
-        SELECT c.*, pr.product_category, pr.product_code,
+        f"""
+        SELECT c.*, {classify.CATEGORY} AS category, pr.product_code,
                (SELECT COUNT(*) FROM premium_payment pp WHERE pp.contract_id = c.contract_id) AS paid_cnt
         FROM contract c
         LEFT JOIN product pr ON pr.product_id = c.product_id
@@ -100,7 +108,7 @@ def compute(con, period_ym):
               AND effective_from <= ? AND (effective_to IS NULL OR effective_to >= ?)
             ORDER BY product_category IS NULL, rule_id DESC LIMIT 1
             """,
-            (c["insurer_id"], c["product_category"], elapsed, elapsed, period_ym, period_ym),
+            (c["insurer_id"], c["category"], elapsed, elapsed, period_ym, period_ym),
         ).fetchone()
         if not cb or cb["clawback_rate"] <= 0:
             continue

@@ -12,7 +12,7 @@
 import json
 
 from app import db
-from app.engine import persist
+from app.engine import classify, orgs, persist
 from app.periods import month_bounds, months_between, ym_to_tuple
 
 CUMULATIVE = {"annual_commission", "annual_first_premium", "annual_recognized_premium", "org_recognized_premium"}
@@ -20,20 +20,12 @@ CONCLUDED = "('inforce','lapsed','cancelled','matured')"
 
 
 def _subtree(con, org_id):
-    ids = [org_id]
-    for r in con.execute("SELECT org_id FROM org_unit WHERE parent_id=?", (org_id,)).fetchall():
-        ids += _subtree(con, r["org_id"])
-    return ids
+    return sorted(orgs.descendants(con, org_id))
 
 
 def org_members(con, org_id, ym):
-    """조직(하위 포함)의 현재 소속 설계사 agent_id 목록."""
-    ids = _subtree(con, org_id)
-    marks = ",".join("?" * len(ids))
-    return [r["agent_id"] for r in con.execute(
-        f"""SELECT h.agent_id FROM agent_org_history h JOIN agent a ON a.agent_id=h.agent_id
-            WHERE a.job_type='fc' AND a.status='active' AND h.org_id IN ({marks}) AND h.effective_from<=? AND (h.effective_to IS NULL OR h.effective_to>=?)""",
-        ids + [ym, ym])]
+    """조직과 아래 전부(센터, 팀 포함)에 그 달 소속인 재직 설계사 agent_id 목록."""
+    return orgs.members(con, org_id, ym)
 
 
 def _recognized(con, agent_ids, year, as_of_ym, prog):
@@ -42,14 +34,14 @@ def _recognized(con, agent_ids, year, as_of_ym, prog):
     d_from, _ = month_bounds(f"{year}01")
     _, d_to = month_bounds(as_of_ym)
     marks = ",".join("?" * len(agent_ids))
-    sql = f"""SELECT COALESCE(SUM(c.converted_premium),0) v FROM contract c JOIN insurer i ON i.insurer_id=c.insurer_id
+    sql = f"""SELECT COALESCE(SUM(c.converted_premium),0) v FROM contract c {classify.JOINS}
               WHERE c.agent_id IN ({marks}) AND c.status IN {CONCLUDED} AND c.contract_date>=? AND c.contract_date<?"""
     params = list(agent_ids) + [d_from, d_to]
     if prog["insurer_id"]:
         sql += " AND c.insurer_id=?"
         params.append(prog["insurer_id"])
     elif prog["sector"] != "all":
-        sql += " AND i.sector=?"
+        sql += f" AND {classify.SECTOR}=?"
         params.append(prog["sector"])
     return con.execute(sql, params).fetchone()["v"]
 

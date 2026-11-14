@@ -878,3 +878,48 @@ CREATE INDEX idx_org_deputy_agent ON org_deputy(agent_id, date_from, date_to);
 CREATE INDEX idx_org_manager_agent ON org_manager(agent_id, effective_from);
 CREATE INDEX idx_agent_org_history_agent ON agent_org_history(agent_id, effective_to);
 CREATE INDEX idx_agent_org_history_org ON agent_org_history(org_id, effective_from);
+
+-- ---------------------------------------------------------------------------
+-- 구분과 업권은 계약에 붙은 값을 먼저 읽는다. 실제 계약현황은 상품 마스터와 잇지 않고 계약에 구분과 업권을 직접 싣기 때문이다.
+-- 엔진은 app/engine/classify.py 의 식을 쓴다. 이 뷰도 같은 식이다. 기존 CREATE 문은 그대로 두고 여기서 다시 만든다.
+-- ---------------------------------------------------------------------------
+DROP VIEW IF EXISTS v_contract_extract;
+CREATE VIEW v_contract_extract AS
+SELECT c.contract_id, c.perf_ym AS 귀속월, a.internal_code AS 사번, a.name AS 성명, i.name AS 원수사,
+       COALESCE(c.sector, i.sector) AS 업권,
+       COALESCE(p.product_name, c.product_code_raw) AS 상품, COALESCE(pc.name, '미분류') AS 구분, COALESCE(pc.incentive_eligible, 0) AS 시상대상구분,
+       c.premium_monthly AS 보험료, c.converted_premium AS 인정보험료, c.policy_count AS 건수,
+       c.status AS 상태, c.application_no AS 청약번호, c.policy_no AS 증권번호
+FROM contract c
+JOIN agent a ON a.agent_id = c.agent_id
+JOIN insurer i ON i.insurer_id = c.insurer_id
+LEFT JOIN product p ON p.product_id = c.product_id
+LEFT JOIN product_category pc ON pc.code = COALESCE(c.product_category, p.product_category);
+
+-- 조직과 그 아래 전부의 짝. ancestor_id 의 아래(자기 포함)에 org_id 가 있다. depth 는 몇 단계 아래인가다.
+-- 여섯 단계 조직에서 본부와 지점 집계가 센터와 팀까지 내려가게 하려고 둔다. 순환을 막으려고 열 단계에서 멈춘다.
+DROP VIEW IF EXISTS v_org_closure;
+CREATE VIEW v_org_closure AS
+WITH RECURSIVE t(ancestor_id, org_id, depth) AS (
+    SELECT org_id, org_id, 0 FROM org_unit
+    UNION ALL
+    SELECT t.ancestor_id, o.org_id, t.depth + 1 FROM t JOIN org_unit o ON o.parent_id = t.org_id WHERE t.depth < 10
+)
+SELECT ancestor_id, org_id, depth FROM t;
+
+-- 조직별 기간 실적, 아래 조직 전부 포함. as_of_ym 은 업적 run 의 기준 월이다.
+-- 분기, 반기, 연은 run 마다 누적이 다르므로 as_of_ym 으로 하나를 골라 읽는다. 월은 as_of_ym 과 period_key 가 같다.
+-- 소속은 run 이 남긴 기간 기준일 소속(agent_performance_summary.org_id)이다. app/engine/performance.py 의 org_rollup 과 같은 값이다.
+DROP VIEW IF EXISTS v_org_performance_rollup;
+CREATE VIEW v_org_performance_rollup AS
+SELECT r.period_ym AS as_of_ym, s.period_type, s.period_key, t.ancestor_id AS org_id, o.name AS org_name, o.level AS org_level,
+       COUNT(*) AS agent_count,
+       SUM(s.applied_count) AS applied_count, SUM(s.new_count) AS new_count,
+       SUM(s.withdrawn_count) AS withdrawn_count, SUM(s.net_count) AS net_count,
+       SUM(s.monthly_premium) AS monthly_premium, SUM(s.converted_premium) AS converted_premium,
+       SUM(s.commission_amount) AS commission_amount, SUM(s.clawback_amount) AS clawback_amount
+FROM agent_performance_summary s
+JOIN calc_run r ON r.run_id = s.run_id AND r.status = 'done' AND r.run_type = 'performance'
+JOIN v_org_closure t ON t.org_id = s.org_id
+JOIN org_unit o ON o.org_id = t.ancestor_id
+GROUP BY r.period_ym, s.period_type, s.period_key, t.ancestor_id, o.name, o.level;

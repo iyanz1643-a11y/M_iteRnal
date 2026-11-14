@@ -12,6 +12,7 @@ import json
 from datetime import date
 
 from app import db
+from app.engine import classify
 
 KIND_KO = {"rate": "정률 시책", "weekly": "주차 시상", "linked": "연계 시상", "monthly": "월 구간 시상",
            "travel": "여행 시상", "activity": "가동 시상", "membership": "멤버십"}
@@ -249,18 +250,17 @@ def _values(con, p, agent_ids) -> dict:
     expr = f"MIN(c.{col}, ?)" if p["per_contract_cap"] and col != "policy_count" else f"c.{col}"
     q = ",".join("?" * len(agent_ids))
     for i, w in enumerate(p["windows"]):
-        sql = f"""SELECT c.agent_id, SUM({expr}) v FROM contract c LEFT JOIN product pr ON pr.product_id=c.product_id
-                  JOIN insurer i ON i.insurer_id=c.insurer_id
+        sql = f"""SELECT c.agent_id, SUM({expr}) v FROM contract c {classify.JOINS}
                   WHERE c.agent_id IN ({q}) AND c.status IN ({','.join('?' * len(COUNTED))}) AND c.{p['date_basis']} BETWEEN ? AND ?"""
         params = ([p["per_contract_cap"]] if "MIN(" in expr else []) + list(agent_ids) + list(COUNTED) + [w["date_from"], w["date_to"]]
         if p["insurer_id"]:
             sql += " AND c.insurer_id=?"
             params.append(p["insurer_id"])
         if p["sector"]:
-            sql += " AND i.sector=?"
+            sql += f" AND {classify.SECTOR}=?"
             params.append(p["sector"])
         if p["category_list"]:
-            sql += f" AND pr.product_category IN ({','.join('?' * len(p['category_list']))})"
+            sql += f" AND {classify.CATEGORY} IN ({','.join('?' * len(p['category_list']))})"
             params += p["category_list"]
         for r in con.execute(sql + " GROUP BY c.agent_id", params):
             out[r["agent_id"]][i] = float(r["v"] or 0)

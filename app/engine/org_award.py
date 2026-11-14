@@ -7,6 +7,7 @@ import calendar
 import json
 
 from app import db
+from app.engine import classify, orgs
 from app.engine.performance import ACTIVE_STATUSES as ACTIVE
 
 METRIC_KO = {"converted_premium": "인정보험료", "premium_monthly": "보험료", "policy_count": "건수"}
@@ -15,21 +16,11 @@ SHOW_TOP = 10          # 설계사에게는 상위 10명과 본인 순위만 보
 
 
 def _descendants(con, org_id) -> set:
-    out, frontier = {org_id}, {org_id}
-    while frontier:
-        q = ",".join("?" * len(frontier))
-        frontier = {r["org_id"] for r in con.execute(f"SELECT org_id FROM org_unit WHERE parent_id IN ({q})", tuple(frontier))} - out
-        out |= frontier
-    return out
+    return orgs.descendants(con, org_id)
 
 
 def _ancestors(con, org_id) -> set:
-    out = set()
-    while org_id is not None and org_id not in out:
-        out.add(org_id)
-        r = con.execute("SELECT parent_id FROM org_unit WHERE org_id=?", (org_id,)).fetchone()
-        org_id = r["parent_id"] if r else None
-    return out
+    return orgs.ancestors(con, org_id)
 
 
 def _clean(name, metric, sector, categories, top_n, min_value, rewards, effective_from):
@@ -132,15 +123,15 @@ def standing(con, d, ym) -> list:
     q = ",".join("?" * len(orgs))
     cond, extra = "", []
     if d["sector"]:
-        cond += " AND i.sector=?"
+        cond += f" AND {classify.SECTOR}=?"
         extra.append(d["sector"])
     if d["category_list"]:
-        cond += f" AND pr.product_category IN ({','.join('?' * len(d['category_list']))})"
+        cond += f" AND {classify.CATEGORY} IN ({','.join('?' * len(d['category_list']))})"
         extra += d["category_list"]
 
     def total(where, params):
-        sql = f"""SELECT c.agent_id, SUM(c.{d['metric']}) v FROM contract c JOIN insurer i ON i.insurer_id=c.insurer_id
-                  LEFT JOIN product pr ON pr.product_id=c.product_id WHERE {where}{cond} GROUP BY c.agent_id"""
+        sql = f"""SELECT c.agent_id, SUM(c.{d['metric']}) v FROM contract c {classify.JOINS}
+                  WHERE {where}{cond} GROUP BY c.agent_id"""
         return {r["agent_id"]: r["v"] or 0 for r in con.execute(sql, params + extra)}
     made = total(f"c.status IN ({','.join('?' * len(ACTIVE))}) AND c.contract_date BETWEEN ? AND ?", [*ACTIVE, first, last])
     undone = total("c.status='withdrawn' AND c.withdrawal_date BETWEEN ? AND ?", [first, last])

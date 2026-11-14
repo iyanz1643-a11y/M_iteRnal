@@ -2,7 +2,7 @@
 import json
 
 from app import db
-from app.engine import persist
+from app.engine import classify, persist
 from app.periods import month_bounds, months_between, period_end, period_key, period_start, ym_diff
 
 ACTIVE = ("inforce", "lapsed", "cancelled", "matured")  # 시상 측정 시점 기준 유효 계약 (철회 제외)
@@ -11,16 +11,15 @@ ACTIVE = ("inforce", "lapsed", "cancelled", "matured")  # 시상 측정 시점 �
 def _metric_contracts(con, rule, start_ym, end_ym):
     d_from, _ = month_bounds(start_ym)
     _, d_to = month_bounds(end_ym)
-    sql = f"""SELECT c.contract_id, c.agent_id, c.converted_premium, c.premium_monthly, c.policy_count, pr.product_category
-              FROM contract c LEFT JOIN product pr ON pr.product_id=c.product_id
-              JOIN insurer i ON i.insurer_id=c.insurer_id
+    sql = f"""SELECT c.contract_id, c.agent_id, c.converted_premium, c.premium_monthly, c.policy_count, {classify.CATEGORY} AS product_category
+              FROM contract c {classify.JOINS}
               WHERE c.status IN {ACTIVE} AND c.contract_date>=? AND c.contract_date<?"""
     params = [d_from, d_to]
     if rule["scope"] == "insurer":
         sql += " AND i.code=?"
         params.append(rule["scope_value"])
     elif rule["scope"] == "product_category":
-        sql += " AND pr.product_category=?"
+        sql += f" AND {classify.CATEGORY}=?"
         params.append(rule["scope_value"])
     excluded = [c["value"] for c in con.execute(
         "SELECT value FROM incentive_condition WHERE rule_id=? AND condition_type='exclude_product_category'", (rule["rule_id"],))]

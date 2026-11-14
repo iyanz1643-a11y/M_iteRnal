@@ -2,7 +2,8 @@
 import json
 
 from app import db
-from app.engine.performance import org_at
+from app.engine import classify
+from app.engine.performance import ACTIVE_STATUSES, org_at
 from app.periods import month_bounds, period_key, period_start
 
 
@@ -10,16 +11,17 @@ def _values(con, start_ym, end_ym, eligible_only):
     d_from, _ = month_bounds(start_ym)
     _, d_to = month_bounds(end_ym)
     elig = "AND pc.incentive_eligible=1" if eligible_only else ""
+    made = f"c.status IN {ACTIVE_STATUSES} AND c.contract_date>=:f AND c.contract_date<:t"   # 업적 집계와 같은 규칙
     sql = f"""
         SELECT a.agent_id,
-               COALESCE(SUM(CASE WHEN c.status IN ('inforce','lapsed','cancelled','matured','withdrawn') AND c.contract_date>=:f AND c.contract_date<:t THEN c.converted_premium END),0)
+               COALESCE(SUM(CASE WHEN {made} THEN c.converted_premium END),0)
              - COALESCE(SUM(CASE WHEN c.status='withdrawn' AND c.withdrawal_date>=:f AND c.withdrawal_date<:t THEN c.converted_premium END),0) AS rp,
-               COALESCE(SUM(CASE WHEN c.status IN ('inforce','lapsed','cancelled','matured','withdrawn') AND c.contract_date>=:f AND c.contract_date<:t THEN c.policy_count END),0)
+               COALESCE(SUM(CASE WHEN {made} THEN c.policy_count END),0)
              - COALESCE(SUM(CASE WHEN c.status='withdrawn' AND c.withdrawal_date>=:f AND c.withdrawal_date<:t THEN c.policy_count END),0) AS cnt
         FROM agent a
         LEFT JOIN contract c ON c.agent_id=a.agent_id
         LEFT JOIN product p ON p.product_id=c.product_id
-        LEFT JOIN product_category pc ON pc.code=p.product_category
+        LEFT JOIN product_category pc ON pc.code={classify.category('c', 'p')}
         WHERE a.job_type='fc' AND a.status='active' AND (c.contract_id IS NULL OR 1=1 {elig})
         GROUP BY a.agent_id"""
     return con.execute(sql, dict(f=d_from, t=d_to)).fetchall()
