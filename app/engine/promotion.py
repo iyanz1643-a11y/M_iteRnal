@@ -1,4 +1,4 @@
-"""프로모션: 게시, 구간 입력, 달성 현황 계산.
+"""프로모션: 게시, 구간 입력, 달성 현황 계산, 비교, 지난 프로모션.
 
 프로모션 하나 = 기간 창(하나 이상) + 구간표 + 결합 규칙 + 보상 + 조건.
   - rate      정률 시책. 대상 계약의 보험료에 지급률을 곱한 예상액
@@ -6,6 +6,8 @@
   - linked    연계 시상. 창마다 달성해야 하고 낮은 쪽 구간을 적용 (combine_rule = all)
   - monthly / membership / travel / activity  누적 실적을 구간표에 대입
 달성 현황은 저장하지 않고 계약 원장에서 그때그때 계산한다. 모두 예상이며 확정은 보험사 정산을 따른다.
+비교(compare)는 진행 중 프로모션을 실적 10만 원당 예상 보상, 구간, 조건으로 나란히 놓는다. 지난 프로모션(past)은 끝난
+프로모션의 사람별 최종 결과를 progress() 로 낸다. 확정은 S3 이라 지금은 마감 전 예상만 있다.
 """
 import calendar
 import json
@@ -330,3 +332,196 @@ def progress(con, p, agent_ids, ref: date) -> dict:
                 res["status"] = "achieved" if tier and not nxt else "in_progress"
         out[a] = res
     return out
+
+
+# ---------------------------------------------------------------- 비교
+# D-21 은 열려 있다. 프로모션 표에 원안과 배포안을 나누는 칸이 없어 지금 금액을 배포안으로 보고, 원안 금액은 비워 둔다(원문 확인).
+# 비교는 역할과 상관없이 같은 값을 낸다. 설계사에게 여는 일(D-19)과 원안을 보여 줄지는 화면이 정한다.
+COMPARE_UNIT = 100_000
+PLAN_KO = {"distributed": "배포안", "original": "원안"}
+PLAN_NOTE = "원안과 배포안을 나누는 칸이 없어 지금 금액을 배포안으로 봅니다. 원안 금액은 원문 확인입니다."
+ESTIMATE_NOTE = "금액과 구간은 모두 예상입니다. 확정은 보험사 정산을 따릅니다."
+RATE_BASIS_KO = {"initial_premium": "월초보험료", "converted_premium": "월납환산보험료", "monthly_premium": "월납보험료", "paid_premium": "입금보험료",
+                 "base_premium": "기본보험료", "premium": "보험료", "unspecified": "기준 표기 없음"}
+SECTOR_KO = {None: "전 업권", "": "전 업권", "life": "생명보험", "nonlife": "손해보험"}
+
+
+def _money(p) -> bool:
+    return p["metric"] != "policy_count"
+
+
+def _tier_amount(t):
+    """그 구간의 문턱에 딱 닿았을 때의 예상 보상(원). 여행과 물품은 금액이 없어 None 이다."""
+    if t["reward_kind"] == "fixed":
+        return t["reward_value"]
+    if t["reward_kind"] == "rate":
+        return (t["reward_value"] or 0) * t["min_value"]
+    return None
+
+
+def conditions(p, cat_names=None) -> list:
+    """비교 표에 나란히 놓을 조건 글. 원문을 바꾸지 않고 칸의 값을 말로 옮긴다. cat_names 는 {구분 코드: 이름}."""
+    out = []
+    if p["insurer_name"]:
+        out.append(f"보험사 {p['insurer_name']}")
+    out.append(f"업권 {SECTOR_KO.get(p['sector'], p['sector'])}")
+    if p["category_list"]:
+        out.append("구분 " + ", ".join((cat_names or {}).get(c, c) for c in p["category_list"]))
+    out.append(f"실적 {METRIC_KO[p['metric']]}, 기준일 {BASIS_KO[p['date_basis']]}")
+    if len(p["windows"]) > 1:
+        out.append(f"기간 창 {len(p['windows'])}개, {COMBINE_KO[p['combine_rule']]}" + (". 낮은 쪽 구간 적용, 끝난 창을 놓치면 무효" if p["combine_rule"] == "all" else ""))
+    if p["per_contract_cap"]:
+        out.append(f"건당 {int(p['per_contract_cap']):,}원까지 인정")
+    if p["pay_timing"]:
+        out.append(f"지급 {TIMING_KO.get(p['pay_timing'], p['pay_timing'])}")
+    if p["pay_timing"] and "inst13" in p["pay_timing"]:
+        out.append("13회차 유지 시 지급")
+    return out
+
+
+def compare_row(p, unit=COMPARE_UNIT, cat_names=None) -> dict:
+    """프로모션 하나를 같은 기준에 놓는다. 기준은 실적 unit 원(기본 10만 원)당 예상 보상이다.
+
+    - 정률 시책: 지급률의 합 × unit. 조건별 지급률이면 숫자 하나로 줄이지 않고 None 이다
+    - 구간 시상: 구간마다 문턱 실적에 딱 닿았을 때의 보상 ÷ 문턱 × unit. per_unit 은 그 가운데 가장 높은 값,
+      per_unit_entry 는 첫 구간의 값이다. 여행과 물품, 건수 기준(가동 시상)은 보험료로 견주지 않아 None 이다
+    금액은 plan 아래 distributed(배포안)와 original(원안)로 나눈다. 원안은 칸이 없어 None 이다 (D-21 가정).
+    """
+    row = {k: p[k] for k in ("promo_id", "period_ym", "name", "kind", "kind_ko", "insurer_name", "sector", "category_list", "metric", "metric_ko",
+                             "unit", "date_from", "date_to", "recipient_level", "pay_timing", "timing_ko", "per_contract_cap", "combine_rule", "caution")}
+    row.update(sector_ko=SECTOR_KO.get(p["sector"], p["sector"]), windows=[{"label": w["label"], "date_from": w["date_from"], "date_to": w["date_to"]} for w in p["windows"]],
+               conditions=conditions(p, cat_names), per_unit_basis=f"{METRIC_KO[p['metric']]} {unit:,}원당", compare_unit=unit, comparable=False, note=None,
+               estimate=True, estimate_note=ESTIMATE_NOTE, plan_assumed=True, plan_note=PLAN_NOTE)
+    plan = {"per_unit": None, "per_unit_entry": None, "parts": [], "tiers": []}
+    if p["kind"] == "rate":
+        plain = [r for r in p["rates"] if not r["option_label"]]
+        if p["rates"] and len(plain) == len(p["rates"]):
+            plan["parts"] = [{"rate": r["rate"], "basis": r["basis"], "basis_ko": RATE_BASIS_KO.get(r["basis"], r["basis"]),
+                              "timing_ko": TIMING_KO.get(r["pay_timing"], "지급 시점 표기 없음"), "per_unit": r["rate"] * unit} for r in plain]
+            plan["per_unit"] = plan["per_unit_entry"] = sum(r["rate"] for r in plain) * unit
+            row["comparable"] = True
+            bases = {RATE_BASIS_KO.get(r["basis"], r["basis"]) for r in plain}
+            row["per_unit_basis"] = f"{' · '.join(sorted(bases))} {unit:,}원당"
+        else:
+            row["note"] = "조건별 지급률이라 숫자 하나로 견주지 않습니다. 원문 확인"
+    else:
+        for t in p["tiers"]:
+            amt = _tier_amount(t)
+            per = amt / t["min_value"] * unit if (amt is not None and _money(p) and t["min_value"] > 0) else None
+            plan["tiers"].append({"tier_no": t["tier_no"], "min_value": t["min_value"], "min_text": fmt_value(t["min_value"], p),
+                                  "reward_kind": t["reward_kind"], "reward": reward_text(t), "amount": amt, "per_unit": per})
+        pers = [t["per_unit"] for t in plan["tiers"] if t["per_unit"] is not None]
+        if pers:
+            plan["per_unit"] = max(pers)
+            plan["per_unit_entry"] = plan["tiers"][0]["per_unit"]
+            row["comparable"] = True
+        elif not _money(p):
+            row["note"] = "건수 기준이라 보험료로 견주지 않습니다. 구간과 보상을 보세요"
+        else:
+            row["note"] = "여행이나 물품 보상이라 금액으로 견주지 않습니다. 구간과 보상을 보세요"
+    row["plan"] = {"distributed": plan, "original": None}
+    row["per_unit"], row["per_unit_entry"] = plan["per_unit"], plan["per_unit_entry"]
+    return row
+
+
+def compare(con, ym, *, ref: date | None = None, unit=COMPARE_UNIT, recipient_level="fc", include_ended=False, promo_ids=None) -> dict:
+    """같은 기간에 걸친 게시 중 프로모션을 같은 기준으로 견준다. 역할과 상관없이 같은 값을 낸다.
+
+    recipient_level 은 수령 계층이다. 기본은 설계사 몫(fc)이다. 총괄과 지사 몫(D-18)을 넣을지는 부르는 쪽이 정한다.
+    include_ended 가 거짓이면 기준일에 끝난 프로모션은 뺀다. promo_ids 를 주면 그것만 견준다.
+
+    돌려주는 것: {ref, unit, rows, groups, estimate_note, plan_note}
+    - rows: compare_row() 의 줄에 phase(active / upcoming / ended), days_left 를 붙인 것. 10만 원당 예상 보상이 큰 순이고
+      견줄 수 없는 줄은 뒤에 둔다
+    - groups: 실적 기준(metric)이 같은 줄끼리. 보험료와 인정보험료와 건수는 서로 견주지 않는다
+    """
+    ref = ref or ref_date(ym)
+    cat_names = {r["code"]: r["name"] for r in con.execute("SELECT code, name FROM product_category")}
+    rows = []
+    for p in listing(con, ym, "main"):                         # 게시된 것만. 수령 계층은 아래에서 고른다
+        if recipient_level and p["recipient_level"] != recipient_level:
+            continue
+        if promo_ids is not None and p["promo_id"] not in set(promo_ids):
+            continue
+        f, t = date.fromisoformat(p["date_from"]), date.fromisoformat(p["date_to"])
+        phase = "upcoming" if ref < f else ("ended" if ref > t else "active")
+        if phase == "ended" and not include_ended:
+            continue
+        rows.append({**compare_row(p, unit, cat_names), "phase": phase, "days_left": max((t - ref).days, 0) if phase != "ended" else 0})
+    rows.sort(key=lambda r: (r["per_unit"] is None, -(r["per_unit"] or 0), r["date_to"], r["promo_id"]))
+    groups = []
+    for metric in METRIC_KO:
+        g = [r for r in rows if r["metric"] == metric]
+        if g:
+            groups.append({"metric": metric, "metric_ko": METRIC_KO[metric], "rows": g})
+    return {"ref": ref.isoformat(), "unit": unit, "rows": rows, "groups": groups, "estimate_note": ESTIMATE_NOTE, "plan_note": PLAN_NOTE}
+
+
+# ---------------------------------------------------------------- 지난 프로모션
+# 확정 기능은 S3 이다. 지금은 모든 결과가 마감 전 예상(estimate)이고, 확정(confirmed)을 담을 칸만 둔다.
+SETTLE_KO = {"estimate": "마감 전 예상", "confirmed": "확정"}
+OUTCOME_KO = {"achieved": "달성", "missed": "미달성"}
+
+
+def _eligible(con, agent_ids) -> list:
+    """달성 대상. 재직자만이다. 그 달 중간에 퇴사한 사람은 프로모션 달성 대상에서 뺀다 (D-42). 달성 현황 화면과 같은 기준이다."""
+    ids = sorted(set(agent_ids or ()))
+    if not ids:
+        return []
+    q = ",".join("?" * len(ids))
+    return [r["agent_id"] for r in con.execute(f"SELECT agent_id FROM agent WHERE agent_id IN ({q}) AND status='active' ORDER BY agent_id", ids)]
+
+
+def ended(con, *, ym=None, ref: date | None = None, recipient_level="fc") -> list:
+    """기준일 앞에서 모든 창이 끝난 게시 프로모션. ym 을 주면 그 달에 걸친 것만(월별 보관), 없으면 전부다. 늦게 끝난 것부터."""
+    ref = ref or date.today()
+    if ym:
+        items = listing(con, ym, "main")
+    else:
+        items = [_load(con, r["promo_id"]) for r in con.execute("SELECT promo_id FROM promotion WHERE status='published' ORDER BY promo_id")]
+    items = [p for p in items if (not recipient_level or p["recipient_level"] == recipient_level) and date.fromisoformat(p["date_to"]) < ref]
+    return sorted(items, key=lambda p: (p["date_to"], p["promo_id"]), reverse=True)
+
+
+def final_results(con, p, agent_ids, ref: date | None = None) -> dict:
+    """끝난 프로모션 하나의 사람별 최종 달성 결과. 값은 달성 현황 계산(progress)을 그대로 쓴다.
+
+    돌려주는 것: {promo, settlement, settlement_ko, rows, summary}
+    - rows: [{agent_id, code, name, org, value, tier_no, reward, amount, outcome, outcome_ko, settlement, settlement_ko, r}]
+      값 큰 순. r 은 progress() 의 결과 그대로다. amount 는 예상 금액이고 관리자 화면에서는 가린다 (D-17)
+    - outcome: 구간 시상은 끝난 뒤 구간이 있으면 달성. 정률 시책은 대상 실적이 있으면 달성이다
+    - settlement: 지금은 늘 estimate(마감 전 예상). S3 의 확정 기능이 confirmed 를 채운다
+    - summary: {n, achieved, missed, amount}
+    """
+    ref = ref or date.today()
+    end = date.fromisoformat(p["date_to"])
+    if ref <= end:
+        raise ValueError("아직 끝나지 않은 프로모션입니다.")
+    ids = _eligible(con, agent_ids)
+    res = progress(con, p, ids, ref)
+    who = {}
+    if ids:
+        q = ",".join("?" * len(ids))
+        ym = end.strftime("%Y%m")
+        who = {r["agent_id"]: dict(r) for r in con.execute(
+            f"""SELECT a.agent_id, a.internal_code code, a.name, o.name org FROM agent a
+                LEFT JOIN agent_org_history h ON h.agent_id=a.agent_id AND h.effective_from<=? AND (h.effective_to IS NULL OR h.effective_to>=?)
+                LEFT JOIN org_unit o ON o.org_id=h.org_id WHERE a.agent_id IN ({q})""", (ym, ym, *ids))}
+    rows = []
+    for a in ids:
+        r = res[a]
+        ok = (r["value"] > 0) if p["kind"] == "rate" else (r["status"] == "achieved")
+        rows.append({**who.get(a, {"agent_id": a, "code": None, "name": None, "org": None}), "value": r["value"],
+                     "tier_no": r["tier"]["tier_no"] if r["tier"] else None, "reward": r["reward"], "amount": r["amount"],
+                     "outcome": "achieved" if ok else "missed", "outcome_ko": OUTCOME_KO["achieved" if ok else "missed"],
+                     "settlement": "estimate", "settlement_ko": SETTLE_KO["estimate"], "r": r})
+    rows.sort(key=lambda x: (-x["value"], x["code"] or ""))
+    summary = {"n": len(rows), "achieved": sum(1 for x in rows if x["outcome"] == "achieved"),
+               "missed": sum(1 for x in rows if x["outcome"] == "missed"), "amount": sum(x["amount"] or 0 for x in rows)}
+    return {"promo": p, "settlement": "estimate", "settlement_ko": SETTLE_KO["estimate"], "estimate_note": ESTIMATE_NOTE, "rows": rows, "summary": summary}
+
+
+def past(con, agent_ids, *, ym=None, ref: date | None = None, recipient_level="fc") -> list:
+    """지난 프로모션 목록과 사람별 최종 결과. agent_ids 는 범위 안 설계사 목록이다. [final_results(), ...] 늦게 끝난 것부터."""
+    ref = ref or date.today()
+    return [final_results(con, p, agent_ids, ref) for p in ended(con, ym=ym, ref=ref, recipient_level=recipient_level)]

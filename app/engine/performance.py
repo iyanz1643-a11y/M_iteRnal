@@ -9,7 +9,7 @@ import json
 from collections import defaultdict
 
 from app import db
-from app.engine import orgs
+from app.engine import classify, orgs
 from app.periods import month_bounds, period_key, period_start
 
 ACTIVE_STATUSES = ("inforce", "lapsed", "cancelled", "matured", "withdrawn")  # 한 번 성립한 계약
@@ -24,39 +24,90 @@ def org_at(con, agent_id, ym):
     return row["org_id"] if row else None
 
 
-def compute_range(con, start_ym, end_ym, unassigned_only=False):
-    """start_ym~end_ym 사이 설계사별 집계 (딕셔너리). unassigned_only 면 설계사가 빈 계약만 None 키 하나로 모은다."""
-    who = "agent_id IS NULL" if unassigned_only else "agent_id IS NOT NULL"
+ROW_KEYS = ("applied_count", "applied_premium", "applied_converted",          # 청약: 예정 업적
+            "new_count", "withdrawn_count", "net_count", "monthly_premium", "converted_premium")   # 성립과 철회: 확정 업적
+BY_KEYS = ("category", "sector", "month")
+
+
+def blank() -> dict:
+    return dict.fromkeys(ROW_KEYS, 0)
+
+
+def tally(con, start_ym, end_ym, *, agent_ids=None, sector=None, categories=None, by=None, unassigned_only=False) -> dict:
+    """업적 집계 규칙의 한 곳. start_ym~end_ym 의 설계사별 집계.
+
+    청약은 아직 applied 인 건을 청약일 달에 예정 업적으로 센다. 성립은 성립일 달에 더하고, 철회는 철회일 달에 뺀다.
+    성립 뒤 철회된 건도 성립한 달에는 들어간다. 저장하는 업적 run(compute_range)과 웹 화면의 함수가 모두 이 함수를 쓴다.
+
+    agent_ids 를 주면 그 사람들만 읽는다. sector(life, nonlife) 와 categories(구분 코드 목록)는 계약의 업권과 구분으로 좁힌다.
+    by 가 None 이면 {agent_id: 줄}, 'category' / 'sector' / 'month' 면 {agent_id: {구분 코드 / 업권 / YYYYMM: 줄}} 이다.
+    month 는 청약은 청약일, 성립은 성립일, 철회는 철회일의 달이다. 실적이 없는 사람은 키가 없다.
+    """
+    if by not in (None,) + BY_KEYS:
+        raise ValueError(by)
+    if agent_ids is not None:
+        agent_ids = sorted(set(agent_ids))
+        if not agent_ids:
+            return {}
     d_from, _ = month_bounds(start_ym)
     _, d_to = month_bounds(end_ym)
-    agg = defaultdict(lambda: dict(applied_count=0, new_count=0, withdrawn_count=0, monthly_premium=0, converted_premium=0,
-                                   commission_amount=0, clawback_amount=0))
-    # 청약 (예정 업적): 아직 applied 상태인 건
-    for r in con.execute(
-        f"SELECT agent_id, SUM(policy_count) n FROM contract WHERE {who} AND status='applied' AND application_date>=? AND application_date<? GROUP BY agent_id",
-        (d_from, d_to),
-    ):
-        agg[r["agent_id"]]["applied_count"] += r["n"]
-    # 성립 건 (이후 철회된 건도 성립 월에는 포함)
-    for r in con.execute(
-        f"""SELECT agent_id, SUM(policy_count) n, SUM(premium_monthly) mp, SUM(converted_premium) cp FROM contract
-            WHERE {who} AND status IN {ACTIVE_STATUSES} AND contract_date>=? AND contract_date<? GROUP BY agent_id""",
-        (d_from, d_to),
-    ):
-        a = agg[r["agent_id"]]
-        a["new_count"] += r["n"]
+    cond = ["c.agent_id IS NULL" if unassigned_only else "c.agent_id IS NOT NULL"]
+    params = []
+    if agent_ids is not None:
+        cond.append(f"c.agent_id IN ({','.join('?' * len(agent_ids))})")
+        params += agent_ids
+    if sector:
+        cond.append(f"{classify.SECTOR}=?")
+        params.append(sector)
+    if categories:
+        categories = sorted(set(categories))
+        cond.append(f"{classify.CATEGORY} IN ({','.join('?' * len(categories))})")
+        params += categories
+    where = " AND ".join(cond)
+    out = {}
+
+    def row(agent_id, key):
+        a = out.setdefault(agent_id, {} if by else blank())
+        return a.setdefault(key, blank()) if by else a
+
+    def key_expr(date_col):
+        if by == "month":
+            return f"substr(c.{date_col},1,4)||substr(c.{date_col},6,2)"
+        return {"category": classify.CATEGORY, "sector": classify.SECTOR, None: "NULL"}[by]
+
+    def each(status_sql, date_col, extra=()):
+        sql = f"""SELECT c.agent_id, {key_expr(date_col)} k, SUM(c.policy_count) n, SUM(c.premium_monthly) mp, SUM(c.converted_premium) cp
+                  FROM contract c {classify.JOINS}
+                  WHERE {where} AND {status_sql} AND c.{date_col}>=? AND c.{date_col}<? GROUP BY c.agent_id, k"""
+        return con.execute(sql, params + list(extra) + [d_from, d_to]).fetchall()
+
+    for r in each("c.status='applied'", "application_date"):                          # 청약 (예정 업적)
+        a = row(r["agent_id"], r["k"])
+        a["applied_count"] += r["n"] or 0
+        a["applied_premium"] += r["mp"] or 0
+        a["applied_converted"] += r["cp"] or 0
+    for r in each(f"c.status IN ({','.join('?' * len(ACTIVE_STATUSES))})", "contract_date", ACTIVE_STATUSES):   # 성립
+        a = row(r["agent_id"], r["k"])
+        a["new_count"] += r["n"] or 0
         a["monthly_premium"] += r["mp"] or 0
         a["converted_premium"] += r["cp"] or 0
-    # 철회 건: 철회 월에 차감
-    for r in con.execute(
-        f"""SELECT agent_id, SUM(policy_count) n, SUM(premium_monthly) mp, SUM(converted_premium) cp FROM contract
-           WHERE {who} AND status='withdrawn' AND withdrawal_date>=? AND withdrawal_date<? GROUP BY agent_id""",
-        (d_from, d_to),
-    ):
-        a = agg[r["agent_id"]]
-        a["withdrawn_count"] += r["n"]
+    for r in each("c.status='withdrawn'", "withdrawal_date"):                         # 철회: 철회 월에 차감
+        a = row(r["agent_id"], r["k"])
+        a["withdrawn_count"] += r["n"] or 0
         a["monthly_premium"] -= r["mp"] or 0
         a["converted_premium"] -= r["cp"] or 0
+    for a in out.values():
+        for x in (a.values() if by else [a]):
+            x["net_count"] = x["new_count"] - x["withdrawn_count"]
+    return out
+
+
+def compute_range(con, start_ym, end_ym, unassigned_only=False):
+    """start_ym~end_ym 사이 설계사별 집계 (딕셔너리). unassigned_only 면 설계사가 빈 계약만 None 키 하나로 모은다.
+    값은 tally() 와 같고, 완료된 수수료 run 의 수수료와 환수를 곁들인다."""
+    agg = defaultdict(lambda: dict(blank(), commission_amount=0, clawback_amount=0))
+    for agent_id, a in tally(con, start_ym, end_ym, unassigned_only=unassigned_only).items():
+        agg[agent_id].update(a)
     # 수수료 (완료 run 기준)
     for r in [] if unassigned_only else con.execute(
         """SELECT c.agent_id,
@@ -76,7 +127,7 @@ def compute_range(con, start_ym, end_ym, unassigned_only=False):
 def unassigned(con, start_ym, end_ym) -> dict:
     """설계사가 빈 계약의 집계. 설계사별 집계와 같은 규칙이다. 원장 대조에 쓴다."""
     agg = compute_range(con, start_ym, end_ym, unassigned_only=True)
-    return agg.get(None) or dict(applied_count=0, new_count=0, withdrawn_count=0, net_count=0, monthly_premium=0, converted_premium=0)
+    return agg.get(None) or blank()
 
 
 SUM_COLS = ("applied_count", "new_count", "withdrawn_count", "net_count", "monthly_premium", "converted_premium", "commission_amount", "clawback_amount")

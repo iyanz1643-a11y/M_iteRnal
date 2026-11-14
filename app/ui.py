@@ -8,8 +8,9 @@ import streamlit as st
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from app import db  # noqa: E402
-from app.engine import career, certification, commission, incentive, payments, performance, persist, ranking, reconcile  # noqa: E402
+from app.engine import career, certification, commission, incentive, payments, performance, persist, ranking, reconcile, results  # noqa: E402
 from app.loader import excel_loader, incentive_plan, pdf_incentive  # noqa: E402
+from app.org import levels as org_levels  # noqa: E402
 from app.periods import period_key, ym_add  # noqa: E402
 
 st.set_page_config(page_title="GA 수수료·시상·업적관리", layout="wide")
@@ -78,9 +79,12 @@ if page == "대시보드":
     st.subheader("단계별 진행")
     show(q("SELECT run_type 단계, MAX(finished_at) 완료시각, note 비고 FROM calc_run WHERE period_ym=? AND status='done' GROUP BY run_type", (ym,)))
     st.subheader("지점별 월 실적")
-    show(q("""SELECT h.name 본부, v.org_name 지점, v.applied_count 청약, v.new_count 성립, v.withdrawn_count 철회, v.net_count 순건수, v.converted_premium 인정보험료, v.commission_amount 수수료
-              FROM v_org_performance v JOIN org_unit o ON o.org_id=v.org_id LEFT JOIN org_unit h ON h.org_id=o.parent_id
-              WHERE v.period_type='month' AND v.period_key=? ORDER BY 1,2""", (ym,)))
+    # 지점과 그 아래(센터, 팀) 전부의 합이다. 본부는 지점의 위 조직 가운데 본부 계층을 찾는다. 바로 위 조직이 아니다
+    show(q("""SELECT COALESCE((SELECT h.name FROM v_org_closure t JOIN org_unit h ON h.org_id=t.ancestor_id
+                               WHERE t.org_id=v.org_id AND h.level='hq' LIMIT 1), '-') 본부,
+                     v.org_name 지점, v.applied_count 청약, v.new_count 성립, v.withdrawn_count 철회, v.net_count 순건수, v.converted_premium 인정보험료, v.commission_amount 수수료
+              FROM v_org_performance_rollup v
+              WHERE v.as_of_ym=? AND v.period_type='month' AND v.period_key=? AND v.org_level='branch' ORDER BY 1,2""", (ym, ym)))
     st.subheader("대사 차이 유형별")
     show(q("SELECT i.code 원수사, d.diff_type 유형, d.status 상태, COUNT(*) 건수, SUM(d.diff_amount) 차이합 FROM reconciliation_diff d JOIN insurer i ON i.insurer_id=d.insurer_id JOIN calc_run r ON r.run_id=d.run_id AND r.status='done' WHERE d.period_ym=? GROUP BY 1,2,3", (ym,)))
 
@@ -242,30 +246,31 @@ elif page == "데이터 수집":
 # ================================================================ 조직
 elif page == "조직":
     st.title("조직 구성")
+    # 여섯 단계 조직의 실적은 계산 엔진의 조직 비교(app/engine/results.py)에서 읽는다. 조직과 그 아래 전부의 합이고
+    # v_org_performance_rollup, 웹 화면과 같은 값이다. 본부와 지점 이름은 위 조직을 계층으로 찾는다
+    all_orgs = [r["org_id"] for r in con.execute("SELECT org_id FROM org_unit")]
+    lv_ko, head_ko = org_levels.level_ko(), org_levels.head_ko()
     rows = []
-    for hq in con.execute("SELECT * FROM org_unit WHERE level='hq' ORDER BY org_id").fetchall():
-        units = [hq] + con.execute("SELECT * FROM org_unit WHERE parent_id=? ORDER BY org_id", (hq["org_id"],)).fetchall()
-        for u in units:
+    for lv in org_levels.codes():
+        for r in results.org_compare(con, ym, org_ids=all_orgs, level=lv)["rows"]:
             mgr = con.execute("""SELECT a.internal_code, a.name FROM org_manager m JOIN agent a ON a.agent_id=m.agent_id
-                                 WHERE m.org_id=? AND m.effective_from<=? AND (m.effective_to IS NULL OR m.effective_to>=?)""", (u["org_id"], ym, ym)).fetchone()
-            members = certification.org_members(con, u["org_id"], ym)
-            marks = ",".join("?" * len(members)) or "NULL"
-            perf = con.execute(f"""SELECT COALESCE(SUM(s.net_count),0) n, COALESCE(SUM(s.converted_premium),0) rp, SUM(CASE WHEN s.new_count>0 THEN 1 ELSE 0 END) act
-                                   FROM agent_performance_summary s JOIN calc_run r ON r.run_id=s.run_id AND r.status='done' AND r.period_ym=?
-                                   WHERE s.period_type='month' AND s.period_key=? AND s.agent_id IN ({marks})""", [ym, ym] + members).fetchone()
-            rows.append({"본부": hq["name"], "조직": "(본부 전체)" if u["level"] == "hq" else u["name"], "관리자 직책": "본부장" if u["level"] == "hq" else "지점장",
-                         "관리자": f"{mgr['name']} ({mgr['internal_code']})" if mgr else "-", "설계사 수": len(members), "월 순건수": perf["n"], "월 인정보험료": perf["rp"],
-                         "가동률": round((perf["act"] or 0) / len(members), 2) if members else 0,
-                         "13회차 유지율": persist.rate(con, members, "p13", ym)[0], "25회차 유지율": persist.rate(con, members, "p25", ym)[0], "_org": u["org_id"]})
-    tree = pd.DataFrame(rows)
-    show(tree.drop(columns="_org"), column_config={"가동률": st.column_config.ProgressColumn(min_value=0, max_value=1),
+                                 WHERE m.org_id=? AND m.effective_from<=? AND (m.effective_to IS NULL OR m.effective_to>=?)""", (r["org_id"], ym, ym)).fetchone()
+            members = certification.org_members(con, r["org_id"], ym)
+            rows.append({"본부": r["path"].get("hq", "-"), "지점": r["path"].get("branch", "-"), "조직": r["name"], "계층": lv_ko.get(lv, lv),
+                         "관리자 직책": head_ko.get(org_levels.head_role(lv)) or "-", "관리자": f"{mgr['name']} ({mgr['internal_code']})" if mgr else "-",
+                         "인원": r["headcount"], "월 순건수": r["net_count"], "월 인정보험료": r["converted_premium"], "가동률": round(r["active_rate"] or 0, 2),
+                         "13회차 유지율": persist.rate(con, members, "p13", ym)[0], "25회차 유지율": persist.rate(con, members, "p25", ym)[0],
+                         "_org": r["org_id"], "_key": r["path_key"] or ""})
+    tree = pd.DataFrame(rows).sort_values("_key", kind="stable") if rows else pd.DataFrame(columns=["_org", "_key", "본부", "조직"])
+    show(tree.drop(columns=["_org", "_key"]), column_config={"가동률": st.column_config.ProgressColumn(min_value=0, max_value=1),
                                                     "13회차 유지율": st.column_config.NumberColumn(format="%.3f"), "25회차 유지율": st.column_config.NumberColumn(format="%.3f")})
-    st.caption("가동률 = 그 달 성립 건이 1건 이상인 설계사 / 소속 설계사. 본부 행은 산하 지점 전체 합계다.")
+    st.caption("인원은 그 달 소속 이력이 있는 사람이고, 그 달 중간에 퇴사한 사람의 퇴사 전 실적도 든다. 가동률 = 그 달 순건수가 있는 사람 / 인원. "
+               "조직마다 그 아래 조직 전부의 합계다. 유지율은 재직 설계사 기준이다.")
     st.subheader("소속 설계사")
-    sel = st.selectbox("조직", tree["_org"].tolist(), format_func=lambda x: " · ".join(tree.set_index("_org").loc[x, ["본부", "조직"]]))
+    sel = st.selectbox("조직", tree["_org"].tolist(), format_func=lambda x: " · ".join(str(v) for v in tree.set_index("_org").loc[x, ["본부", "조직"]]))
     members = certification.org_members(con, int(sel), ym)
     marks = ",".join("?" * len(members)) or "NULL"
-    show(q(f"""SELECT a.internal_code 사번, a.name 성명, o.name 지점, l.name 직급, a.hire_date 위촉일, s.new_count 성립, s.withdrawn_count 철회, s.converted_premium 인정보험료, s.commission_amount 수수료
+    show(q(f"""SELECT a.internal_code 사번, a.name 성명, o.name 소속, l.name 직급, a.hire_date 위촉일, s.new_count 성립, s.withdrawn_count 철회, s.converted_premium 인정보험료, s.commission_amount 수수료
                FROM agent a LEFT JOIN agent_org_history h ON h.agent_id=a.agent_id AND h.effective_from<=? AND (h.effective_to IS NULL OR h.effective_to>=?)
                LEFT JOIN org_unit o ON o.org_id=h.org_id
                LEFT JOIN agent_career_history ch ON ch.agent_id=a.agent_id AND ch.effective_to IS NULL LEFT JOIN career_level l ON l.level_id=ch.level_id
