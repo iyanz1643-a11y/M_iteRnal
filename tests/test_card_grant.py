@@ -497,3 +497,188 @@ def test_sync_creates_requests_and_turns_off(tmp_path):
     assert not card_grant.is_granted(c, target)
     assert c.execute("SELECT revoked_by FROM card_approver WHERE login_id=?", (target,)).fetchone()[0] == card_grant.SYSTEM_LEFT
     c.close()
+
+
+# ------------------------------------------------------------------ 옮기거나 더 맡으면 새로 요청. 11월 14일 대표님 결정 "옮겨도 권한은 새로 요청받게 해"
+OLD_SEAT, OLD_GRANT = "2020-01-01 00:00:00", "2024-06-01 00:00:00"
+
+
+def _teams(con, n):
+    """샘플 팀과 같은 센터 아래의 시험용 팀까지 n 개."""
+    from app.org import sync
+    first = con.execute("SELECT org_id, path_key FROM org_unit WHERE level='team' ORDER BY org_id LIMIT 1").fetchone()
+    steps = [tuple(s.split(":", 1)) for s in first["path_key"].split(" > ")]
+    out = [first["org_id"]] + [sync.ensure_path(con, steps[:-1] + [("team", f"시험{i}팀")]) for i in range(2, n + 1)]
+    con.commit()
+    return out
+
+
+def _age(con, agent_ids, login_ids):
+    """지금 자리와 켠 줄을 예전 일로 돌린다. 자리는 2024년 1월부터, 줄과 요청은 그 뒤인 2024년 6월로 둔다.
+    같은 초에 켜고 옮기는 일을 피하고, 옮기기 전에는 효력이 있도록 하려는 것이다."""
+    for aid in agent_ids:
+        con.execute("UPDATE org_manager SET effective_from='202401', created_at=? WHERE agent_id=? AND effective_to IS NULL", (OLD_SEAT, aid))
+    for lid in login_ids:
+        _backdate_grants(con, lid, OLD_GRANT)
+    con.commit()
+
+
+def _granted_head(con, agent_id, login, org_id):
+    """org_id 의 팀장으로 지정하고 요청을 승인한 뒤 예전 일로 돌린다. 지정 번호를 돌려준다."""
+    mid = heads.assign_head(con, org_id, agent_id, auth.current_ym(con), by="admin")
+    con.commit()
+    card_grant.approve_requests(con, [_requests(con, login, "pending")[0]["id"]], by="admin")
+    _age(con, [agent_id], [login])
+    assert card_grant.is_granted(con, login)
+    return mid
+
+
+def _advance(con, ym):
+    """자료 기준 달을 ym 으로 넘긴다."""
+    con.execute("INSERT INTO calc_run(run_type, period_ym, started_at, status) VALUES('commission', ?, ?, 'done')", (ym, db.now()))
+    con.commit()
+
+
+def _off_and_reappointed(con, login):
+    """권한이 꺼지고, 켜진 줄은 system:left 로 꺼지고, 다시 맡음 요청이 하나 생겼는가."""
+    assert not card_grant.is_granted(con, login)
+    assert not [g for g in card_grant.granted(con) if g["login_id"] == login]
+    assert [r["revoked_by"] for r in con.execute("SELECT revoked_by FROM card_approver WHERE login_id=? ORDER BY id", (login,))] \
+        == [card_grant.SYSTEM_LEFT]
+    pend, = _requests(con, login, "pending")
+    assert pend["reason"] == "reappointed" and pend["requested_by"] == card_grant.SYSTEM_AUTO
+    return pend
+
+
+def _still_on(con, login):
+    assert card_grant.is_granted(con, login)
+    assert _requests(con, login, "pending") == []
+    assert con.execute("SELECT COUNT(*) FROM card_approver WHERE login_id=? AND revoked_at IS NULL", (login,)).fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("when", ["same_month", "next_month"])
+def test_move_by_screen_needs_new_request(con, when):
+    from app.periods import ym_add
+    (a, a_id), (b, b_id) = _plain(con, 2)
+    x, y, z = _teams(con, 3)
+    ym = auth.current_ym(con)
+    mid_x = _granted_head(con, a_id, a, x)
+    _granted_head(con, b_id, b, z)                                     # 옮기지 않는 사람
+
+    start = ym if when == "same_month" else ym_add(ym, 1)
+    heads.end_head(con, mid_x, start)                                  # 같은 날 X 에서 해제하고 Y 의 팀장으로 지정한다
+    heads.assign_head(con, y, a_id, start, by="admin")
+    con.commit()
+    if when == "next_month":
+        _still_on(con, a)                                              # 옮기기 전 달에는 X 의 팀장이라 그대로 켜져 있다
+        assert [h["org_id"] for h in card_grant._heads_now(con, a_id)] == [x]
+        _advance(con, start)
+        assert not card_grant.is_granted(con, a)                       # 달이 넘어가면 맞추기 전에도 효력이 없다
+        card_grant.expire_stale(con)
+    assert [h["org_id"] for h in card_grant._heads_now(con, a_id)] == [y]
+    pend = _off_and_reappointed(con, a)
+    _still_on(con, b)
+
+    # 새 요청을 승인해야 다시 켜진다. 다음 달 경우는 자료 기준 달이 시계보다 앞서 있어 같은 달에서만 본다
+    if when == "same_month":
+        card_grant.approve_requests(con, [pend["id"]], by="admin")
+        assert card_grant.is_granted(con, a)
+        _still_on(con, b)
+
+
+@pytest.mark.parametrize("when", ["same_month", "next_month"])
+def test_move_by_staff_sync_needs_new_request(tmp_path, when):
+    from app.loader import eternal_employee as ee
+    from app.loader import fake_eternal as fe
+    from app.org import sync
+    from app.periods import ym_add
+    c = db.init_db(tmp_path / "s.db")
+    emp_path, _ = fe.make_employee_file(tmp_path / "emp.xlsx", fe.fake_roster())
+    rows = ee.parse_employee_file(emp_path)["rows"]
+    ym = auth.current_ym(c)
+    sync.sync_staff(c, rows, ym)
+    auth.seed_accounts(c, "grant-pass-1234")                           # 설계사가 생긴 뒤에 계정을 만든다
+    sync.sync_staff(c, rows, ym)
+    pend = c.execute("SELECT id FROM card_approver_request WHERE status='pending'").fetchall()
+    card_grant.approve_requests(c, [r["id"] for r in pend], by="admin")
+
+    # 센터 없이 지점에 바로 있는 지점장 a 를 다른 지점으로 옮긴다. 나머지 지점장은 그대로 둔다
+    bosses = [r for r in rows if r["position"] != "FC"]
+    mover = next(r for r in bosses if not r["org"]["직할지점"])
+    stay = [r["employee_no"] for r in bosses if r is not mover]
+    assert stay
+    dest = next(r["org"] for r in rows if r["org"]["지점"] != mover["org"]["지점"] and not r["org"]["직할지점"])
+    a = mover["employee_no"]
+    a_id = c.execute("SELECT agent_id FROM user_account WHERE login_id=?", (a,)).fetchone()[0]
+    stay_ids = [c.execute("SELECT agent_id FROM user_account WHERE login_id=?", (s,)).fetchone()[0] for s in stay]
+    _age(c, [a_id, *stay_ids], [a, *stay])
+    for lid in (a, *stay):
+        _still_on(c, lid)
+    old_org = card_grant._heads_now(c, a_id)[0]["org_id"]
+
+    start = ym if when == "same_month" else ym_add(ym, 1)
+    later = [dict(r, org=dict(dest)) if r is mover else r for r in rows]
+    out = sync.sync_staff(c, later, start)
+    assert out["stats"]["heads_end"] == 1 and out["stats"]["heads_new"] == 1
+    if when == "next_month":
+        assert out["card"] == {"revoked": 0, "cancelled": 0, "requested": 0}
+        _still_on(c, a)
+        _advance(c, start)
+        assert not card_grant.is_granted(c, a)
+        card_grant.expire_stale(c)
+    else:
+        assert out["card"]["revoked"] == 1 and out["card"]["requested"] == 1
+    seat, = card_grant._heads_now(c, a_id)
+    assert seat["org_id"] != old_org and seat["role"] == "branch_head"
+    _off_and_reappointed(c, a)
+    for lid in stay:
+        _still_on(c, lid)
+    c.close()
+
+
+@pytest.mark.parametrize("extra", ["head", "deputy"])
+def test_taking_one_more_seat_needs_new_request(con, extra):
+    (a, a_id), (b, b_id) = _plain(con, 2)
+    x, y, z = _teams(con, 3)
+    _granted_head(con, a_id, a, x)
+    _granted_head(con, b_id, b, z)
+
+    # X 의 팀장을 그대로 맡은 채 Y 를 하나 더 맡는다. 범위가 넓어지므로 새 요청을 거친다
+    today = date.today()
+    if extra == "head":
+        heads.assign_head(con, y, a_id, auth.current_ym(con), by="admin")
+    else:
+        heads.assign_deputy(con, y, a_id, today.isoformat(), (today + timedelta(days=5)).isoformat(), "휴가", by="admin")
+    con.commit()
+    assert sorted(h["org_id"] for h in card_grant._heads_now(con, a_id)) == sorted([x, y])
+    pend = _off_and_reappointed(con, a)
+    _still_on(con, b)
+    card_grant.expire_stale(con)
+    assert [r["id"] for r in _requests(con, a, "pending")] == [pend["id"]]   # 다시 맞춰도 요청은 하나다
+
+    card_grant.approve_requests(con, [pend["id"]], by="admin")
+    assert card_grant.is_granted(con, a)
+
+
+def test_staying_in_same_seat_keeps_grant(con):
+    from app.periods import ym_add
+    (a, a_id), = _plain(con)
+    x, = _teams(con, 1)
+    _granted_head(con, a_id, a, x)
+    h1, _ = _heads(con)                                                 # 샘플 조직장도 직접 켠 뒤 예전 일로 돌린다
+    h1_id = con.execute("SELECT agent_id FROM user_account WHERE login_id=?", (h1,)).fetchone()[0]
+    card_grant.grant(con, [h1], by="admin")
+    _age(con, [h1_id], [h1])
+
+    for lid in (a, h1):
+        _still_on(con, lid)
+    card_grant.expire_stale(con)                                       # 다른 샘플 조직장의 요청만 생긴다
+    for lid in (a, h1):
+        _still_on(con, lid)
+    # 자료 기준 달이 넘어가도, 로그인해도, 화면을 열어도 그대로다
+    _advance(con, ym_add(auth.current_ym(con), 1))
+    auth.login(con, "admin", "grant-pass-1234")
+    assert auth.context(con, _uid(con, a))["card_approver"] is True
+    for lid in (a, h1):
+        _still_on(con, lid)
+    assert not [r for r in _audit(con, card_grant.ACTION_REVOKE) if r["target"] in (f"user:{a}", f"user:{h1}")]
