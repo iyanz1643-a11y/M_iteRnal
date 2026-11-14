@@ -112,13 +112,14 @@ def _rollup(con, org_id):
 
 
 def _team_rows(html):
-    """팀원 현황 표에서 {사번: (순건수, 인정보험료)}."""
+    """팀원 현황 표에서 {사번: (순건수, 인정보험료)}. 칸은 class 가 아니라 data-col 로 찾는다. 휴대폰과 태블릿에서 숨기는 class 가 바뀌어도 된다."""
     out = {}
     for tr in html.split("<tr>")[2:]:
-        m = re.search(r'<td class="hide-sm">([^<]+)</td>.*?<td class="num">([^<]*)</td>\s*<td class="num"><span class="minibar[^>]*><i[^>]*></i></span>([^<]*)</td>',
-                      tr, re.S)
-        if m:
-            out[m.group(1)] = (_num(m.group(2)), _num(m.group(3)))
+        code = re.search(r'<td[^>]*data-col="code"[^>]*>([^<]+)</td>', tr)
+        net = re.search(r'<td[^>]*data-col="net"[^>]*>([^<]*)</td>', tr)
+        prem = re.search(r'<td[^>]*data-col="premium"[^>]*>(?:<span class="minibar[^>]*><i[^>]*></i></span>)?([^<]*)</td>', tr)
+        if code and net and prem:
+            out[code.group(1)] = (_num(net.group(1)), _num(prem.group(1)))
     return out
 
 
@@ -364,7 +365,7 @@ def test_mid_month_leaver_counts_the_same_on_screen_and_rollup(tmp_path, monkeyp
     assert (_num(m.group(1)), _num(m.group(2))) == (ga["converted_premium"], ga["net_count"])
 
     # 퇴사자 줄에는 퇴사 표시와 퇴사일이 붙는다. 다른 사람 줄에는 없다
-    tr = next(t for t in page.split("<tr>") if f'<td class="hide-sm">{codes[leaver]}</td>' in t)
+    tr = next(t for t in page.split("<tr>") if re.search(rf'<td[^>]*data-col="code"[^>]*>{codes[leaver]}</td>', t))
     assert '<span class="chip bad">퇴사</span>' in tr and "2월 15일 퇴사" in tr
     assert page.count('<span class="chip bad">퇴사</span>') == 1
 

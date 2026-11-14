@@ -7,10 +7,11 @@
   <div class="card"><div class="k">{{ lv.name }}</div><div class="mid">{{ counts[lv.code] }}<span class="unit">개</span></div></div>{% endfor %}
 </div>
 <div class="card tablecard" style="margin-top:16px"><table>
-<tr><th>조직</th><th class="hide-sm">계층</th><th>조직장</th><th class="num">직속 인원</th><th class="num">아래 인원</th></tr>
-{% for o in orgs %}<tr><td class="strong"><span class="indent" style="width:{{ o.depth * 24 }}px"></span>{{ o.name }}</td>
+<tr><th>조직</th><th class="hide-sm">계층</th><th class="hide-sm">조직장</th><th class="num">직속 인원</th><th class="num">아래 인원</th></tr>
+{% for o in orgs %}{% set hs %}{% for h in o.heads %}{{ h.name }} <span class="chip {{ 'warn' if h.role == 'deputy' else '' }}">{{ HEAD_KO.get(h.role, h.role) }}{% if h.date_to %} {{ h.date_to|md }}까지{% endif %}</span>{% if not loop.last %}<br>{% endif %}{% else %}{% if o.level != levels[0].code %}<span class="cap" style="margin:0">미지정</span>{% endif %}{% endfor %}{% endset %}
+<tr><td class="strong"><span class="indent" style="--d:{{ o.depth }}"></span><span class="tree-name">{{ o.name }}<div class="sm-sub"><span>{{ hs }}</span></div></span></td>
 <td class="hide-sm"><span class="chip">{{ LEVEL_KO.get(o.level, o.level) }}</span></td>
-<td style="white-space:normal">{% for h in o.heads %}{{ h.name }} <span class="chip {{ 'warn' if h.role == 'deputy' else '' }}">{{ HEAD_KO.get(h.role, h.role) }}{% if h.date_to %} {{ h.date_to|md }}까지{% endif %}</span>{% if not loop.last %}<br>{% endif %}{% else %}{% if o.level != levels[0].code %}<span class="cap" style="margin:0">미지정</span>{% endif %}{% endfor %}</td>
+<td class="hide-sm" style="white-space:normal">{{ hs }}</td>
 <td class="num">{{ o.direct }}</td><td class="num">{{ o.below }}</td></tr>{% endfor %}
 </table></div>
 <p class="cap">인원은 {{ ctx.ym[:4] }}년 {{ ctx.ym[4:]|int }}월 소속의 재직 설계사입니다. 직속 인원은 그 조직에 바로 속한 사람, 아래 인원은 그 아래 조직에 속한 사람의 합입니다. 대리는 오늘 날짜로 보여 줍니다.</p>

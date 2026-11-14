@@ -80,6 +80,12 @@ h2.sec{font-size:clamp(24px,3.4vw,32px);line-height:1.15;font-weight:700;letter-
 .promo-rate.none{font-size:20px;color:var(--faint);font-weight:600;margin:22px 0 4px}
 .promo-name{font-size:17px;font-weight:600;margin-top:auto;padding-top:14px}
 .promo-meta{font-size:14px;color:var(--faint);margin-top:4px}
+/* 게시 관리의 카드: 단추를 카드 안 맨 아래에 두고, 같은 줄의 카드는 높이를 맞춘다 */
+.promo.has-acts .promo-name{margin-top:0}
+.promo-acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:auto;padding-top:18px}
+.promo-acts form{display:contents}
+.promo-acts .ghost{min-height:44px;padding:0 18px;display:inline-flex;align-items:center}
+a.ghost{border-radius:999px;background:var(--bg);color:var(--ink);font-size:14px;font-weight:600;padding:7px 14px}
 .chip{display:inline-block;font-size:13px;font-weight:600;padding:3px 10px;border-radius:999px;background:var(--bg);color:var(--quiet);white-space:nowrap}
 .chip.blue{background:var(--tint);color:var(--blue)}.chip.good{background:rgba(52,199,89,.16);color:var(--green)}
 .chip.warn{background:rgba(255,159,10,.18);color:var(--orange)}.chip.bad{background:rgba(255,59,48,.14);color:var(--red)}
@@ -95,7 +101,21 @@ td.num:last-child,th.num:last-child{padding-right:0}
 td.strong{font-weight:600}
 td .left-date{margin-top:2px;font-size:13px;font-weight:400}
 td.cell-wrap{white-space:normal;min-width:200px}
-.indent{display:inline-block}
+.indent{display:inline-block;width:calc(var(--d,0) * 24px)}
+.tree-name{display:inline-block;vertical-align:top}
+/* 휴대폰의 표: 세 칸까지만 둔다. 주 칸, 핵심 값 하나, 동작. 숨긴 칸 가운데 꼭 필요한 값은 hide-sm 으로 숨기고
+   주 칸 아래 보조 줄 .sm-sub 로 옮긴다. 동작 단추는 td.acts 안에서 세로로 쌓는다. docs/12 5장 */
+.sm-sub{display:none}
+td.acts{text-align:right}
+td.acts form{display:inline}
+@media (max-width:760px){
+  .sm-sub{display:grid;gap:2px;margin-top:4px;font-size:13px;font-weight:400;line-height:1.4;color:var(--quiet);white-space:normal}
+  .sm-sub .chip{font-size:12px;padding:2px 8px}
+  td.wrap-sm{white-space:normal}
+  td.acts form{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+  td.acts .ghost,td.acts select{min-height:40px}
+  .indent{width:calc(var(--d,0) * 12px)}
+}
 
 /* ---------- 폼 */
 form.stack{display:grid;gap:12px;max-width:380px}
@@ -122,7 +142,8 @@ button.ghost{border:none;border-radius:999px;background:var(--bg);color:var(--in
 
 /* ---------- 휴대폰 아래 탭 */
 .tabbar{display:none}
-@media (max-width:1000px){.g4,.g5{grid-template-columns:repeat(2,minmax(0,1fr))}.g3{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:1000px){.g4,.g5{grid-template-columns:repeat(2,minmax(0,1fr))}.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .hide-md{display:none}}   /* 태블릿에서도 표가 넘치면 휴대폰에서 숨기는 칸 가운데 덜 중요한 것을 먼저 숨긴다 */
 @media (max-width:760px){
   body{font-size:16px}
   .nav-groups,.nav-right .me span,.nav-right .all{display:none}
@@ -233,6 +254,7 @@ a.card.todo{display:flex;align-items:center;justify-content:space-between;gap:16
 .grant-table td.pick,.grant-table th.pick{width:48px;text-align:center}
 .grant-table label.pickbox{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;cursor:pointer}
 .grant-orgs{white-space:normal;min-width:10em}
+@media (max-width:760px){.grant-orgs{min-width:0}}
 .grant-acts{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:16px}
 .grant-acts button{min-height:52px}
 .who-list{margin:12px 0 0;padding-left:20px;display:grid;gap:4px}

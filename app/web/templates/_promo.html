@@ -1,5 +1,5 @@
-{% macro card(p, link=true) %}
-<article class="card promo {{ 'ended' if p.phase == 'ended' }}">
+{% macro card(p, link=true) %}{# 부르는 쪽이 call 블록을 주면 그 내용을 카드 안 맨 아래의 단추 줄로 그린다 #}
+<article class="card promo {{ 'ended' if p.phase == 'ended' }}{{ ' has-acts' if caller is defined }}">
   <div class="promo-top"><span class="eyebrow" style="margin:0">{{ p.insurer_name or '전 보험사' }}</span><span class="chip {{ p.due_class }}">{{ p.due }}</span></div>
   {% if p.head.big %}<div class="promo-rate {{ 'small' if p.head.big|length > 7 }}">{{ p.head.big }}</div>
   {% else %}<div class="promo-rate none">{{ p.head.small }}</div>{% endif %}
@@ -10,6 +10,7 @@
   <div class="chips" style="margin-top:12px"><span class="chip">{{ p.kind_ko }}</span>
     {% if p.status != 'published' %}<span class="chip warn">{{ {'draft':'초안','withdrawn':'회수'}[p.status] }}</span>{% endif %}
     {% if p.recipient_level != 'fc' %}<span class="chip">{{ {'ga':'GA 몫','hq':'총괄 몫','branch':'지사 몫'}.get(p.recipient_level, p.recipient_level) }}</span>{% endif %}</div>
+  {% if caller is defined %}<div class="promo-acts">{{ caller() }}</div>{% endif %}
 </article>
 {% endmacro %}
 

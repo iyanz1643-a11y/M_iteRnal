@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>로그인 · GA 업무 앱</title>
-<link rel="stylesheet" href="/static/app.css"></head>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>로그인 · GA 업무 앱</title>
+{% include "_head.html" %}</head>
 <body><div class="login">
 <h1 class="display">GA 업무 앱</h1><p class="lede" style="margin-left:auto;margin-right:auto">내 실적과 프로모션을 한 곳에서.</p>
 <form class="stack" method="post" action="/login"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">

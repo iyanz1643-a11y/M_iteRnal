@@ -48,7 +48,8 @@ class UploadSource:
 
 
 # ------------------------------------------------------------------ 종류와 귀속월 짐작
-KIND_WORDS = [("contract", ("contract", "계약")), ("plan", ("plan", "시상", "시책")), ("employee", ("employee", "사원"))]
+KIND_WORDS = [("edu_roster", ("roster", "수료", "명부")), ("contract", ("contract", "계약")), ("plan", ("plan", "시상", "시책")),
+              ("employee", ("employee", "사원"))]
 _DATE8 = re.compile(r"(?<!\d)(20\d{2})(0[1-9]|1[0-2])[0-3]\d(?!\d)")
 _YM = re.compile(r"(?<!\d)(20\d{2})\s*[-_.년]?\s*(1[0-2]|0?[1-9])(?!\d)")
 

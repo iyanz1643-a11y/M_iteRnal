@@ -1,0 +1,51 @@
+# 교육 수료자 명부 엑셀 또는 CSV → 수료 한 줄 (edu_completion, source='roster')
+# 적재기는 app/loader/edu_roster.py 다. 매핑은 mapping.load("edu", "roster", 귀속월) 로 읽는다.
+#
+# 실제 명부 양식은 아직 없다(D-09). 아래 머리글은 모두 샘플 양식에서 정한 가정이다.
+# 실제 양식을 받으면 aliases 에 그 파일의 머리글을 더하고 새 버전을 만든다.
+#
+# - 머리글은 aliases 의 이름 가운데 하나와 같으면 그 칸으로 읽는다. 앞뒤 공백, 가운뎃점 변형, 겹친 공백은 맞춰 본다.
+# - 열 순서는 따지지 않는다. required 와 one_of 를 채우지 못하면 적재 전에 막는다.
+# - drop_keywords 가 들어간 머리글은 읽자마자 버린다. 값은 꺼내지도 않는다. 대소문자를 가리지 않는다.
+# - 이름은 사번과 맞춰 보는 데만 쓰고 DB 에 남기지 않는다. 원본 행(raw_row)도 남기지 않는다.
+# - aliases 에도 ignore 에도 없는 열은 읽지 않고 이름만 경고로 알린다.
+source: edu
+data_type: roster
+versions:
+  - version: 1
+    effective_from: "202601"
+    status: draft            # 샘플 양식. 실제 양식 확인 뒤 confirmed 로 바꾼다
+    file:
+      sheet: null            # 사번과 과정 칸이 있는 첫 시트
+      header_row: null       # 앞 10행에서 찾는다
+      csv_encodings: [utf-8-sig, cp949]
+    drop_keywords: ["주민", "생년월일", "생일", "연락처", "전화", "휴대", "핸드폰", "이메일", "메일", "email", "주소", "계좌", "소득", "이행보증"]
+    ignore: ["No", "NO", "No.", "번호", "순번", "소속", "총괄", "본부", "지점", "센터", "팀", "직급", "직위", "구분", "비고", "점수", "출석"]
+    aliases:
+      employee_no:  ["사번", "사원번호", "사원코드", "설계사코드", "설계사번호", "FC코드"]
+      name:         ["이름", "성명", "사원명", "설계사명", "FC명"]
+      course_code:  ["과정코드", "과정 코드", "교육코드"]
+      course_name:  ["과정명", "과정", "교육명", "교육과정", "교육과정명"]
+      session_no:   ["차수", "차수번호", "회차", "기수"]
+      session_date: ["교육일", "교육일자", "교육일시", "교육날짜"]
+      completed_on: ["수료일", "수료일자", "이수일", "이수일자"]
+    transforms:
+      employee_no: [as_text, strip, upper, none_if_blank]
+      name: [as_text, none_if_blank]
+      course_code: [as_text, strip, upper, none_if_blank]
+      course_name: [as_text, none_if_blank]
+      session_no: [digits_int]
+      session_date: [parse_date]
+      completed_on: [parse_date]
+    required: [employee_no]
+    # 묶음마다 하나 이상의 칸이 머리글에 있어야 한다
+    one_of:
+      - [course_code, course_name]
+      - [completed_on, session_no, session_date]
+    # 명부의 과정명이 앱의 과정명과 다를 때 앱 과정 코드로 잇는다. 예: "준법교육": "CP-2026"
+    course_alias: {}
+    # 사번과 이름이 맞지 않을 때. block 이면 그 줄을 넣지 않고, warn 이면 넣고 경고만 남긴다.
+    # 수료는 명함 수료 코드로 이어지므로 다른 사람에게 잘못 넣지 않게 block 으로 둔다(가정).
+    name_mismatch: block
+    # 이 해보다 앞선 수료일은 날짜 오류로 막는다. 엑셀 날짜 일련번호를 잘못 읽은 값을 거른다
+    min_year: 2000

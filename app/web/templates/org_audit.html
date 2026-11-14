@@ -1,8 +1,11 @@
 {% extends "base.html" %}
 {% block body %}
 <h1 class="display">변경 기록</h1>
-<p class="lede">최근 200건입니다. 로그인, 로그인 실패, 권한 밖 접근 시도, 계정 처리가 남습니다.</p>
-<div class="card tablecard" style="margin-top:32px"><table><tr><th>시각</th><th>누가</th><th>무엇을</th><th>대상</th></tr>
-{% for r in rows %}<tr><td>{{ r.at }}</td><td class="strong">{{ r.actor }}</td><td>{{ r.action }}</td><td class="cell-wrap">{{ r.target or '' }}</td></tr>{% endfor %}
+<p class="lede">최근 200건입니다. 로그인, 로그인 실패, 권한 밖 접근 시도, 계정 처리, 조직장 지정, 프로모션 게시, 명함 승인 권한이 남습니다.</p>
+<div class="card tablecard" style="margin-top:32px"><table class="audit-table"><tr><th class="hide-sm">시각</th><th class="hide-sm">누가</th><th>무엇을</th><th class="hide-sm">대상</th></tr>
+{% for r in rows %}<tr><td class="hide-sm">{{ r.at[:16] }}</td><td class="strong hide-sm">{{ r.actor_ko }}</td>
+<td class="strong">{{ r.action_ko }}<div class="sm-sub">{% if r.target_ko %}<span>{{ r.target_ko }}</span>{% endif %}<span>{{ r.at|md }} {{ r.at[11:16] }} · {{ r.actor_ko }}</span></div></td>
+<td class="cell-wrap hide-sm">{{ r.target_ko }}</td></tr>{% else %}<tr><td colspan="4" class="cap">남은 기록이 없습니다.</td></tr>{% endfor %}
 </table></div>
+<p class="cap">사람은 사번이나 아이디로 적습니다. 이름표가 없는 기록은 원문 그대로 보여 줍니다. 시각은 서버 기준입니다.</p>
 {% endblock %}

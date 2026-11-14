@@ -18,7 +18,24 @@ from app.web.routes import auth, card, home, me, org, promo, staff, team
 app = FastAPI(title="GA 업무 앱", docs_url=None, redoc_url=None, dependencies=[Depends(csrf_protect)])
 app.add_middleware(SessionMiddleware, secret_key=os.environ.get("APP_SECRET") or secrets.token_hex(32),
                    same_site="lax", https_only=os.environ.get("APP_HTTPS") == "1", max_age=60 * 60 * 8)
-app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
+
+
+class AppStatic(StaticFiles):
+    """정적 파일. 자료가 없는 파일만 두며 guard 를 거치지 않는다. 메뉴의 화면 주소가 아니라 check_context 와 시험의 예외 목록에도 없다.
+
+    휴대폰 홈 화면 추가의 앱 정보 파일과 서비스 워커도 여기 있다. 서비스 워커는 /static/sw.js 에 두되
+    Service-Worker-Allowed 머리글로 앱 전체(/)의 오프라인 안내를 맡긴다. 늘 새 판을 받도록 브라우저 캐시는 쓰지 않는다.
+    서비스 워커가 무엇을 보관하는지는 static/sw.js 의 머리말과 tests/test_pwa.py 에 있다.
+    """
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        if path == "sw.js":
+            resp.headers["Service-Worker-Allowed"] = "/"
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+app.mount("/static", AppStatic(directory=HERE / "static"), name="static")
 
 
 @app.exception_handler(NeedLogin)

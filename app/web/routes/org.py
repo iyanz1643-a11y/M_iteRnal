@@ -16,7 +16,7 @@ from app.org import card_grant as cg
 from app.org import heads as hd
 from app.org import levels
 from app.org.sync import org_texts, termination_candidates
-from app.web import auth
+from app.web import audit_view, auth
 from app.web.deps import _in, _q, get_con, guard, page
 
 router = APIRouter()
@@ -331,4 +331,5 @@ def org_accounts_action(request: Request, action: str = Form(...), user_id: int 
 
 @router.get("/org/audit", response_class=HTMLResponse)
 def org_audit(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
-    return page(request, ctx, "org_audit.html", rows=_q(con, "SELECT at, actor, action, target FROM audit_log ORDER BY id DESC LIMIT 200"))
+    rows = _q(con, "SELECT at, actor, action, target FROM audit_log ORDER BY id DESC LIMIT 200")
+    return page(request, ctx, "org_audit.html", rows=audit_view.rows_ko(con, rows))
