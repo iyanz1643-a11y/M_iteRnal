@@ -435,3 +435,21 @@ def seed_promotions(con, ym=AS_OF, by="정산담당(데모)"):
               tiers=[(1, "fixed", 30_000, None), (3, "fixed", 100_000, None), (5, "fixed", 200_000, None)],
               caution="조직 자체 시상의 예시입니다.", by=by, publish=True)
     return n + 4
+
+
+# ------------------------------------------------------------------ 샘플 조직 부문 시상
+def seed_org_awards(con, ym=AS_OF, by="정산담당(데모)"):
+    """본부마다 인정업적 부문과 손해보험 건수 부문을, 지점 하나에 지점 부문을 만든다. 시상 내용은 임의다."""
+    from app.engine import org_award as oa
+
+    n = 0
+    for hq in con.execute("SELECT org_id FROM org_unit WHERE level='hq' ORDER BY org_id").fetchall():
+        oa.save(con, by=by, org_id=hq["org_id"], name="인정업적 부문", metric="converted_premium", top_n=3, effective_from=ym[:4] + "01",
+                rewards=[(1, "상품권 50만 원"), (2, "상품권 30만 원"), (3, "상품권 20만 원")], note="한 달 인정보험료 합계로 순위를 매긴다.")
+        oa.save(con, by=by, org_id=hq["org_id"], name="손해보험 건수 부문", metric="policy_count", sector="nonlife", top_n=3, effective_from=ym[:4] + "01",
+                rewards=[(1, "상품권 30만 원"), (2, "상품권 20만 원"), (3, "상품권 10만 원")], note="손해보험 성립 건수로 순위를 매긴다.")
+        n += 2
+    branch = con.execute("SELECT org_id FROM org_unit WHERE level='branch' ORDER BY org_id LIMIT 1").fetchone()
+    oa.save(con, by=by, org_id=branch["org_id"], name="지점 건강보험 부문", metric="premium_monthly", categories=["health"], top_n=1, min_value=100_000,
+            effective_from=ym, rewards=[(1, "지점장 포상")], note="지점이 스스로 연 부문의 예시다.")
+    return n + 1

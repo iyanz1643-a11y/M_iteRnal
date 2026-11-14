@@ -8,6 +8,7 @@
 달성 현황은 저장하지 않고 계약 원장에서 그때그때 계산한다. 모두 예상이며 확정은 보험사 정산을 따른다.
 """
 import calendar
+import json
 from datetime import date
 
 from app import db
@@ -34,10 +35,8 @@ def ref_date(ym: str) -> date:
 
 
 # ---------------------------------------------------------------- 등록과 게시
-def create(con, *, period_ym, name, kind, windows, tiers=(), rates=(), by, recipient_level="fc", insurer_id=None, insurer_name=None,
-           sector=None, categories=None, target_note=None, metric="premium_monthly", date_basis="contract_date", per_contract_cap=None,
-           combine_rule=None, pay_timing=None, caution=None, source_line_id=None, publish=False) -> int:
-    """windows: [(label, from, to)], tiers: [(min_value, reward_kind, reward_value, reward_label)], rates: [(option, basis, rate, timing)]"""
+def _normalize(kind, windows, tiers, combine_rule, metric, date_basis, categories):
+    """등록과 고치기가 함께 쓰는 검사."""
     if kind not in KIND_KO or metric not in METRIC_KO or date_basis not in BASIS_KO:
         raise ValueError("유형, 지표, 기준일 값이 맞지 않습니다.")
     windows = [(l, f, t) for l, f, t in windows if f and t]
@@ -47,8 +46,10 @@ def create(con, *, period_ym, name, kind, windows, tiers=(), rates=(), by, recip
         if date.fromisoformat(f) > date.fromisoformat(t):
             raise ValueError(f"기간 창 '{l}' 의 시작일이 종료일보다 늦습니다.")
     combine_rule = combine_rule or ("all" if kind == "linked" else ("sum" if len(windows) > 1 else "single"))
-    if combine_rule == "single" and len(windows) > 1:
+    if combine_rule not in COMBINE_KO or (combine_rule == "single" and len(windows) > 1):
         raise ValueError("창이 둘 이상이면 결합 규칙을 정해야 합니다.")
+    if len(windows) == 1:
+        combine_rule = "single"
     tiers = sorted((float(m), k, (float(v) if v not in (None, "") else None), (lab or None)) for m, k, v, lab in tiers)
     if kind != "rate" and not tiers:
         raise ValueError("구간표가 비어 있습니다.")
@@ -56,23 +57,73 @@ def create(con, *, period_ym, name, kind, windows, tiers=(), rates=(), by, recip
         raise ValueError("구간의 보상 종류가 맞지 않거나 기준값이 겹칩니다.")
     if isinstance(categories, (list, tuple, set)):
         categories = ",".join(sorted(categories)) or None
-    cur = con.execute(
-        """INSERT INTO promotion(period_ym, name, kind, recipient_level, insurer_id, insurer_name, sector, categories, target_note, metric, date_basis,
-                                 per_contract_cap, combine_rule, pay_timing, caution, source_line_id, status, created_by, created_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?)""",
-        (period_ym, name.strip(), kind, recipient_level, insurer_id, insurer_name, sector or None, categories or None, target_note, metric, date_basis,
-         per_contract_cap or None, combine_rule, pay_timing, caution, source_line_id, by, db.now()))
-    pid = cur.lastrowid
+    return windows, tiers, combine_rule, (categories or None)
+
+
+def _write_children(con, pid, windows, tiers):
     for i, (l, f, t) in enumerate(windows, start=1):
         con.execute("INSERT INTO promotion_window(promo_id, seq, label, date_from, date_to) VALUES(?,?,?,?,?)", (pid, i, l or f"{i}구간", f, t))
     for i, (m, k, v, lab) in enumerate(tiers, start=1):
         con.execute("INSERT INTO promotion_tier(promo_id, tier_no, min_value, reward_kind, reward_value, reward_label) VALUES(?,?,?,?,?,?)", (pid, i, m, k, v, lab))
+
+
+def create(con, *, period_ym, name, kind, windows, tiers=(), rates=(), by, recipient_level="fc", insurer_id=None, insurer_name=None,
+           sector=None, categories=None, target_note=None, metric="premium_monthly", date_basis="contract_date", per_contract_cap=None,
+           combine_rule=None, pay_timing=None, caution=None, source_line_id=None, publish=False) -> int:
+    """windows: [(label, from, to)], tiers: [(min_value, reward_kind, reward_value, reward_label)], rates: [(option, basis, rate, timing)]"""
+    windows, tiers, combine_rule, categories = _normalize(kind, windows, tiers, combine_rule, metric, date_basis, categories)
+    cur = con.execute(
+        """INSERT INTO promotion(period_ym, name, kind, recipient_level, insurer_id, insurer_name, sector, categories, target_note, metric, date_basis,
+                                 per_contract_cap, combine_rule, pay_timing, caution, source_line_id, status, created_by, created_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?)""",
+        (period_ym, name.strip(), kind, recipient_level, insurer_id, insurer_name, sector or None, categories, target_note, metric, date_basis,
+         per_contract_cap or None, combine_rule, pay_timing, caution, source_line_id, by, db.now()))
+    pid = cur.lastrowid
+    _write_children(con, pid, windows, tiers)
     for i, (opt, basis, rate, timing) in enumerate(rates, start=1):
         con.execute("INSERT INTO promotion_rate(promo_id, seq, option_label, basis, rate, pay_timing) VALUES(?,?,?,?,?,?)", (pid, i, opt, basis, rate, timing))
     con.commit()
     if publish:
         set_status(con, pid, "published", by)
     return pid
+
+
+def _snapshot(p):
+    return {"name": p["name"], "kind": p["kind"], "insurer_name": p["insurer_name"], "sector": p["sector"], "categories": p["categories"],
+            "metric": p["metric"], "date_basis": p["date_basis"], "per_contract_cap": p["per_contract_cap"], "combine_rule": p["combine_rule"],
+            "pay_timing": p["pay_timing"], "target_note": p["target_note"], "caution": p["caution"],
+            "windows": [(w["label"], w["date_from"], w["date_to"]) for w in p["windows"]],
+            "tiers": [(t["min_value"], t["reward_kind"], t["reward_value"], t["reward_label"]) for t in p["tiers"]]}
+
+
+def update(con, promo_id, *, by, name, windows, tiers=(), kind=None, insurer_id=None, insurer_name=None, sector=None, categories=None, target_note=None,
+           metric="premium_monthly", date_basis="contract_date", per_contract_cap=None, combine_rule=None, pay_timing=None, caution=None) -> dict:
+    """프로모션을 고친다. 게시 중이어도 고칠 수 있고, 고치기 전과 뒤를 변경 기록에 남긴다.
+    정률 시책은 유형과 지급률을 바꾸지 않는다. 지급률은 시상안 원장에서 온 것이기 때문이다."""
+    before = _load(con, promo_id)
+    if not before:
+        raise ValueError("없는 프로모션입니다.")
+    if not (name or "").strip():
+        raise ValueError("이름을 넣어야 합니다.")
+    kind = "rate" if before["kind"] == "rate" else (kind or before["kind"])
+    if kind == "rate":
+        tiers = ()
+    windows, tiers, combine_rule, categories = _normalize(kind, windows, tiers, combine_rule, metric, date_basis, categories)
+    con.execute("""UPDATE promotion SET name=?, kind=?, insurer_id=?, insurer_name=?, sector=?, categories=?, target_note=?, metric=?, date_basis=?,
+                   per_contract_cap=?, combine_rule=?, pay_timing=?, caution=? WHERE promo_id=?""",
+                (name.strip(), kind, insurer_id, insurer_name, sector or None, categories, target_note, metric, date_basis, per_contract_cap or None,
+                 combine_rule, pay_timing, caution, promo_id))
+    con.execute("DELETE FROM promotion_window WHERE promo_id=?", (promo_id,))
+    con.execute("DELETE FROM promotion_tier WHERE promo_id=?", (promo_id,))
+    _write_children(con, promo_id, windows, tiers)
+    after = _load(con, promo_id)
+    b, a = _snapshot(before), _snapshot(after)
+    changed = sorted(k for k in a if json.dumps(a[k], ensure_ascii=False, default=str) != json.dumps(b[k], ensure_ascii=False, default=str))
+    con.execute("INSERT INTO audit_log(at, actor, action, target, before_json, after_json) VALUES(?,?,?,?,?,?)",
+                (db.now(), by, "promotion_update", f"{promo_id}:{','.join(changed) or '바뀐 것 없음'}",
+                 json.dumps({k: b[k] for k in changed}, ensure_ascii=False, default=str), json.dumps({k: a[k] for k in changed}, ensure_ascii=False, default=str)))
+    con.commit()
+    return {"promo_id": promo_id, "changed": changed}
 
 
 def set_status(con, promo_id, status, by):

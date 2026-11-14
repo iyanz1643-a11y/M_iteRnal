@@ -128,7 +128,7 @@ button.ghost{border:none;border-radius:999px;background:var(--bg);color:var(--in
   .g2,.g3{grid-template-columns:minmax(0,1fr)}.g3.keep{grid-template-columns:repeat(3,minmax(0,1fr))}
   .card.span2{grid-column:auto}
   .g3.keep .card{padding:16px 14px}.g3.keep .mid{font-size:30px}
-  .hide-sm{display:none}
+  .hide-sm{display:none}.only-sm{display:inline}
   .rail{grid-auto-columns:78%}
   th,td{padding:14px 12px 14px 0}
   .tabbar{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:35;background:var(--nav);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);
@@ -176,3 +176,18 @@ textarea{padding:12px 14px;min-height:88px;resize:vertical}
 button.second{height:52px;border:none;border-radius:999px;background:var(--bg);color:var(--ink);font:inherit;font-weight:600;cursor:pointer;padding:0 28px}
 .origin{background:var(--bg);border-radius:16px;padding:14px 18px;font-size:15px;color:var(--quiet)}
 @media (max-width:760px){.pcard{grid-template-columns:minmax(0,1fr);gap:20px}.frow.w3,.frow.t4{grid-template-columns:1fr 1fr}.frow.w3 label:first-child,.frow.t4 label:last-child{grid-column:1/-1}}
+
+/* ---------- 조직 부문 시상 */
+.podium{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:18px 0 6px}
+.pod{background:var(--bg);border-radius:18px;padding:16px 18px;min-width:0}
+.pod.first{background:var(--tint)}
+.pod .rk{font-size:13px;font-weight:700;color:var(--quiet)}.pod.first .rk{color:var(--blue)}
+.pod .nm{font-size:clamp(20px,2.6vw,28px);font-weight:700;letter-spacing:-.02em;line-height:1.15;margin-top:4px}
+.pod .vl{font-size:15px;font-variant-numeric:tabular-nums;color:var(--quiet);margin-top:2px}
+.pod .rw{font-size:14px;font-weight:600;margin-top:8px}
+tr.me td{background:var(--tint)}tr.me td:first-child{border-radius:10px 0 0 10px}tr.me td:last-child{border-radius:0 10px 10px 0}
+.block-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap}
+@media (max-width:760px){.podium{grid-template-columns:minmax(0,1fr)}.pod{display:grid;grid-template-columns:auto 1fr auto;gap:4px 12px;align-items:baseline}.pod .nm{font-size:20px;margin:0}.pod .rw{grid-column:1/-1;margin-top:0}}
+
+.only-sm{display:none}
+@media (max-width:760px){.only-sm{display:inline}}

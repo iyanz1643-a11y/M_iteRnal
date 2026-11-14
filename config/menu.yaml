@@ -41,8 +41,8 @@ groups:
          desc: "승인한 시상안을 보험사·상품군·마감 임박으로 걸러 본다. 원문 보기 포함"}
       - {id: promo-progress, name: 달성 현황, path: /promo/progress, roles: {main: all, manager: org, agent: self}, phase: 2, status: built,
          desc: "정률 시책의 예상액, 주차 시상의 이번 주 구간, 연계 시상의 창별 달성, 여행 시상의 누적 달성. 관리자는 팀원의 구간 근접 현황"}
-      - {id: promo-org-awards, name: 조직 부문 시상, path: /promo/org-awards, roles: {main: all, manager: org, agent: self}, phase: 2, status: planned,
-         desc: "조직이 등록한 월간 부문과 현재 순위. 이터널은 인정업적 부문과 손해보험 건수 부문"}
+      - {id: promo-org-awards, name: 조직 부문 시상, path: /promo/org-awards, roles: {main: all, manager: org, agent: self}, phase: 2, status: built,
+         desc: "조직이 등록한 월간 부문과 현재 순위. 메인 관리자와 관리자는 부문을 만들고 고친다. 설계사에게는 상위 10명과 본인 순위가 보인다"}
       - {id: promo-compare, name: 프로모션 비교, path: /promo/compare, roles: {main: all, manager: org, agent: self}, phase: 2, status: planned,
          desc: "같은 상품군의 보험사별 지급률과 지급 시점. 내부 참고용"}
       - {id: promo-archive, name: 지난 프로모션, path: /promo/archive, roles: {main: all, manager: org, agent: self}, phase: 2, status: planned,

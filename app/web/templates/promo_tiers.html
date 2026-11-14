@@ -1,44 +1,53 @@
 {% extends "base.html" %}
 {% block body %}
-<p class="eyebrow">{{ ctx.ym[:4] }}년 {{ ctx.ym[4:]|int }}월</p>
-<h1 class="display">구간과 조건 입력</h1>
-<p class="lede">주차, 연계, 여행 시상처럼 금액이 원문의 표나 그림에만 있는 프로모션을 등록합니다.</p>
+{% set editing = d.promo_id != '' %}{% set is_rate = d.kind == 'rate' %}
+<p class="eyebrow">{{ ctx.ym[:4] }}년 {{ ctx.ym[4:]|int }}월{% if editing %} · {{ {'draft':'초안','published':'게시 중','withdrawn':'회수'}[d.status] }}{% endif %}</p>
+<h1 class="display">{{ '프로모션 고치기' if editing else '구간과 조건 입력' }}</h1>
+<p class="lede">{% if editing %}고친 내용은 바로 반영되고, 고치기 전과 뒤가 변경 기록에 남습니다.{% if d.status == 'published' %} 게시 중인 프로모션이라 설계사 화면도 함께 바뀝니다.{% endif %}
+{% else %}주차, 연계, 여행 시상처럼 금액이 원문의 표나 그림에만 있는 프로모션을 등록합니다.{% endif %}</p>
 {% if err %}<div class="alert" style="margin-top:20px">{{ err }}</div>{% endif %}
 {% if d.origin %}<div class="origin" style="margin-top:20px"><b>원문</b> · {{ d.insurer_name }} · {{ d.origin }}</div>{% endif %}
 <form class="wide" method="post" action="/promo/tiers" style="margin-top:24px">
-<input type="hidden" name="source_line_id" value="{{ d.source_line_id }}">
+<input type="hidden" name="source_line_id" value="{{ d.source_line_id }}"><input type="hidden" name="promo_id" value="{{ d.promo_id }}">
 <section class="card"><div class="k" style="margin-bottom:14px">무엇을</div>
   <div class="frow">
     <label class="f">이름<input class="sm" type="text" name="name" value="{{ d.name }}" required></label>
-    <label class="f">유형<select name="kind">{% for k, v in pm.KIND_KO.items() if k != 'rate' %}<option value="{{ k }}" {{ 'selected' if k == d.kind }}>{{ v }}</option>{% endfor %}</select></label>
-    <label class="f">보험사<select name="insurer_id"><option value="">전 보험사 또는 아래에 직접 입력</option>{% for i in insurers %}<option value="{{ i.insurer_id }}" {{ 'selected' if i.name == d.insurer_name }}>{{ i.name }}</option>{% endfor %}</select></label>
+    {% if is_rate %}<label class="f">유형<input class="sm" type="text" value="정률 시책" disabled></label><input type="hidden" name="kind" value="rate">
+    {% else %}<label class="f">유형<select name="kind">{% for k, v in pm.KIND_KO.items() if k != 'rate' %}<option value="{{ k }}" {{ 'selected' if k == d.kind }}>{{ v }}</option>{% endfor %}</select></label>{% endif %}
+    <label class="f">보험사<select name="insurer_id"><option value="">전 보험사 또는 아래에 직접 입력</option>{% for i in insurers %}<option value="{{ i.insurer_id }}" {{ 'selected' if (d.insurer_id == i.insurer_id) or (not d.insurer_id and i.name == d.insurer_name) }}>{{ i.name }}</option>{% endfor %}</select></label>
     <label class="f">보험사 이름 직접 입력<input class="sm" type="text" name="insurer_name" value="{{ d.insurer_name }}"></label>
   </div></section>
 <section class="card"><div class="k" style="margin-bottom:14px">어떤 계약을 세나</div>
   <div class="frow">
     <label class="f">업권<select name="sector"><option value="">전체</option><option value="life" {{ 'selected' if d.sector == 'life' }}>생명보험</option><option value="nonlife" {{ 'selected' if d.sector == 'nonlife' }}>손해보험</option></select></label>
-    <label class="f">세는 것<select name="metric">{% for k, v in pm.METRIC_KO.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></label>
-    <label class="f">기준일<select name="date_basis">{% for k, v in pm.BASIS_KO.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></label>
-    <label class="f">건당 인정 한도 (원)<input type="number" name="cap" min="0" step="1000" placeholder="없으면 비워 둠"></label>
+    <label class="f">세는 것<select name="metric">{% for k, v in pm.METRIC_KO.items() %}<option value="{{ k }}" {{ 'selected' if k == d.metric }}>{{ v }}</option>{% endfor %}</select></label>
+    <label class="f">기준일<select name="date_basis">{% for k, v in pm.BASIS_KO.items() %}<option value="{{ k }}" {{ 'selected' if k == d.date_basis }}>{{ v }}</option>{% endfor %}</select></label>
+    <label class="f">건당 인정 한도 (원)<input type="number" name="cap" min="0" step="1000" value="{{ d.cap }}" placeholder="없으면 비워 둠"></label>
   </div>
   <div class="k" style="margin:16px 0 8px;font-size:13px">대상 구분. 고르지 않으면 전 구분</div>
-  <div class="checks">{% for c in cats %}<label><input type="checkbox" name="categories" value="{{ c.code }}">{{ c.name }}</label>{% endfor %}</div>
-  <label class="f" style="margin-top:16px">대상 상품의 원문<input class="sm" type="text" name="target_note" placeholder="예: 인보험 (단체, 실손, 펫 제외)"></label></section>
+  <div class="checks">{% for c in cats %}<label><input type="checkbox" name="categories" value="{{ c.code }}" {{ 'checked' if c.code in d.categories }}>{{ c.name }}</label>{% endfor %}</div>
+  <label class="f" style="margin-top:16px">대상 상품의 원문<input class="sm" type="text" name="target_note" value="{{ d.target_note }}" placeholder="예: 인보험 (단체, 실손, 펫 제외)"></label></section>
 <section class="card"><div class="k" style="margin-bottom:4px">기간 창</div><div class="cap" style="margin:0 0 14px">주차 시상은 하나, 연계 시상은 둘이나 셋을 넣습니다</div>
   {% for i in range(1, 4) %}{% set w = d.windows[i - 1] %}<div class="frow w3" style="margin-bottom:10px">
     <label class="f">{{ i }}번 창의 이름<input class="sm" type="text" name="w_label_{{ i }}" value="{{ w[0] }}" placeholder="{{ ['1주차', '2주차', '3주차'][i - 1] }}"></label>
     <label class="f">시작일<input type="date" name="w_from_{{ i }}" value="{{ w[1] }}"></label>
     <label class="f">종료일<input type="date" name="w_to_{{ i }}" value="{{ w[2] }}"></label></div>{% endfor %}
-  <label class="f" style="max-width:320px">창이 여럿일 때<select name="combine_rule"><option value="">유형에 맞게 자동</option>{% for k, v in pm.COMBINE_KO.items() if k != 'single' %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></label></section>
+  <label class="f" style="max-width:320px">창이 여럿일 때<select name="combine_rule"><option value="">유형에 맞게 자동</option>{% for k, v in pm.COMBINE_KO.items() if k != 'single' %}<option value="{{ k }}" {{ 'selected' if k == d.combine_rule }}>{{ v }}</option>{% endfor %}</select></label></section>
+{% if is_rate %}
+<section class="card"><div class="k" style="margin-bottom:4px">지급률</div><div class="cap" style="margin:0 0 14px">시상안 원장에서 온 값이라 여기서 바꾸지 않습니다. 원장의 해석이 틀렸으면 회수하고 원장에서 다시 승인합니다</div>
+  <div class="ladder">{% for r in d.rates %}<div class="rung"><span>{% if r.option_label %}{{ r.option_label }}번 조건 · {% endif %}{{ pm.TIMING_KO.get(r.pay_timing, '지급 시점 표기 없음') }}</span><b>{{ '%g'|format(r.rate * 100) }}%</b></div>{% endfor %}</div></section>
+{% else %}
 <section class="card"><div class="k" style="margin-bottom:4px">구간표</div><div class="cap" style="margin:0 0 14px">기준 이상이면 그 구간입니다. 비율은 퍼센트로 넣습니다</div>
-  {% for i in range(1, 7) %}<div class="frow t4" style="margin-bottom:10px">
-    <label class="f">{{ i }}구간 기준<input type="number" name="t_min_{{ i }}" min="0" step="any" placeholder="50000"></label>
-    <label class="f">보상<select name="t_kind_{{ i }}">{% for k, v in pm.REWARD_KO.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></label>
-    <label class="f">값<input type="number" name="t_value_{{ i }}" min="0" step="any" placeholder="150000"></label>
-    <label class="f">이름. 여행지나 물품<input class="sm" type="text" name="t_label_{{ i }}" placeholder="예: 오사카 3박 4일"></label></div>{% endfor %}</section>
+  {% for i in range(1, 7) %}{% set t = d.tiers[i - 1] %}<div class="frow t4" style="margin-bottom:10px">
+    <label class="f">{{ i }}구간 기준<input type="number" name="t_min_{{ i }}" min="0" step="any" value="{{ t[0] }}" placeholder="50000"></label>
+    <label class="f">보상<select name="t_kind_{{ i }}">{% for k, v in pm.REWARD_KO.items() %}<option value="{{ k }}" {{ 'selected' if k == t[1] }}>{{ v }}</option>{% endfor %}</select></label>
+    <label class="f">값<input type="number" name="t_value_{{ i }}" min="0" step="any" value="{{ t[2] }}" placeholder="150000"></label>
+    <label class="f">이름. 여행지나 물품<input class="sm" type="text" name="t_label_{{ i }}" value="{{ t[3] }}" placeholder="예: 오사카 3박 4일"></label></div>{% endfor %}</section>
+{% endif %}
 <section class="card"><div class="k" style="margin-bottom:14px">지급과 유의사항</div>
-  <div class="frow"><label class="f">지급 시점<select name="pay_timing"><option value="">표기 없음</option>{% for k, v in pm.TIMING_KO.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></label></div>
+  <div class="frow"><label class="f">지급 시점<select name="pay_timing"><option value="">표기 없음</option>{% for k, v in pm.TIMING_KO.items() %}<option value="{{ k }}" {{ 'selected' if k == d.pay_timing }}>{{ v }}</option>{% endfor %}</select></label></div>
   <label class="f" style="margin-top:12px">유의사항<textarea name="caution" placeholder="예: 13회차 유지 시 지급. 현금 대체 불가">{{ d.caution }}</textarea></label></section>
-<div class="actions"><button class="primary" name="action" value="publish">게시하기</button><button class="second" name="action" value="draft">초안으로 저장</button></div>
+<div class="actions">{% if editing %}<button class="primary" name="action" value="update">고친 내용 저장</button><a class="second" href="/promo/publish" style="display:inline-grid;place-items:center;height:52px;border-radius:999px;background:var(--card);color:var(--ink);font-weight:600;padding:0 28px">그만두기</a>
+{% else %}<button class="primary" name="action" value="publish">게시하기</button><button class="second" name="action" value="draft">초안으로 저장</button>{% endif %}</div>
 </form>
 {% endblock %}

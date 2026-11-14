@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% macro val(v, d) %}{% if d.metric == 'policy_count' %}{{ v|n }}건{% else %}{{ v|won }}원{% endif %}{% endmacro %}
+{% block body %}
+<p class="eyebrow">{{ ctx.ym[:4] }}년 {{ ctx.ym[4:]|int }}월 · {{ SCOPES[ctx.scope] }}</p>
+<h1 class="display">조직 부문 시상</h1>
+<p class="lede">조직이 스스로 정해 매달 주는 시상입니다. 순위는 집계 중인 값이며 마감 뒤에 확정합니다.{% if ctx.role != 'main' %} 상위 10명과 {{ '우리 조직 사람' if ctx.role == 'manager' else '본인' }}의 순위가 보입니다.{% endif %}</p>
+{% if msg %}<div class="okmsg" style="margin-top:20px">{{ msg }}</div>{% endif %}{% if err %}<div class="alert" style="margin-top:20px">{{ err }}</div>{% endif %}
+
+{% if form is not none %}
+<h2 class="sec">{{ '부문 고치기' if form.division_id else '부문 만들기' }}</h2>
+<form class="wide" method="post" action="/promo/org-awards">
+<input type="hidden" name="action" value="save"><input type="hidden" name="division_id" value="{{ form.division_id }}">
+<section class="card"><div class="frow">
+  <label class="f">부문 이름<input class="sm" type="text" name="name" value="{{ form.name }}" placeholder="예: 인정업적 부문" required></label>
+  <label class="f">부문을 여는 조직<select name="org_id">{% for o in orgs %}<option value="{{ o.org_id }}" {{ 'selected' if o.org_id == form.org_id }}>{{ o.name }}</option>{% endfor %}</select></label>
+  <label class="f">순위를 매기는 것<select name="metric">{% for k, v in oa.METRIC_KO.items() %}<option value="{{ k }}" {{ 'selected' if k == form.metric }}>{{ v }}</option>{% endfor %}</select></label>
+  <label class="f">업권<select name="sector"><option value="">전 업권</option><option value="life" {{ 'selected' if form.sector == 'life' }}>생명보험</option><option value="nonlife" {{ 'selected' if form.sector == 'nonlife' }}>손해보험</option></select></label>
+</div>
+<div class="k" style="margin:16px 0 8px;font-size:13px">대상 구분. 고르지 않으면 전 구분</div>
+<div class="checks">{% for c in cats %}<label><input type="checkbox" name="categories" value="{{ c.code }}" {{ 'checked' if c.code in form.category_list }}>{{ c.name }}</label>{% endfor %}</div>
+<div class="frow" style="margin-top:16px">
+  <label class="f">선발 인원<input type="number" name="top_n" min="1" max="50" value="{{ form.top_n }}" required></label>
+  <label class="f">최소 기준. 없으면 비워 둠<input type="number" name="min_value" min="0" step="any" value="{{ '%g'|format(form.min_value) if form.min_value else '' }}"></label>
+  <label class="f">적용 시작 월<input class="sm" type="text" name="effective_from" value="{{ form.effective_from }}" pattern="[0-9]{6}" required></label>
+  <label class="f">적용 종료 월. 없으면 비워 둠<input class="sm" type="text" name="effective_to" value="{{ form.effective_to or '' }}" pattern="[0-9]{6}"></label>
+</div></section>
+<section class="card"><div class="k" style="margin-bottom:4px">시상 내용</div><div class="cap" style="margin:0 0 14px">순위별로 적습니다. 선발 인원을 넘는 순위는 넣을 수 없습니다</div>
+  <div class="frow">{% for i in range(1, 6) %}<label class="f">{{ i }}위<input class="sm" type="text" name="reward_{{ i }}" value="{{ form.rewards.get(i, '') }}" placeholder="예: 상품권 30만 원"></label>{% endfor %}</div>
+  <label class="f" style="margin-top:12px">메모<textarea name="note" placeholder="선발 기준의 보충 설명">{{ form.note or '' }}</textarea></label></section>
+<div class="actions"><button class="primary" type="submit">{{ '고친 내용 저장' if form.division_id else '부문 만들기' }}</button>
+  <a href="/promo/org-awards" style="display:inline-grid;place-items:center;height:52px;border-radius:999px;background:var(--card);color:var(--ink);font-weight:600;padding:0 28px">그만두기</a></div>
+</form>
+{% endif %}
+
+{% if not blocks and form is none %}<div class="card" style="margin-top:32px"><div class="k">이번 달에 적용되는 부문이 없습니다</div>
+  <div class="cap">{% if manage %}아래에서 부문을 만드세요.{% else %}조직에서 부문을 열면 여기에 보입니다.{% endif %}</div></div>{% endif %}
+
+{% for d in blocks %}
+<h2 class="sec">{{ d.name }}</h2>
+<section class="card" {% if d.status != 'active' %}style="opacity:.62"{% endif %}>
+  <div class="block-head"><div><div class="chips"><span class="chip blue">{{ d.org_name }}</span><span class="chip">{{ d.metric_ko }}</span><span class="chip">{{ d.sector_ko }}</span>
+      <span class="chip">상위 {{ d.top_n }}명</span>{% if d.confirmed %}<span class="chip good">확정</span>{% else %}<span class="chip warn">집계 중</span>{% endif %}
+      {% if d.status != 'active' %}<span class="chip bad">닫힘</span>{% endif %}</div>
+      {% if d.note %}<div class="cap">{{ d.note }}</div>{% endif %}</div>
+    {% if d.can_manage %}<form method="post" action="/promo/org-awards" class="actions"><input type="hidden" name="division_id" value="{{ d.division_id }}">
+      <a class="ghost" href="/promo/org-awards?edit={{ d.division_id }}" style="display:inline-block;border-radius:999px;background:var(--bg);color:var(--ink);font-size:14px;font-weight:600;padding:7px 14px">고치기</a>
+      {% if d.status == 'active' %}<button class="ghost" name="action" value="inactive">닫기</button>{% else %}<button class="ghost" name="action" value="active">다시 열기</button>{% endif %}
+      {% if ctx.role == 'main' and d.status == 'active' and d.total %}<button class="ghost" name="action" value="confirm">{{ '다시 확정' if d.confirmed else '수상자 확정' }}</button>{% endif %}</form>{% endif %}
+  </div>
+  {% if d.podium %}<div class="podium">{% for r in d.podium %}<div class="pod {{ 'first' if r.rank == 1 }}"><div class="rk">{{ r.rank }}위</div><div class="nm">{{ r.name }}</div>
+    <div class="vl">{{ val(r.value, d) }}</div>{% if r.reward %}<div class="rw">{{ r.reward }}</div>{% endif %}</div>{% endfor %}</div>
+  {% else %}<div class="cap" style="margin-top:16px">아직 순위에 든 사람이 없습니다</div>{% endif %}
+  {% if d.me %}<p class="cap" style="font-weight:600;color:var(--blue)">내 순위 {{ d.me.rank }}위 · {{ val(d.me.value, d) }}{% if d.me.rank > d.top_n and d.rows %}{% set cut = (d.rows|selectattr('winner')|list)[-1] %} · 수상권까지 {{ val(cut.value - d.me.value, d) }}{% endif %}</p>
+  {% elif ctx.agent_id and d.total and ctx.role == 'agent' %}<p class="cap">이번 달 이 부문에 잡힌 내 실적이 없습니다</p>{% endif %}
+  {% if d.rows %}<div style="overflow-x:auto;margin-top:8px"><table>
+    <tr><th>순위</th><th>성명</th><th class="hide-sm">소속</th><th class="num">{{ d.metric_ko }}</th><th>시상</th></tr>
+    {% for r in d.rows %}<tr class="{{ 'me' if r.agent_id == ctx.agent_id }}"><td class="strong">{{ r.rank }}</td><td class="strong">{{ r.name }}</td><td class="hide-sm">{{ r.org }}</td>
+      <td class="num"><span class="minibar hide-sm"><i style="width:{{ (r.value / d.top * 100)|round(1) if d.top else 0 }}%"></i></span>{{ val(r.value, d) }}</td>
+      <td>{% if r.winner %}<span class="chip good"><span class="hide-sm">{{ r.reward or '수상권' }}</span><span class="only-sm">수상</span></span>{% endif %}</td></tr>{% endfor %}
+  </table></div>
+  {% if d.rows|length < d.total %}<p class="cap">순위에 든 {{ d.total }}명 가운데 {{ d.rows|length }}명을 보여 줍니다</p>{% endif %}{% endif %}
+  {% if d.confirmed %}<p class="cap">{{ d.confirmed[0].confirmed_at[:10] }}에 확정했습니다. 위의 수상자는 확정된 값이고, 아래 표는 지금 자료로 다시 계산한 순위입니다</p>{% endif %}
+</section>
+{% endfor %}
+{% if manage and form is none %}<p style="margin-top:28px"><a href="/promo/org-awards?new=1">부문 새로 만들기</a></p>{% endif %}
+<p class="cap" style="margin-top:20px">업적과 같은 기준입니다. 성립한 달에 더하고 철회한 달에 뺍니다. 청약과 반송은 세지 않습니다. 같은 값이면 같은 순위입니다.</p>
+{% endblock %}

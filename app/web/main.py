@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from app import db
+from app.engine import org_award as oa
 from app.engine import promotion as pm
 from app.periods import period_key
 from app.web import auth, menu
@@ -385,9 +386,23 @@ async def promo_publish_action(request: Request, ctx: dict = Depends(guard), con
     return RedirectResponse(f"/promo/publish?msg={quote(msg)}", status_code=303)
 
 
-def _tier_form_defaults(con, ctx, line_id):
-    d = {"name": "", "kind": "weekly", "insurer_name": "", "sector": "", "caution": "", "windows": [("", "", "")] * 3, "source_line_id": "", "origin": None}
-    if line_id:
+def _tier_form_defaults(con, ctx, line_id=None, promo_id=None):
+    d = {"promo_id": "", "name": "", "kind": "weekly", "insurer_id": None, "insurer_name": "", "sector": "", "caution": "", "target_note": "",
+         "metric": "premium_monthly", "date_basis": "contract_date", "cap": "", "categories": [], "combine_rule": "", "pay_timing": "",
+         "windows": [("", "", "")] * 3, "tiers": [("", "fixed", "", "")] * 6, "rates": [], "source_line_id": "", "origin": None, "status": None}
+    num = lambda v: "" if v is None else f"{v:g}"
+    if promo_id:
+        p = pm._load(con, promo_id)
+        if not p:
+            raise HTTPException(404, "없는 프로모션입니다.")
+        tiers = [(num(t["min_value"]), t["reward_kind"], num(t["reward_value"] * 100 if t["reward_kind"] == "rate" and t["reward_value"] is not None else t["reward_value"]),
+                  t["reward_label"] or "") for t in p["tiers"]]
+        d.update(promo_id=str(promo_id), name=p["name"], kind=p["kind"], insurer_id=p["insurer_id"], insurer_name=p["insurer_name"] or "", sector=p["sector"] or "",
+                 caution=p["caution"] or "", target_note=p["target_note"] or "", metric=p["metric"], date_basis=p["date_basis"], cap=num(p["per_contract_cap"]),
+                 categories=p["category_list"], combine_rule=p["combine_rule"] if len(p["windows"]) > 1 else "", pay_timing=p["pay_timing"] or "",
+                 windows=([(w["label"], w["date_from"], w["date_to"]) for w in p["windows"]] + [("", "", "")] * 3)[:3],
+                 tiers=(tiers + [("", "fixed", "", "")] * 6)[:6], rates=p["rates"], status=p["status"])
+    elif line_id:
         ln = con.execute("SELECT * FROM incentive_plan_line WHERE line_id=? AND recipient_level='fc'", (line_id,)).fetchone()
         if ln:
             origin = " / ".join(x for x in (ln["period_raw"], ln["criteria_raw"], ln["reward_raw"]) if x)
@@ -398,8 +413,8 @@ def _tier_form_defaults(con, ctx, line_id):
 
 
 @app.get("/promo/tiers", response_class=HTMLResponse)
-def promo_tiers(request: Request, line: int | None = None, err: str | None = None, ctx: dict = Depends(guard), con=Depends(get_con)):
-    return page(request, ctx, "promo_tiers.html", d=_tier_form_defaults(con, ctx, line), err=err,
+def promo_tiers(request: Request, line: int | None = None, edit: int | None = None, err: str | None = None, ctx: dict = Depends(guard), con=Depends(get_con)):
+    return page(request, ctx, "promo_tiers.html", d=_tier_form_defaults(con, ctx, line, edit), err=err,
                 cats=_q(con, "SELECT code, name FROM product_category ORDER BY sort_order"),
                 insurers=_q(con, "SELECT insurer_id, name, sector FROM insurer WHERE active=1 ORDER BY name"))
 
@@ -408,13 +423,12 @@ def promo_tiers(request: Request, line: int | None = None, err: str | None = Non
 async def promo_tiers_save(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
     f = await request.form()
     num = lambda v: float(str(v).replace(",", "").strip()) if str(v or "").strip() else None
+    promo_id = int(f["promo_id"]) if f.get("promo_id") else None
     try:
         windows = [(f.get(f"w_label_{i}", "").strip(), f.get(f"w_from_{i}", ""), f.get(f"w_to_{i}", "")) for i in range(1, 4)]
         tiers = [(num(f.get(f"t_min_{i}")), f.get(f"t_kind_{i}", "fixed"), num(f.get(f"t_value_{i}")), f.get(f"t_label_{i}", "").strip())
                  for i in range(1, 7) if num(f.get(f"t_min_{i}")) is not None]
         for m, k, v, lab in tiers:
-            if k == "rate" and v is not None:
-                pass
             if k in ("fixed", "rate") and v is None:
                 raise ValueError("정액과 비율 보상에는 값을 넣어야 합니다.")
             if k in ("travel", "goods") and not lab:
@@ -423,19 +437,93 @@ async def promo_tiers_save(request: Request, ctx: dict = Depends(guard), con=Dep
         ins = con.execute("SELECT insurer_id, name FROM insurer WHERE insurer_id=?", (int(f["insurer_id"]),)).fetchone() if f.get("insurer_id") else None
         if not f.get("name", "").strip():
             raise ValueError("이름을 넣어야 합니다.")
-        pid = pm.create(con, period_ym=ctx["ym"], name=f["name"], kind=f.get("kind", "weekly"), windows=windows, tiers=tiers, by=ctx["login_id"],
-                        insurer_id=ins["insurer_id"] if ins else None, insurer_name=(ins["name"] if ins else f.get("insurer_name", "").strip() or None),
-                        sector=f.get("sector") or None, categories=f.getlist("categories"), target_note=f.get("target_note", "").strip() or None,
-                        metric=f.get("metric", "premium_monthly"), date_basis=f.get("date_basis", "contract_date"), per_contract_cap=num(f.get("cap")),
-                        combine_rule=f.get("combine_rule") or None, pay_timing=f.get("pay_timing") or None, caution=f.get("caution", "").strip() or None,
-                        source_line_id=int(f["source_line_id"]) if f.get("source_line_id") else None, publish=f.get("action") == "publish")
-        if f.get("source_line_id"):
-            con.execute("UPDATE incentive_plan_line SET review_status='approved', reviewed_by=?, reviewed_at=? WHERE line_id=?", (ctx["login_id"], db.now(), int(f["source_line_id"])))
-            con.commit()
+        common = dict(name=f["name"], windows=windows, tiers=tiers, by=ctx["login_id"], kind=f.get("kind", "weekly"),
+                      insurer_id=ins["insurer_id"] if ins else None, insurer_name=(ins["name"] if ins else f.get("insurer_name", "").strip() or None),
+                      sector=f.get("sector") or None, categories=f.getlist("categories"), target_note=f.get("target_note", "").strip() or None,
+                      metric=f.get("metric", "premium_monthly"), date_basis=f.get("date_basis", "contract_date"), per_contract_cap=num(f.get("cap")),
+                      combine_rule=f.get("combine_rule") or None, pay_timing=f.get("pay_timing") or None, caution=f.get("caution", "").strip() or None)
+        if promo_id:
+            res = pm.update(con, promo_id, **common)
+            msg = "고쳤습니다. 바뀐 항목 " + str(len(res["changed"])) + "개를 변경 기록에 남겼습니다." if res["changed"] else "바뀐 것이 없습니다."
+        else:
+            pm.create(con, period_ym=ctx["ym"], source_line_id=int(f["source_line_id"]) if f.get("source_line_id") else None,
+                      publish=f.get("action") == "publish", **common)
+            if f.get("source_line_id"):
+                con.execute("UPDATE incentive_plan_line SET review_status='approved', reviewed_by=?, reviewed_at=? WHERE line_id=?", (ctx["login_id"], db.now(), int(f["source_line_id"])))
+                con.commit()
+            msg = "프로모션을 " + ("게시했습니다." if f.get("action") == "publish" else "초안으로 저장했습니다.")
     except (ValueError, KeyError) as e:
-        back = f"/promo/tiers?err={quote(str(e))}" + (f"&line={f.get('source_line_id')}" if f.get("source_line_id") else "")
+        back = f"/promo/tiers?err={quote(str(e))}" + (f"&edit={promo_id}" if promo_id else (f"&line={f.get('source_line_id')}" if f.get("source_line_id") else ""))
         return RedirectResponse(back, status_code=303)
-    return RedirectResponse(f"/promo/publish?msg={quote('프로모션을 ' + ('게시했습니다.' if f.get('action') == 'publish' else '초안으로 저장했습니다.'))}", status_code=303)
+    return RedirectResponse(f"/promo/publish?msg={quote(msg)}", status_code=303)
+
+
+# ---------------------------------------------------------------- 조직 부문 시상
+def _manageable_orgs(con, ctx):
+    q, ids = _in(ctx["org_ids"])
+    return _q(con, f"SELECT org_id, name, level FROM org_unit WHERE org_id IN ({q}) AND active=1 ORDER BY org_id", tuple(ids)) if ctx["role"] in ("main", "manager") else []
+
+
+@app.get("/promo/org-awards", response_class=HTMLResponse)
+def org_awards(request: Request, edit: int | None = None, new: int | None = None, msg: str | None = None, err: str | None = None,
+               ctx: dict = Depends(guard), con=Depends(get_con)):
+    ym = ctx["ym"]
+    manage = ctx["role"] in ("main", "manager")
+    blocks = []
+    for d in oa.visible(con, ctx, ym, include_inactive=manage):
+        mine = oa.can_manage(ctx, d["org_id"])
+        if d["status"] != "active" and not mine:
+            continue
+        rows = oa.standing(con, d, ym)
+        done = oa.confirmed(con, d["division_id"], ym)
+        me = next((r for r in rows if r["agent_id"] == ctx["agent_id"]), None) if ctx["agent_id"] else None
+        blocks.append({**d, "rows": oa.view_rows(rows, ctx), "total": len(rows), "podium": (done or [r for r in rows if r["winner"]])[:3], "confirmed": done,
+                       "me": me, "top": rows[0]["value"] if rows else 0, "can_manage": mine})
+    form = None
+    if manage and (edit or new):
+        d = oa.load(con, edit) if edit else None
+        if edit and (not d or not oa.can_manage(ctx, d["org_id"])):
+            raise HTTPException(403, "이 부문을 고칠 권한이 없습니다.")
+        form = d or {"division_id": "", "org_id": None, "name": "", "metric": "converted_premium", "sector": None, "category_list": [], "top_n": 3,
+                     "min_value": None, "effective_from": ym, "effective_to": None, "note": "", "rewards": {}}
+    return page(request, ctx, "org_awards.html", blocks=blocks, form=form, manage=manage, msg=msg, err=err, oa=oa,
+                orgs=_manageable_orgs(con, ctx), cats=_q(con, "SELECT code, name FROM product_category ORDER BY sort_order"))
+
+
+@app.post("/promo/org-awards")
+async def org_awards_action(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
+    f = await request.form()
+    action, by = f.get("action"), ctx["login_id"]
+
+    def deny():
+        auth.log(con, by, "access_denied", f"/promo/org-awards {action}")
+        raise HTTPException(403, "이 부문을 다룰 권한이 없습니다.")
+    try:
+        if action == "save":
+            org_id = int(f["org_id"])
+            division_id = int(f["division_id"]) if f.get("division_id") else None
+            old = oa.load(con, division_id) if division_id else None
+            if not oa.can_manage(ctx, org_id) or (old and not oa.can_manage(ctx, old["org_id"])):
+                deny()
+            oa.save(con, by=by, org_id=org_id, name=f.get("name", ""), metric=f.get("metric", ""), sector=f.get("sector") or None, categories=f.getlist("categories"),
+                    top_n=f.get("top_n") or 0, min_value=f.get("min_value") or None, effective_from=f.get("effective_from", ""), effective_to=f.get("effective_to") or None,
+                    note=f.get("note", "").strip() or None, rewards=[(i, f.get(f"reward_{i}", "")) for i in range(1, 6)], division_id=division_id)
+            msg = "부문을 고쳤습니다." if division_id else "부문을 만들었습니다."
+        elif action in ("active", "inactive", "confirm"):
+            d = oa.load(con, int(f["division_id"]))
+            if not d or (action == "confirm" and ctx["role"] != "main") or not oa.can_manage(ctx, d["org_id"]):
+                deny()
+            if action == "confirm":
+                msg = f"{d['name']}의 수상자 {oa.confirm(con, d['division_id'], ctx['ym'], by)}명을 확정했습니다."
+            else:
+                oa.set_status(con, d["division_id"], action, by)
+                msg = "부문을 다시 열었습니다." if action == "active" else "부문을 닫았습니다."
+        else:
+            raise ValueError("처리할 수 없는 요청입니다.")
+    except (ValueError, KeyError) as e:
+        back = "&edit=" + f["division_id"] if f.get("division_id") and action == "save" else ("&new=1" if action == "save" else "")
+        return RedirectResponse(f"/promo/org-awards?err={quote(str(e))}{back}", status_code=303)
+    return RedirectResponse(f"/promo/org-awards?msg={quote(msg)}", status_code=303)
 
 
 @app.get("/{rest:path}", response_class=HTMLResponse)

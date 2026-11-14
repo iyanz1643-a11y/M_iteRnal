@@ -127,3 +127,47 @@ def test_password_change(env):
     c2 = TestClient(env["app"], follow_redirects=False)
     assert c2.post("/login", data={"login_id": agent, "password": PW}).status_code == 401
     assert c2.post("/login", data={"login_id": agent, "password": "new-pass-5678"}).status_code == 303
+
+
+def test_org_award_actions_are_limited_by_role(env):
+    """부문 화면은 모두에게 열려 있지만 만들기, 닫기, 확정은 권한이 있는 사람만 한다."""
+    from app.engine import org_award as oa
+    con = env["con"]
+    manager, _ = ids(env)
+    # 앞의 시험이 첫 설계사의 비밀번호를 바꿔 두었으므로 다른 설계사를 쓴다
+    agent = con.execute("SELECT internal_code FROM agent WHERE agent_id NOT IN (SELECT agent_id FROM org_manager) ORDER BY agent_id LIMIT 1 OFFSET 1").fetchone()[0]
+    branch = con.execute("SELECT m.org_id, o.parent_id FROM org_manager m JOIN agent a ON a.agent_id=m.agent_id JOIN org_unit o ON o.org_id=m.org_id WHERE a.internal_code=?", (manager,)).fetchone()
+    form = lambda org, **kw: {"action": "save", "org_id": org, "name": "시험 부문", "metric": "converted_premium", "top_n": 3, "effective_from": "202601", **kw}
+    count = lambda: con.execute("SELECT COUNT(*) FROM org_award_division").fetchone()[0]
+    assert client_for(env, agent).post("/promo/org-awards", data=form(branch["org_id"])).status_code == 403 and count() == 0
+    m = client_for(env, manager)
+    assert m.post("/promo/org-awards", data=form(branch["parent_id"])).status_code == 403 and count() == 0        # 위 조직의 부문은 만들 수 없다
+    assert m.post("/promo/org-awards", data=form(branch["org_id"], reward_1="포상")).status_code == 303 and count() == 1
+    did = con.execute("SELECT division_id FROM org_award_division").fetchone()[0]
+    assert m.post("/promo/org-awards", data={"action": "confirm", "division_id": did}).status_code == 403             # 확정은 메인 관리자만
+    assert m.get(f"/promo/org-awards?edit={did}").status_code == 200
+    hq_div = oa.save(con, by="t", org_id=branch["parent_id"], name="본부 부문", metric="converted_premium", top_n=3, effective_from="202601")
+    assert m.get(f"/promo/org-awards?edit={hq_div}").status_code == 403
+    assert m.post("/promo/org-awards", data={"action": "inactive", "division_id": hq_div}).status_code == 403
+    admin = client_for(env, "admin")
+    assert admin.post("/promo/org-awards", data={"action": "confirm", "division_id": did}).status_code == 303
+    assert admin.post("/promo/org-awards", data=form(branch["org_id"], top_n=0)).status_code == 303 and count() == 2  # 잘못된 값은 저장하지 않는다
+    assert client_for(env, agent).get("/promo/org-awards").status_code == 200
+
+
+def test_promotion_edit_screen(env):
+    from app.engine import promotion as pm
+    con = env["con"]
+    manager, agent = ids(env)
+    pid = pm.create(con, period_ym="202610", name="고칠 것", kind="weekly", windows=[("1주차", "2026-10-01", "2026-10-09")],
+                    tiers=[(50000, "rate", 0.5, None)], by="t", publish=True)
+    admin = client_for(env, "admin")
+    html = admin.get(f"/promo/tiers?edit={pid}").text
+    assert "프로모션 고치기" in html and 'value="고칠 것"' in html and 'value="50"' in html      # 비율은 퍼센트로 보여 준다
+    r = admin.post("/promo/tiers", data={"promo_id": pid, "name": "고친 것", "kind": "weekly", "w_label_1": "1주차", "w_from_1": "2026-10-01", "w_to_1": "2026-10-09",
+                                         "t_min_1": "70000", "t_kind_1": "fixed", "t_value_1": "30000"})
+    assert r.status_code == 303
+    p = pm._load(con, pid)
+    assert p["name"] == "고친 것" and p["status"] == "published" and p["tiers"][0]["min_value"] == 70000 and p["tiers"][0]["reward_kind"] == "fixed"
+    assert client_for(env, manager).get(f"/promo/tiers?edit={pid}").status_code == 403
+    assert admin.get("/promo/tiers?edit=99999").status_code == 404

@@ -24,6 +24,7 @@
 {% if not cards %}<div class="card"><div class="k">아직 만든 프로모션이 없습니다</div></div>{% endif %}
 <div class="pgrid">{% for p in cards %}<div>{{ pr.card(p) }}
   <form method="post" action="/promo/publish" class="actions" style="margin:8px 0 0 8px"><input type="hidden" name="promo_id" value="{{ p.promo_id }}">
+  <a href="/promo/tiers?edit={{ p.promo_id }}" style="display:inline-block;border-radius:999px;background:var(--card);color:var(--ink);font-size:14px;font-weight:600;padding:7px 14px">고치기</a>
   {% if p.status == 'published' %}<button class="ghost" name="action" value="withdrawn">회수</button>
   {% else %}<button class="ghost" name="action" value="published">게시</button><button class="ghost" name="action" value="delete">지우기</button>{% endif %}</form></div>{% endfor %}</div>
 <p style="margin-top:28px"><a href="/promo/tiers">시상안에 없는 프로모션 새로 만들기</a></p>

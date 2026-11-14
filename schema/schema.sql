@@ -741,3 +741,47 @@ CREATE TABLE promotion_rate (
     rate            NUMERIC NOT NULL,
     pay_timing      TEXT NOT NULL
 );
+
+-- ---------------------------------------------------------------------------
+-- 조직 부문 시상: 조직이 스스로 정해 매달 주는 시상. 부문 하나는 지표, 조건, 범위, 선발 인원의 조합이다.
+-- 순위는 계약 원장에서 그때그때 계산하고, 메인 관리자가 확정하면 그 달의 수상자를 따로 남긴다.
+-- ---------------------------------------------------------------------------
+CREATE TABLE org_award_division (
+    division_id     INTEGER PRIMARY KEY,
+    org_id          INTEGER NOT NULL REFERENCES org_unit(org_id),   -- 부문을 연 조직. 그 조직과 아래의 설계사가 대상이다
+    name            TEXT NOT NULL,
+    metric          TEXT NOT NULL,                -- converted_premium / premium_monthly / policy_count
+    sector          TEXT,                         -- life / nonlife / NULL(전체)
+    categories      TEXT,                         -- 대상 구분 코드를 쉼표로. NULL 이면 전 구분
+    top_n           INTEGER NOT NULL DEFAULT 3,   -- 선발 인원
+    min_value       NUMERIC,                      -- 이 값에 못 미치면 순위에 넣지 않는다
+    effective_from  TEXT NOT NULL,                -- 적용 시작 월 YYYYMM
+    effective_to    TEXT,
+    note            TEXT,
+    status          TEXT NOT NULL DEFAULT 'active', -- active / inactive
+    created_by      TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    updated_by      TEXT,
+    updated_at      TEXT
+);
+
+CREATE TABLE org_award_reward (
+    id              INTEGER PRIMARY KEY,
+    division_id     INTEGER NOT NULL REFERENCES org_award_division(division_id),
+    rank_no         INTEGER NOT NULL,
+    reward_label    TEXT NOT NULL,
+    UNIQUE (division_id, rank_no)
+);
+
+CREATE TABLE org_award_result (
+    result_id       INTEGER PRIMARY KEY,
+    division_id     INTEGER NOT NULL REFERENCES org_award_division(division_id),
+    period_ym       TEXT NOT NULL,
+    rank_no         INTEGER NOT NULL,
+    agent_id        INTEGER NOT NULL REFERENCES agent(agent_id),
+    value           NUMERIC NOT NULL,
+    reward_label    TEXT,
+    confirmed_by    TEXT NOT NULL,
+    confirmed_at    TEXT NOT NULL,
+    UNIQUE (division_id, period_ym, agent_id)
+);

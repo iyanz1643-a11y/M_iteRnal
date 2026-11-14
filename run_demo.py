@@ -58,6 +58,8 @@ def main(path=db.DEFAULT_DB):
 
     print(f"[promotion] 샘플 프로모션 {samples.seed_promotions(con)}건 게시 (시상안의 정률 시책과 주차·연계·여행·가동 예시)")
 
+    print(f"[org award] 샘플 조직 부문 {samples.seed_org_awards(con)}개 등록 (본부별 인정업적·손해보험 건수 부문, 지점 부문 예시)")
+
     # 4) 원수사 정산서 엑셀 생성 → 적재 → 대사
     stmt_files, injected = samples.write_statement_files(con, AS_OF, RAW)
     for f in stmt_files:
