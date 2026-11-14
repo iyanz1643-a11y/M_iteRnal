@@ -80,6 +80,19 @@ def test_linked_takes_the_lower_tier_and_breaks_when_a_window_is_missed(env):
     assert not early["broken"] and early["status"] == "in_progress"
 
 
+def test_linked_cannot_rise_above_a_closed_window(env):
+    con, a1, a2, add = env["con"], env["a1"], env["a2"], env["add"]
+    add(a1, "2026-09-25", 60_000)                       # 앞 창은 1구간으로 끝났다
+    add(a1, "2026-10-03", 500_000)                      # 뒤 창을 아무리 채워도 1구간이다
+    add(a2, "2026-09-25", 250_000)                      # 앞 창 3구간
+    add(a2, "2026-10-03", 120_000)                      # 뒤 창 2구간, 더 채우면 3구간까지 간다
+    pid = pm.create(con, period_ym=YM, name="연계", kind="linked", tiers=TIERS, by="t",
+                    windows=[("9월 4주", "2026-09-20", "2026-09-30"), ("10월 1주", "2026-10-01", "2026-10-09")])
+    r = pm.progress(con, pm._load(con, pid), [a1, a2], date(2026, 10, 5))
+    assert r[a1]["tier"]["tier_no"] == 1 and r[a1]["next"] is None and r[a1]["capped"] and r[a1]["amount"] == 30_000
+    assert r[a2]["tier"]["tier_no"] == 2 and r[a2]["next"]["gap"] == 80_000 and not r[a2]["capped"]
+
+
 def test_sum_rule_and_travel_reward_has_no_amount(env):
     con, a1, add = env["con"], env["a1"], env["add"]
     add(a1, "2026-10-03", 200_000)

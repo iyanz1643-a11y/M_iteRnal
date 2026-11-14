@@ -19,7 +19,7 @@
 {% if sel.windows|length > 1 %}{% for w in r.windows %}<td class="num hide-sm">{{ pr.val(w.value, sel) }}</td>{% endfor %}{% endif %}
 <td class="num"><span class="minibar hide-sm"><i style="width:{{ (r.value / summary.top * 100)|round(1) if summary.top else 0 }}%"></i></span>{{ pr.val(r.value, sel) }}</td>
 <td>{% if r.broken %}<span class="chip bad">무효</span>{% elif r.tier %}<span class="chip good">{{ r.tier.tier_no }}구간</span>{% elif sel.kind == 'rate' and r.value %}<span class="chip good">대상</span>{% else %}<span class="chip">없음</span>{% endif %}</td>
-<td>{% if r.next %}{{ pr.val(r.next.gap, sel) }}{% elif r.tier %}<span class="chip blue">최고 구간</span>{% else %}-{% endif %}</td>
+<td>{% if r.next %}{{ pr.val(r.next.gap, sel) }}{% elif r.capped %}<span class="chip">앞 구간에서 확정</span>{% elif r.tier and sel.tiers and r.tier.tier_no == sel.tiers[-1].tier_no %}<span class="chip blue">최고 구간</span>{% else %}-{% endif %}</td>
 {% if show_amount %}<td class="num">{% if r.amount is not none %}{{ r.amount|won }}원{% elif r.reward %}{{ r.reward }}{% else %}-{% endif %}</td>{% endif %}</tr>{% endfor %}
 </table></div>
 <p class="cap">구간과 금액은 예상입니다. 성립한 계약만 세고 청약, 반송, 철회는 세지 않습니다. 기준일은 {{ pm.BASIS_KO[sel.date_basis] }}입니다.</p>

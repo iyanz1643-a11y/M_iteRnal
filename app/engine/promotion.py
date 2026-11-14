@@ -234,7 +234,7 @@ def progress(con, p, agent_ids, ref: date) -> dict:
         wins = [{**w, **s, "value": v, "tier": (_tier_of(p["tiers"], v) if p["combine_rule"] == "all" else None)}
                 for w, s, v in zip(p["windows"], states, per_window)]
         total = sum(per_window)
-        res = {"windows": wins, "value": total, "tier": None, "next": None, "reward": None, "amount": None, "status": "in_progress", "broken": False}
+        res = {"windows": wins, "value": total, "tier": None, "next": None, "reward": None, "amount": None, "status": "in_progress", "broken": False, "capped": False}
         if p["kind"] == "rate":
             plain = [r for r in p["rates"] if not r["option_label"]]
             if plain and len(plain) == len(p["rates"]):
@@ -255,6 +255,12 @@ def progress(con, p, agent_ids, ref: date) -> dict:
                 tier, base = _tier_of(p["tiers"], total), total
             res["tier"] = tier
             nxt = next((t for t in p["tiers"] if t["min_value"] > base), None)
+            if p["combine_rule"] == "all":
+                closed = [w["tier"]["tier_no"] if w["tier"] else 0 for w in wins if w["state"] == "ended"]
+                cap = min(closed) if closed else None                         # 끝난 창의 구간보다 위로는 올라갈 수 없다
+                if cap is not None and (nxt is None or nxt["tier_no"] > cap):
+                    nxt = None
+                    res["capped"] = bool(p["tiers"]) and 0 < cap < p["tiers"][-1]["tier_no"]
             if nxt and not res["broken"]:
                 res["next"] = {"tier_no": nxt["tier_no"], "min_value": nxt["min_value"], "gap": nxt["min_value"] - base, "reward": reward_text(nxt)}
             top = p["tiers"][-1]["min_value"] if p["tiers"] else 0
