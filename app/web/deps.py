@@ -6,6 +6,7 @@ import os
 import pathlib
 import secrets
 from datetime import date
+from urllib.parse import urlencode
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.templating import Jinja2Templates
@@ -19,6 +20,17 @@ templates = Jinja2Templates(directory=HERE / "templates")
 templates.env.filters["won"] = lambda v: f"{int(v):,}" if v is not None else "-"
 templates.env.filters["n"] = lambda v: f"{(v or 0):g}"
 templates.env.filters["md"] = lambda d: f"{int(d[5:7])}월 {int(d[8:10])}일" if d else ""
+templates.env.filters["when"] = lambda t: f"{int(t[5:7])}월 {int(t[8:10])}일 {int(t[11:13])}시 {t[14:16]}분" if t and len(t) >= 16 else ""
+templates.env.filters["ymko"] = lambda ym: f"{ym[:4]}년 {int(ym[4:6])}월" if ym and len(ym) >= 6 else ""
+
+
+def _qs(params: dict, **kw) -> str:
+    """화면의 거르기 단추가 쓰는 주소 뒤 꼬리. params 에 kw 를 덮어쓰고 빈 값은 뺀다."""
+    merged = {**params, **kw}
+    return "?" + urlencode({k: v for k, v in merged.items() if v not in (None, "")})
+
+
+templates.env.globals["qs"] = _qs
 
 
 def get_con():
@@ -108,12 +120,22 @@ async def csrf_protect(request: Request):
 templates.env.globals["csrf_token"] = csrf_token
 
 
+NO_STORE = "no-store"
+
+
 def page(request, ctx, name, status_code=200, **kw):
+    """로그인한 화면 하나를 그린다. 로그인한 모든 HTML 은 여기를 지난다.
+
+    Cache-Control: no-store 를 붙여 브라우저와 중간 캐시가 화면을 남기지 않게 한다. 공용 기기에서 뒤로 가기나 캐시로
+    다른 사람의 실적이 보이지 않게 하려는 것이다. 로그인 화면과 정적 파일은 여기를 지나지 않는다.
+    """
     cfg = menu.load()
-    return templates.TemplateResponse(request, name, status_code=status_code, context={
+    resp = templates.TemplateResponse(request, name, status_code=status_code, context={
         "ctx": ctx, "groups": menu.for_ctx(ctx), "mobile_tabs": cfg["mobile_tabs"], "item": ctx.get("item"),
         "path": request.url.path, "SCOPES": menu.SCOPES, "PHASES": menu.PHASES, "STATUS": menu.STATUS,
         "LEVEL_KO": auth.LEVEL_KO, "HEAD_KO": auth.HEAD_KO, "pm": pm, **kw})
+    resp.headers["Cache-Control"] = NO_STORE
+    return resp
 
 
 # ---------------------------------------------------------------- 조회 도우미

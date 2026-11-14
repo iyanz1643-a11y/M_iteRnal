@@ -51,6 +51,21 @@ ACTION_KO = {
     "card_preview": "명함 신청본 미리 봄",
     "card_link": "명함 주소 이음",
     "card_unlink": "명함 주소 끊음",
+    "card_code_issue": "명함 수료 코드 발급",
+    # 교육. 행위 코드는 app/engine/education.py 의 _audit 호출과 같다
+    "edu_course_create": "교육 과정 등록",
+    "edu_course_update": "교육 과정 고침",
+    "edu_course_active": "교육 과정 다시 엶",
+    "edu_course_closed": "교육 과정 닫음",
+    "edu_session_create": "교육 차수 등록",
+    "edu_session_update": "교육 차수 고침",
+    "edu_completion_confirm": "교육 수료 확인",
+    "edu_completion_void": "교육 수료 뺌",
+    "edu_batch_void": "수료자 명부 배치 뺌",
+    "edu_card_code_request": "명함 수료 코드 요청",
+    "edu_card_code_issued": "명함 수료 코드 발급 기록",
+    "edu_card_code_failed": "명함 수료 코드 발급 실패",
+    "edu_card_code_revoke": "명함 수료 코드 내림",
     # 기존 운영 도구
     "quality_resolve": "품질검증 처리",
     "diff_update": "대사 차이 처리",
@@ -116,6 +131,22 @@ class _Names:
     def doc(self, did):
         return self._one("doc", "SELECT COALESCE(title, file_path) FROM incentive_source_doc WHERE doc_id=?", did)
 
+    def course(self, cid):
+        return self._one("course", "SELECT name FROM edu_course WHERE course_id=?", cid)
+
+    def session(self, sid):
+        r = self._one("session", "SELECT c.name || ' ' || s.session_no || '차' FROM edu_session s JOIN edu_course c ON c.course_id=s.course_id "
+                                 "WHERE s.session_id=?", sid)
+        return r
+
+    def completion(self, cid):
+        return self._one("completion", "SELECT a.internal_code || ' · ' || c.name FROM edu_completion e JOIN agent a ON a.agent_id=e.agent_id "
+                                       "JOIN edu_course c ON c.course_id=e.course_id WHERE e.completion_id=?", cid)
+
+    def card_issue(self, iid):
+        return self._one("card_issue", "SELECT a.internal_code || ' · ' || k.card_course_code || ' ' || k.completed_ym FROM edu_card_code k "
+                                       "JOIN agent a ON a.agent_id=k.agent_id WHERE k.issue_id=?", iid)
+
     def agent_code(self, aid):
         return self._one("agent", "SELECT internal_code FROM agent WHERE agent_id=?", aid)
 
@@ -159,6 +190,16 @@ def target_ko(action: str, target, names: _Names) -> str:
             return _org_target(t, names)
         if action.startswith("account_"):
             return f"계정: {t}"
+        if action.startswith("edu_"):
+            return _edu_target(action, t, names)
+        if action == "card_code_issue":
+            _, course, ym = (t.split(":") + ["", "", ""])[:3]
+            out = "명함 수료 코드"
+            if course and course != "-":
+                out += f": {course} 과정"
+            if ym and ym != "-":
+                out += f" · {ym[:4]}년 {int(ym[5:7])}월" if re.fullmatch(r"20\d\d-\d\d", ym) else f" · {ym}"
+            return out
         if action == "access_denied":
             path, _, rest = t.partition(" ")
             item = menu.find(path)
@@ -189,6 +230,28 @@ def target_ko(action: str, target, names: _Names) -> str:
                 return f"대사 차이 {key}번"
     except Exception:                             # 이름표가 깨져도 기록은 보여야 한다
         return t
+    return t
+
+
+def _edu_target(action: str, t: str, names: _Names) -> str:
+    """교육 행위의 대상은 번호 하나다. 과정, 차수, 수료, 명부 배치, 수료 코드 발급 번호 가운데 무엇인지는 행위 코드로 안다."""
+    n = _num(t)
+    if n is None:
+        return t
+    if action.startswith("edu_course_"):
+        name = names.course(n)
+        return f"과정: {name}" if name else t
+    if action.startswith("edu_session_"):
+        name = names.session(n)
+        return f"차수: {name}" if name else t
+    if action.startswith("edu_completion_"):
+        name = names.completion(n)
+        return f"수료: {name}" if name else t
+    if action == "edu_batch_void":
+        return f"명부 배치 {n}"
+    if action.startswith("edu_card_code_"):
+        name = names.card_issue(n)
+        return f"수료 코드: {name}" if name else t
     return t
 
 

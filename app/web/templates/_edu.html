@@ -1,0 +1,5 @@
+{# 교육 화면이 함께 쓰는 조각. 색은 상태를 뜻할 때만: 수료 초록, 기한 지남과 임박 빨강 #}
+{% macro state(x) %}{% if x.state == 'done' %}<span class="chip good">수료</span>{% elif x.state == 'overdue' %}<span class="chip bad">기한 지남 {{ -x.days_left }}일</span>{% elif x.state == 'soon' %}<span class="chip bad">{{ '오늘 마감' if x.days_left == 0 else 'D-' ~ x.days_left }}</span>{% elif x.days_left is not none %}<span class="chip">D-{{ x.days_left }}</span>{% else %}<span class="chip">기한 없음</span>{% endif %}{% endmacro %}
+{% macro day(d, year='') %}{% if d %}{% if d[:4] != year %}{{ d[:4] }}년 {% endif %}{{ d|md }}{% else %}기한 없음{% endif %}{% endmacro %}
+{% macro pct(r) %}{{ '-' if r is none else '%g'|format((r * 1000)|round / 10) ~ '%' }}{% endmacro %}
+{% macro flashbox(f) %}{% if f %}<div class="{{ 'okmsg' if f.kind == 'ok' else 'alert' }}{{ ' bad' if f.kind == 'bad' }}" role="status" style="margin-top:24px">{{ f.text }}{% if f.detail %}<div class="flash-detail">{{ f.detail }}</div>{% endif %}</div>{% endif %}{% endmacro %}

@@ -1,0 +1,49 @@
+{% extends "base.html" %}{% import "_perf.html" as pf %}
+{% block body %}
+<p class="eyebrow">{{ prev|ymko }} · {{ '마감 확정' if closed else '마감 전' }}</p>
+<h1 class="display">명예의전당</h1>
+<p class="lede">지난달 순위와 수상자입니다. 이번 달 순위는 집계 중이라 랭킹 화면에서 봅니다.</p>
+
+<h2 class="sec">{{ prev[4:]|int }}월 전체 순위</h2>
+<div class="seg perf-seg">{% for k, v in METRICS.items() %}<a class="{{ 'on' if k == metric }}" href="{{ path }}{{ qs({}, metric=k if k != 'recognized_premium' else '') }}">{{ v }}</a>{% endfor %}</div>
+{% set unit = '건' if metric == 'net_count' else '원' %}
+{% if rank is none %}<div class="card"><div class="k">볼 수 있는 순위가 없습니다</div></div>
+{% elif not rank.rows %}<div class="card"><div class="k">{{ prev|ymko }} 랭킹 계산이 없습니다</div><div class="cap">월 랭킹을 계산하면 여기에 보입니다.</div></div>
+{% else %}
+<p class="cap">{{ rank.root.name }} 전체 · {{ rank.run_at|when }} 계산{% if closed %} · 마감으로 확정했습니다{% else %} · 그 달 마감 전에 계산한 순위입니다. 마감하면 확정합니다{% endif %}</p>
+{% set podium = rank.rows|selectattr('rank', 'le', 3)|list %}
+{% if podium %}<div class="podium">{% for x in podium[:3] %}<div class="pod {{ 'first' if x.rank == 1 }}"><div class="rk">{{ x.rank }}위</div><div class="nm">{{ x.name }}</div>
+  <div class="vl">{{ pf.val(x.value, unit) }}{{ unit }}</div></div>{% endfor %}</div>{% endif %}
+{% if rank.me %}<p class="cap" style="font-weight:600;color:var(--blue)">내 순위 {{ rank.me.rank }}위 / {{ rank.total }}명 · {{ pf.val(rank.me.value, unit) }}{{ unit }}</p>{% endif %}
+<div class="card tablecard" style="margin-top:8px"><table>
+<tr><th>순위</th><th>성명</th><th class="hide-sm">소속</th><th class="num">{{ METRICS[metric] }}</th></tr>
+{% for x in rank.rows %}<tr class="{{ 'me' if x.agent_id == ctx.agent_id }}"><td class="strong">{{ x.rank }}</td><td class="strong">{{ x.name }}<div class="sm-sub"><span>{{ x.org or '-' }}</span></div></td>
+  <td class="hide-sm">{{ x.org or '-' }}</td><td class="num">{{ pf.val(x.value, unit) }}{{ unit }}</td></tr>{% endfor %}
+</table></div>
+{% if rank.rows|length < rank.total %}<p class="cap">순위에 든 {{ rank.total }}명 가운데 {{ rank.rows|length }}명을 보여 줍니다.{% if ctx.role != 'main' %} 상위 10명과 {{ '우리 조직 사람' if ctx.role == 'manager' else '본인' }}입니다.{% endif %}</p>{% endif %}
+{% endif %}
+
+<h2 class="sec">{{ prev[4:]|int }}월 조직 부문 수상</h2>
+{% if divisions %}{% for d in divisions %}
+<section class="card" style="margin-top:16px">
+  <div class="chips"><span class="chip blue">{{ d.org_name }}</span><span class="chip">{{ d.name }}</span><span class="chip good">확정</span></div>
+  <div style="overflow-x:auto;margin-top:12px"><table>
+    <tr><th>순위</th><th>성명</th><th class="num">{{ d.metric_ko }}</th><th class="hide-sm">시상</th></tr>
+    {% for w in d.winners %}<tr class="{{ 'me' if w.agent_id == ctx.agent_id }}"><td class="strong">{{ w.rank }}</td><td class="strong">{{ w.name }}</td>
+      <td class="num">{% if d.metric == 'policy_count' %}{{ w.value|n }}건{% else %}{{ w.value|won }}원{% endif %}</td>
+      <td class="hide-sm">{% if w.reward %}{{ w.reward }}{% else %}<span class="chip good">수상</span>{% endif %}</td></tr>{% endfor %}
+  </table></div>
+  <p class="cap">{{ d.winners[0].confirmed_at[:10] }}에 확정했습니다.{% if ctx.role != 'main' %} 시상 내용은 본인 줄에만 적습니다.{% endif %}</p>
+</section>{% endfor %}
+{% else %}<div class="card"><div class="k">확정한 조직 부문 수상이 없습니다</div><div class="cap">메인 관리자가 지난달 수상자를 확정하면 여기에 보입니다.</div></div>{% endif %}
+
+<h2 class="sec">수상 이력</h2>
+{% if history %}
+<div class="card tablecard"><table>
+<tr><th>성명</th><th>수상</th><th class="hide-sm">시점</th></tr>
+{% for h in history %}<tr class="{{ 'me' if h.agent_id == ctx.agent_id }}"><td class="strong">{{ h.name }}<div class="sm-sub"><span>{{ h.at|ymko if h.kind == 'division' else h.at ~ '년' }}</span></div></td>
+  <td>{{ h.title }}</td><td class="hide-sm">{{ h.at|ymko if h.kind == 'division' else h.at ~ '년' }}</td></tr>{% endfor %}
+</table></div>
+<p class="cap">{{ {'all': '전체', 'org': '우리 조직', 'self': '본인'}[ctx.scope] }}의 수상 이력입니다. 영업우수와 명예의전당 수상, 확정한 조직 부문 수상을 모았습니다.</p>
+{% else %}<div class="card"><div class="k">수상 이력이 없습니다</div></div>{% endif %}
+{% endblock %}

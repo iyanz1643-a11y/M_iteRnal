@@ -9,7 +9,8 @@
     {% for g in groups if g.id != 'common' %}<a class="{{ 'on' if item and item.group == g.id }}" href="{{ g['items'][0].path }}">{{ g.name }}</a>{% endfor %}
   </nav>
   <div class="nav-right">
-    <a href="/notifications" aria-label="알림함">{{ ui.icon('bell') }}</a>
+    {% set nb = notif_badge(ctx) if notif_badge is defined else 0 %}
+    <a class="bell {{ 'on' if path == '/notifications' }}" href="/notifications" aria-label="알림함{{ ', 안 읽은 알림 %d건'|format(nb) if nb }}">{{ ui.icon('bell') }}{% if nb %}<span class="badge" data-unread="{{ nb }}">{{ nb if nb < 100 else '99+' }}</span>{% endif %}</a>
     <a class="me" href="/me">{{ ui.icon('person') }}<span>{{ ctx.name }} · {{ ctx.role_ko }}</span></a>
     <button class="all" type="button" data-sheet aria-label="전체 메뉴">{{ ui.icon('common') }}</button>
   </div>

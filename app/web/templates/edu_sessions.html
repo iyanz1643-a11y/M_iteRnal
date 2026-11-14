@@ -1,0 +1,51 @@
+{% extends "base.html" %}{% import "_edu.html" as e %}
+{% macro srow(s) %}<tr><td class="strong">{{ e.day(s.date_from, year) }}{% if s.date_to != s.date_from %} ~ {{ e.day(s.date_to, year) }}{% endif %}
+  <div class="sm-sub"><span>{{ s.course_name }} {{ s.session_no }}차</span><span>{{ '온라인' if s.online else (s.place or '-') }} · {{ STATUS_KO.get(s.status, s.status) }}</span></div></td>
+<td class="hide-sm hide-md wrap-sm">{{ s.course_name }}{% if s.required %} <span class="chip blue">필수</span>{% endif %}</td><td class="num hide-sm hide-md">{{ s.session_no }}차</td>
+<td class="hide-sm hide-md wrap-sm">{{ '온라인' if s.online else (s.place or '-') }}</td><td class="num hide-sm hide-md">{{ s.capacity ~ '명' if s.capacity else '-' }}</td>
+<td class="hide-sm"><span class="chip {{ 'bad' if s.status == 'cancelled' else ('blue' if s.status == 'planned' else '') }}">{{ STATUS_KO.get(s.status, s.status) }}</span></td>
+<td class="num">{% if self_scope %}{% if s.completers %}<span class="chip good">수료</span>{% else %}-{% endif %}{% else %}{{ s.completers }}명{% endif %}</td>
+{% if is_main %}<td class="acts"><a class="ghost" href="?edit={{ s.session_id }}&amp;course={{ s.course_id }}#session-form">고치기</a></td>{% endif %}</tr>{% endmacro %}
+{% macro table(rows) %}<div class="card tablecard md-sub"><table>
+<tr><th>날짜</th><th class="hide-sm hide-md">과정</th><th class="num hide-sm hide-md">차수</th><th class="hide-sm hide-md">장소</th><th class="num hide-sm hide-md">정원</th><th class="hide-sm">상태</th><th class="num">{{ '내 수료' if self_scope else '수료' }}</th>{% if is_main %}<th class="acts"></th>{% endif %}</tr>
+{% for s in rows %}{{ srow(s) }}{% endfor %}</table></div>{% endmacro %}
+{% block body %}
+<p class="eyebrow">교육 · {{ as_of }} 기준</p>
+<h1 class="display">차수와 일정</h1>
+<p class="lede">과정마다 날짜, 장소나 온라인, 정원을 봅니다. {{ '차수는 메인 관리자가 등록합니다.' if is_main else '차수 신청은 다음 단계에 붙습니다. 지금은 일정만 봅니다.' }}</p>
+{{ e.flashbox(flash) }}
+{% if error %}<div class="alert bad" role="alert" style="margin-top:24px">{{ error }}</div>{% endif %}
+
+<nav class="seg" aria-label="과정 거르기"><a class="{{ 'on' if not course }}" href="{{ path }}">모든 과정</a>{% for c in courses %}<a class="{{ 'on' if course == c.course_id }}" href="?course={{ c.course_id }}">{{ c.name }}</a>{% endfor %}</nav>
+{% if is_main %}<div class="actions" style="margin-top:12px"><a class="pill" href="?new=1{{ '&course=' ~ course if course }}#session-form">차수 등록</a></div>{% endif %}
+
+{% if form %}
+<section class="card confirm" id="session-form" style="margin-top:16px">
+  <div class="k">{{ '차수 고치기' if form.session_id else '차수 등록' }}</div>
+  <form method="post" action="{{ path }}" class="wide" style="margin-top:12px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="action" value="save"><input type="hidden" name="session_id" value="{{ form.session_id or '' }}">
+    <div class="frow">
+      <label class="f">과정<select name="course_id" required>{% for c in courses %}<option value="{{ c.course_id }}"{{ ' selected' if form.course_id == c.course_id }}>{{ c.name }}</option>{% endfor %}</select></label>
+      <label class="f">시작일<input type="date" name="date_from" value="{{ form.date_from or '' }}" required></label>
+      <label class="f">종료일 · 하루면 비움<input type="date" name="date_to" value="{{ form.date_to or '' }}"></label>
+      <label class="f">상태<select name="status">{% for k, v in STATUS_KO.items() %}<option value="{{ k }}"{{ ' selected' if form.status == k }}>{{ v }}</option>{% endfor %}</select></label>
+    </div>
+    <div class="frow">
+      <label class="f">장소<input class="sm" type="text" name="place" value="{{ form.place or '' }}" maxlength="80"></label>
+      <label class="f">정원 · 비우면 정하지 않음<input type="number" name="capacity" min="1" value="{{ form.capacity or '' }}"></label>
+      <label class="f">메모<input class="sm" type="text" name="note" value="{{ form.note or '' }}" maxlength="200"></label>
+    </div>
+    <div class="checks"><label><input type="checkbox" name="online" value="1"{{ ' checked' if form.online }}> 온라인</label></div>
+    <ul class="notes"><li>장소를 넣거나 온라인으로 표시해야 합니다. 취소한 차수는 지우지 않고 상태로 남깁니다.</li></ul>
+    <div class="actions"><button class="primary" type="submit">{{ '고친 내용 저장' if form.session_id else '차수 등록' }}</button><a class="pill quiet big-pill" href="{{ path }}{{ '?course=' ~ course if course }}">취소</a></div>
+  </form>
+</section>
+{% endif %}
+
+<h2 class="sec">다가오는 차수 {{ upcoming|length }}개</h2>
+{% if upcoming %}{{ table(upcoming) }}{% else %}<div class="card"><div class="k">예정된 차수가 없습니다</div></div>{% endif %}
+
+<h2 class="sec">지난 차수 {{ past|length }}개</h2>
+{% if past %}{{ table(past) }}{% else %}<div class="card"><div class="k">지난 차수가 없습니다</div></div>{% endif %}
+<p class="cap">{{ '수료 칸은 내가 그 차수를 마쳤는지입니다.' if self_scope else '수료 칸은 범위 안 설계사 가운데 그 차수를 마친 사람 수입니다. 퇴사자의 수료도 기록이라 함께 셉니다.' }}</p>
+{% endblock %}

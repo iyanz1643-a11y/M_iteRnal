@@ -1,0 +1,30 @@
+{# 실적 묶음과 내 진척이 함께 쓰는 거르기 단추, 기준 시각, 숫자 꼴 #}
+{% macro seg(path, f, key, options, current) %}
+<div class="seg perf-seg" role="group">{% for k, v in options.items() %}<a class="{{ 'on' if k == current }}" href="{{ path }}{{ qs(f, **{key: k}) }}">{{ v }}</a>{% endfor %}</div>
+{% endmacro %}
+
+{% macro pick_form(path, f, yms, ym, orgs=none, sel=none, org_label='조직') %}
+<form class="perf-pick" method="get" action="{{ path }}">
+  {% for k, v in f.items() if k not in ('ym', 'org') and v not in (none, '') %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+  <label class="f">기준 월<select name="ym">{% for m in yms %}<option value="{{ m }}" {{ 'selected' if m == ym }}>{{ m|ymko }}</option>{% endfor %}</select></label>
+  {% if orgs %}<label class="f">{{ org_label }}<select name="org"><option value="">범위 전체</option>{% for o in orgs %}<option value="{{ o.org_id }}" {{ 'selected' if sel and sel.org_id == o.org_id }}>{{ '　' * o.depth }}{{ o.name }} · {{ o.level_ko }}</option>{% endfor %}</select></label>{% endif %}
+  <button class="ghost perf-go" type="submit">보기</button>
+</form>
+{% endmacro %}
+
+{% macro fresh_line(fresh, note='') %}
+<p class="cap perf-fresh"><span class="dot {{ 'warn' if fresh.stale else ('' if fresh.last_load else 'off') }}"></span>{% if fresh.last_load %}{{ fresh.last_load|when }} 계약 적재 기준입니다.{% else %}아직 적재한 계약 자료가 없습니다.{% endif %}
+{% if fresh.stale %} 적재 뒤 집계를 다시 돌리지 않아 홈과 팀원 현황의 숫자가 이 화면과 다를 수 있습니다. 이 화면은 계약 원장에서 바로 셉니다.{% endif %}{{ ' ' ~ note if note }}</p>
+{% endmacro %}
+
+{% macro val(v, unit) %}{% if unit == '건' %}{{ v|n }}{% else %}{{ v|won }}{% endif %}{% endmacro %}
+
+{# 막대. ui.bars 와 같은 모양이고, 철회로 값이 0 아래가 되면 막대를 그리지 않고 숫자만 적는다 #}
+{% macro bars(rows, name_key, sub_key, val_key) %}
+{% set top = (rows|map(attribute=val_key)|map('default', 0, true)|max) or 0 %}
+<div class="bars">{% for r in rows %}{% set v = r[val_key] or 0 %}
+  <div class="bar-row"><div class="bar-name">{{ r[name_key] }}{% if sub_key %}<small>{{ r[sub_key] or '' }}</small>{% endif %}</div>
+  <div class="bar">{% if v > 0 and top > 0 %}<i style="width:{{ (v / top * 100)|round(1) }}%"></i>{% endif %}</div>
+  <div class="bar-val">{{ v|won }}</div></div>{% endfor %}
+</div>
+{% endmacro %}

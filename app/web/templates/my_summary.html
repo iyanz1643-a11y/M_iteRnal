@@ -1,0 +1,37 @@
+{% extends "base.html" %}{% import "_perf.html" as pf %}
+{% block body %}
+{% set t = s.total %}
+<p class="eyebrow">{{ s.period.label }} · 본인</p>
+<h1 class="display">내 실적</h1>
+{{ pf.seg(path, f, 'pt', PERIODS, pt) }}
+{% if not has_agent %}<div class="card" style="margin-top:24px"><div class="k">설계사 정보가 이어지지 않은 계정입니다</div><div class="cap">메인 관리자에게 계정과 사번 연결을 요청하세요.</div></div>
+{% else %}
+<div class="card my-hero" style="margin-top:20px"><div class="k">인정보험료 <span class="chip good">확정</span></div>
+  <div class="big" data-col="premium">{{ t.converted_premium|won }}<span class="unit">원</span></div>
+  <div class="cap">{% if fresh.last_load %}{{ fresh.last_load|when }} 적재 기준{% else %}적재한 계약 자료가 없습니다{% endif %} · 성립한 계약만 셉니다</div></div>
+<div class="grid g3 keep" style="margin-top:16px">
+  <div class="card"><div class="k">성립</div><div class="mid">{{ t.new_count|n }}<span class="unit">건</span></div></div>
+  <div class="card"><div class="k">순건수</div><div class="mid" data-col="net">{{ t.net_count|n }}<span class="unit">건</span></div></div>
+  <div class="card"><div class="k">철회</div><div class="mid">{{ t.withdrawn_count|n }}<span class="unit">건</span></div></div>
+</div>
+<div class="card" style="margin-top:16px"><div class="k">청약 <span class="chip blue">예정</span></div>
+  <div class="mid">{{ t.applied_count|n }}<span class="unit">건</span></div>
+  <div class="cap">{% if t.applied_count %}성립하면 인정보험료 {{ t.applied_converted|won }}원이 확정으로 옮겨 갑니다. 예정 금액입니다.{% else %}아직 성립을 기다리는 청약이 없습니다.{% endif %}</div></div>
+
+<h2 class="sec">생보와 손보</h2>
+<div class="grid g2 my-two">{% for r in secs.rows %}
+  <div class="card"><div class="k">{{ r.name }}</div><div class="mid">{{ r.converted_premium|won }}<span class="unit">원</span></div><div class="cap">순건수 {{ r.net_count|n }}건</div></div>{% endfor %}
+</div>
+
+<h2 class="sec">구분별</h2>
+{% if cats.shown %}<div class="card"><div class="k" style="margin-bottom:18px">확정 인정보험료</div>{{ pf.bars(cats.shown, 'name', none, 'converted_premium') }}</div>
+{% else %}<div class="card"><div class="k">이 기간에 잡힌 계약이 없습니다</div></div>{% endif %}
+
+{% if s.months|length > 1 %}
+<h2 class="sec">달마다</h2>
+<div class="card"><div class="k" style="margin-bottom:18px">확정 인정보험료</div>{{ pf.bars(s.months, 'label', 'sub', 'converted_premium') }}</div>
+{% endif %}
+{% if yms|length > 1 %}<h2 class="sec">다른 달 보기</h2>{{ pf.pick_form(path, f, yms, ym) }}{% endif %}
+<p class="cap" style="margin-top:20px">철회는 철회한 달에 뺍니다. 같은 기준으로 홈, 기간별 업적, 랭킹이 셉니다. <a href="/perf/ranking">내 순위 보기</a> · <a href="/my/awards">시상 진척</a></p>
+{% endif %}
+{% endblock %}

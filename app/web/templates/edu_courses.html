@@ -1,0 +1,74 @@
+{% extends "base.html" %}{% import "_edu.html" as e %}
+{% block body %}
+<p class="eyebrow">교육 · {{ SCOPES[ctx.scope] }}</p>
+<h1 class="display">과정</h1>
+<p class="lede">과정마다 유형, 필수 여부, 대상, 기한을 정합니다. {{ '과정을 등록하고 고치고 닫는 일은 메인 관리자가 합니다.' if is_main else '과정은 메인 관리자가 등록합니다. 이 화면에서는 보기만 합니다.' }}</p>
+{{ e.flashbox(flash) }}
+{% if error %}<div class="alert bad" role="alert" style="margin-top:24px">{{ error }}</div>{% endif %}
+
+{% set req = courses|selectattr('required')|list %}
+<div class="grid g3 keep" style="margin-top:32px">
+  <div class="card"><div class="k">열린 과정</div><div class="mid">{{ courses|selectattr('status', 'equalto', 'active')|list|length }}<span class="unit">개</span></div></div>
+  <div class="card"><div class="k">필수</div><div class="mid">{{ req|selectattr('status', 'equalto', 'active')|list|length }}<span class="unit">개</span></div></div>
+  <div class="card"><div class="k">명함 수료 코드</div><div class="mid">{{ courses|selectattr('card_course_code')|list|length }}<span class="unit">개</span></div></div>
+</div>
+
+{% if is_main %}
+<div class="actions" style="margin-top:20px"><a class="pill" href="?new=1#course-form">과정 등록</a>
+  <a class="pill quiet" href="{{ path }}{{ '' if show_closed else '?closed=1' }}">{{ '닫은 과정 숨기기' if show_closed else '닫은 과정도 보기' }}</a></div>
+{% endif %}
+
+{% if form %}
+<section class="card confirm" id="course-form" style="margin-top:16px">
+  <div class="k">{{ '과정 고치기' if form.course_id else '과정 등록' }}</div>
+  <h2 class="confirm-title">{{ form.name or '새 과정' }}</h2>
+  <form method="post" action="{{ path }}" class="wide"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="action" value="save"><input type="hidden" name="course_id" value="{{ form.course_id or '' }}">
+    <div class="frow">
+      <label class="f">과정 코드<input class="sm" type="text" name="code" value="{{ form.code or '' }}" required maxlength="20" autocomplete="off"></label>
+      <label class="f">과정명<input class="sm" type="text" name="name" value="{{ form.name or '' }}" required maxlength="80"></label>
+      <label class="f">유형<select name="kind">{% for k, v in KIND_KO.items() %}<option value="{{ k }}"{{ ' selected' if form.kind == k }}>{{ v }}</option>{% endfor %}</select></label>
+      <label class="f">대상 역할<select name="target_role">{% for k, v in TARGET_KO.items() %}<option value="{{ k }}"{{ ' selected' if form.target_role == k }}>{{ v }}</option>{% endfor %}</select></label>
+    </div>
+    <div class="checks"><label><input type="checkbox" name="required" value="1"{{ ' checked' if form.required }}> 필수 과정 · 진척도에 셉니다</label></div>
+    <div class="frow">
+      <label class="f">기한 규칙<select name="deadline_rule">{% for k, v in RULE_KO.items() %}<option value="{{ k }}"{{ ' selected' if form.deadline_rule == k }}>{{ v }}</option>{% endfor %}</select></label>
+      <label class="f">위촉 뒤 며칠 · 위촉 뒤 N일일 때<input type="number" name="deadline_days" min="1" value="{{ form.deadline_days or '' }}"></label>
+      <label class="f">정한 날 · 정한 날일 때<input type="date" name="deadline_date" value="{{ form.deadline_date or '' }}"></label>
+      <label class="f">매년 기한 MM-DD · 매년일 때<input class="sm" type="text" name="deadline_md" value="{{ form.deadline_md or '' }}" pattern="[01][0-9]-[0-3][0-9]" placeholder="11-06"></label>
+    </div>
+    <div class="frow">
+      <label class="f">대상 직급 코드 · 쉼표로, 비우면 모든 직급<input class="sm" type="text" name="target_levels" value="{{ form.target_levels or '' }}" list="levels" autocomplete="off"></label>
+      <label class="f">이날 이후 위촉한 사람만 · 비우면 모두<input type="date" name="target_hired_from" value="{{ form.target_hired_from or '' }}"></label>
+      <label class="f">과정을 연 조직 · 그 조직과 아래가 대상<select name="owner_org_id"><option value="">전체</option>{% for oid, t in orgs %}<option value="{{ oid }}"{{ ' selected' if form.owner_org_id == oid }}>{{ t }}</option>{% endfor %}</select></label>
+      <label class="f">명함 수료 코드 과정<select name="card_course_code"><option value="">없음</option>{% for k, v in CARD_COURSES.items() %}<option value="{{ k }}"{{ ' selected' if form.card_course_code == k }}>{{ v }} ({{ k }})</option>{% endfor %}</select></label>
+    </div>
+    <datalist id="levels">{% for c in levels %}<option value="{{ c }}">{% endfor %}</datalist>
+    <label class="f">메모<textarea name="note" rows="2" maxlength="300">{{ form.note or '' }}</textarea></label>
+    <ul class="notes">
+      <li>고치기 전과 뒤가 변경 기록에 남습니다.</li>
+      <li>수료 기록이 있는 과정은 매년 기한과 다른 기한 사이를 바꿀 수 없습니다. 새 과정을 만들어 주세요.</li>
+      <li>명함 수료 코드 과정을 이으면 수료한 설계사에게 메인 관리자가 수료 코드를 발급할 수 있습니다.</li>
+    </ul>
+    <div class="actions"><button class="primary" type="submit">{{ '고친 내용 저장' if form.course_id else '과정 등록' }}</button><a class="pill quiet big-pill" href="{{ path }}">취소</a></div>
+  </form>
+</section>
+{% endif %}
+
+<h2 class="sec">과정 {{ courses|length }}개</h2>
+{% if courses %}
+<div class="card tablecard"><table>
+<tr><th>과정</th><th class="hide-sm">유형</th><th class="hide-sm hide-md">대상</th><th class="hide-sm">기한</th><th>구분</th>{% if is_main %}<th class="acts"><span class="hide-sm">관리</span></th>{% endif %}</tr>
+{% for c in courses %}<tr id="course-{{ c.course_id }}"><td class="strong wrap-sm">{{ c.name }} <span class="req-code">{{ c.code }}</span>
+  <div class="sm-sub"><span>{{ c.kind_ko }} · {{ c.deadline_ko }}</span><span>대상 {{ c.target_ko }}{% if c.owner %} · {{ c.owner }}{% endif %}</span></div></td>
+<td class="hide-sm">{{ c.kind_ko }}</td>
+<td class="hide-sm hide-md wrap-sm">{{ c.target_ko }}{% if c.level_list %} · 직급 {{ c.level_list|join(', ') }}{% endif %}{% if c.target_hired_from %} · {{ c.target_hired_from }} 이후 위촉{% endif %}{% if c.owner %}<div class="cap" style="margin:2px 0 0">{{ c.owner }}</div>{% endif %}</td>
+<td class="hide-sm">{{ c.deadline_ko }}</td>
+<td><div class="chips">{% if c.status != 'active' %}<span class="chip">닫음</span>{% endif %}{% if c.required %}<span class="chip blue">필수</span>{% else %}<span class="chip">선택</span>{% endif %}{% if c.card_course_code %}<span class="chip">명함 {{ c.card_course_code }}</span>{% endif %}</div></td>
+{% if is_main %}<td class="acts"><form method="post" action="{{ path }}"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="course_id" value="{{ c.course_id }}">
+  <a class="ghost" href="?edit={{ c.course_id }}#course-form">고치기</a>
+  {% if c.status == 'active' %}<button class="ghost" name="action" value="close">닫기</button>{% else %}<button class="ghost" name="action" value="open">다시 열기</button>{% endif %}</form></td>{% endif %}</tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">등록된 과정이 없습니다</div></div>{% endif %}
+<p class="cap">닫은 과정은 진척도에서 빠지고 수료 기록은 남습니다. {% if not is_main %}내 수료 현황은 <a href="/my/education">내 교육</a>에서 봅니다.{% endif %}</p>
+{% endblock %}

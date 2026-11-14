@@ -1,0 +1,62 @@
+{% extends "base.html" %}{% import "_edu.html" as e %}
+{% block body %}
+<p class="eyebrow">내 진척 · {{ as_of }} 기준</p>
+<h1 class="display">내 교육</h1>
+{% if not me %}
+<p class="lede">이 계정은 설계사와 이어져 있지 않아 교육 기록이 없습니다.</p>
+{% else %}
+<p class="lede">{% if me.required_total %}필수 과정 {{ me.required_total }}개 가운데 {{ me.required_done }}개를 마쳤습니다.{% if me.soon %} 기한이 {{ soon_days }}일 안에 오는 과정이 {{ me.soon }}개 있습니다.{% endif %}{% else %}지금 들어야 하는 필수 과정이 없습니다.{% endif %}</p>
+
+<div class="grid g2" style="margin-top:32px">
+  <div class="card"><div class="ringbox">{{ ui.ring((me.rate or 0) * 100, '필수 과정 수료율', color='var(--fill-green)') }}
+    <div><div class="k">필수 과정 수료</div><div class="mid">{{ me.required_done }}<span class="unit">/ {{ me.required_total }}개</span></div>
+    <div class="cap">수료자 명부와 관리자 확인으로 반영합니다</div></div></div></div>
+  <div class="grid g2 keep-2">
+    <div class="card"><div class="k"><span class="dot {{ 'bad' if me.soon else 'off' }}"></span>기한 임박</div><div class="mid">{{ me.soon }}<span class="unit">개</span></div><div class="cap">{{ soon_days }}일 안</div></div>
+    <div class="card"><div class="k"><span class="dot {{ 'bad' if me.overdue else 'off' }}"></span>기한 지남</div><div class="mid">{{ me.overdue }}<span class="unit">개</span></div><div class="cap">아직 수료 전</div></div>
+  </div>
+</div>
+
+<h2 class="sec">남은 필수 과정</h2>
+{% if me.remaining %}
+<div class="card reqs">{% for x in me.remaining %}
+  <div class="req"><div class="req-main"><div class="req-who"><span class="strong">{{ x.course_name }}</span> <span class="req-code">{{ x.course_code }}</span></div>
+    <div class="req-meta"><span class="chip">{{ x.kind_ko }}</span><span>기한 {{ e.day(x.due, year) }}</span>
+    {% set s = upcoming.get(x.course_id) %}{% if s %}<span>다음 차수 {{ e.day(s.date_from, year) }} · {{ '온라인' if s.online else s.place }}</span>{% endif %}</div></div>
+    <div class="req-acts">{{ e.state(x) }}</div></div>
+{% endfor %}</div>
+<p class="cap"><a href="/edu/sessions">차수와 일정</a>에서 날짜와 장소를 봅니다. 교육을 마치면 수료자 명부가 올라오거나 관리자가 확인한 뒤 반영됩니다.</p>
+{% else %}<div class="card"><div class="k"><span class="dot"></span>남은 필수 과정이 없습니다</div></div>{% endif %}
+
+{% if me.required %}
+<h2 class="sec">필수 과정 현황</h2>
+<div class="card tablecard"><table>
+<tr><th>과정</th><th class="hide-sm">유형</th><th class="hide-sm">기한</th><th class="hide-sm">수료일</th><th>상태</th></tr>
+{% for x in me.required %}<tr><td class="strong wrap-sm">{{ x.course_name }}<div class="sm-sub"><span>기한 {{ e.day(x.due, year) }}{% if x.completed_on %} · 수료 {{ e.day(x.completed_on, year) }}{% endif %}</span></div></td>
+<td class="hide-sm">{{ x.kind_ko }}</td><td class="hide-sm">{{ e.day(x.due, year) }}</td>
+<td class="hide-sm">{% if x.completed_on %}{{ e.day(x.completed_on, year) }}{% if x.session_no %} · {{ x.session_no }}차{% endif %}{% if x.late %} <span class="chip warn">기한 뒤 수료</span>{% endif %}{% else %}-{% endif %}</td>
+<td>{{ e.state(x) }}</td></tr>{% endfor %}
+</table></div>
+{% endif %}
+
+{% if me.optional %}
+<h2 class="sec">선택 과정</h2>
+<div class="card tablecard"><table>
+<tr><th>과정</th><th class="hide-sm">유형</th><th>상태</th></tr>
+{% for x in me.optional %}<tr><td class="strong wrap-sm">{{ x.course_name }}</td><td class="hide-sm">{{ x.kind_ko }}</td>
+<td>{% if x.state == 'done' %}<span class="chip good">수료 {{ e.day(x.completed_on, year) }}</span>{% else %}<span class="chip">수강 전</span>{% endif %}</td></tr>{% endfor %}
+</table></div>
+{% endif %}
+
+<h2 class="sec">수료 이력 {{ me.history|length }}건</h2>
+{% if me.history %}
+<div class="card tablecard"><table>
+<tr><th>수료일</th><th>과정</th><th class="hide-sm">차수</th><th class="hide-sm">반영 경로</th></tr>
+{% for h in me.history %}<tr><td>{{ e.day(h.completed_on, year) }}</td><td class="strong wrap-sm">{{ h.course_name }}</td>
+<td class="hide-sm">{% if h.session_no %}{{ h.session_no }}차 · {{ '온라인' if h.online else (h.place or '-') }}{% else %}-{% endif %}</td>
+<td class="hide-sm">{{ SOURCE_KO.get(h.source, h.source) }}</td></tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">아직 수료 기록이 없습니다</div></div>{% endif %}
+<p class="cap">{{ as_of }} 기준입니다. 기한은 위촉일, 정한 날, 매년 기한 가운데 과정마다 정한 규칙으로 셉니다.</p>
+{% endif %}
+{% endblock %}

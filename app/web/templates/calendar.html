@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block body %}
+<p class="eyebrow">{{ SCOPES[ctx.scope] }} · 기한은 기준일 {{ ref|md }}로 따집니다</p>
+<h1 class="display">{{ y }}년 {{ mo }}월 일정 {{ n }}건</h1>
+<p class="lede">프로모션 기간과 마감, 교육 차수, 교육 기한을 한곳에서 봅니다.</p>
+<div class="cal-bar">
+  <div class="seg" style="margin:0" aria-label="달 옮기기"><a href="/calendar?m={{ prev_m }}{{ '&view=' ~ view if view }}" aria-label="지난달">‹ 지난달</a>
+    <a class="{{ 'on' if this_m == '%04d-%02d'|format(y, mo) }}" href="/calendar{{ '?view=' ~ view if view }}">이번 달</a>
+    <a href="/calendar?m={{ next_m }}{{ '&view=' ~ view if view }}" aria-label="다음 달">다음 달 ›</a></div>
+  <div class="seg" style="margin:0" aria-label="보기 방식"><a class="{{ 'on' if view == 'month' }}" href="/calendar?m={{ '%04d-%02d'|format(y, mo) }}&view=month">달력</a>
+    <a class="{{ 'on' if view == 'list' }}" href="/calendar?m={{ '%04d-%02d'|format(y, mo) }}&view=list">목록</a></div>
+</div>
+
+{% if spans %}
+<h2 class="sec">이 달의 프로모션 기간</h2>
+<div class="card cal-spans">{% for p in spans %}
+  <div class="cal-span"><div class="cal-span-main"><div class="strong">{% if p.link %}<a href="{{ p.link }}">{{ p.name }}</a>{% else %}{{ p.name }}{% endif %}</div>
+    <div class="cap" style="margin-top:2px">{{ p.insurer_name or '전 보험사' }} · {{ p.kind_ko }} · {{ p.period_text }}{% if p.timing_ko %} · {{ p.timing_ko }} 지급{% endif %}</div></div>
+    <span class="chip {{ {'active':'blue','upcoming':'','ended':''}[p.phase] }}">{{ {'active':'진행 중','upcoming':'곧 시작','ended':'종료'}[p.phase] }}</span></div>{% endfor %}
+</div>
+{% endif %}
+
+{% if view != 'list' %}
+<div class="cal-month {{ 'force' if view == 'month' }}">
+<h2 class="sec">달력</h2>
+<div class="card cal-card"><table class="cal" aria-label="{{ y }}년 {{ mo }}월 달력">
+  <thead><tr>{% for w in WEEK_KO %}<th scope="col" class="{{ 'sun' if loop.first }}">{{ w }}</th>{% endfor %}</tr></thead>
+  <tbody>{% for wk in weeks %}<tr>{% for c in wk %}
+    <td class="{{ 'out' if not c.in }}{{ ' today' if c.today }}"><div class="cal-day">{{ c.day }}</div>
+      {% if c.in %}{% for e in c.events[:3] %}<div class="cal-ev {{ e.tone }}" title="{{ e.kind_ko }} · {{ e.title }}">{{ e.kind_ko[-2:] }} · {{ e.title }}</div>{% endfor %}
+      {% if c.events|length > 3 %}<div class="cal-more">+{{ c.events|length - 3 }}건</div>{% endif %}{% endif %}</td>{% endfor %}</tr>{% endfor %}</tbody>
+</table></div>
+</div>
+{% endif %}
+
+{% if view != 'month' %}
+<div class="cal-list">
+<h2 class="sec">날짜별 목록</h2>
+{% if not days %}<div class="card"><div class="k">이 달에는 일정이 없습니다</div><div class="cap">다른 달을 골라 보세요.</div></div>
+{% else %}<div class="card notif-list">{% for d in days %}
+  <div class="cal-date {{ 'today' if d.date == today }}">{{ d.date|md }} {{ d.wd }}요일{% if d.date == today %} · 오늘{% endif %}</div>
+  {% for e in d.events %}<div class="notif">
+    <span class="dot {{ {'bad':'bad','warn':'warn','good':'','blue':''}.get(e.tone, 'off') if e.tone else 'off' }}" aria-hidden="true"></span>
+    <div class="notif-main"><div class="notif-meta"><span class="chip {{ e.tone }}">{{ e.kind_ko }}</span></div>
+      <div class="notif-title">{% if e.link %}<a href="{{ e.link }}">{{ e.title }}</a>{% else %}{{ e.title }}{% endif %}</div>
+      <div class="notif-body">{{ e.sub }}</div></div></div>{% endfor %}
+{% endfor %}</div>{% endif %}
+</div>
+{% endif %}
+<p class="cap" style="margin-top:20px">13회차 도래는 도래를 내는 계산이 준비되면 넣습니다. 프로모션의 금액과 구간은 예상이며 확정은 보험사 정산을 따릅니다.</p>
+{% endblock %}

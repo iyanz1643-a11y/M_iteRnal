@@ -13,7 +13,10 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.web.deps import HERE, PASSWORD_PATH, NeedLogin, NeedPasswordChange, csrf_protect, guard, page, templates
-from app.web.routes import auth, card, home, me, org, promo, staff, team
+from app.web.routes import auth, card, home, me, notify, org, promo, schedule, staff, team
+from app.web.routes import edu as edu_routes
+from app.web.routes import my as my_routes
+from app.web.routes import perf as perf_routes
 
 app = FastAPI(title="GA 업무 앱", docs_url=None, redoc_url=None, dependencies=[Depends(csrf_protect)])
 app.add_middleware(SessionMiddleware, secret_key=os.environ.get("APP_SECRET") or secrets.token_hex(32),
@@ -55,6 +58,11 @@ async def _http_error(request: Request, exc: HTTPException):
 
 for r in (auth, home, team, org, staff, me, promo, card):
     app.include_router(r.router)
+for r in (notify, schedule):                 # 공통 묶음의 알림함과 일정
+    app.include_router(r.router)
+for r in (perf_routes, my_routes):            # 실적 묶음과 내 진척의 실적 요약, 시상 진척
+    app.include_router(r.router)
+app.include_router(edu_routes.router)         # 교육 묶음, 내 교육, 교육 진척도, 수료자 명부 안내
 
 
 @app.get("/favicon.ico", include_in_schema=False)

@@ -1,0 +1,36 @@
+{% extends "base.html" %}{% import "_perf.html" as pf %}
+{% block body %}
+{% set t = b.total %}
+<p class="eyebrow">{{ b.period.label }} · {{ SCOPES[ctx.scope] }}{% if sel %} · {{ sel.name }}{% endif %}{% if sector %} · {{ b.sector_ko }}{% endif %}</p>
+<h1 class="display">{{ '업권별 집계' if by == 'sector' else '구분별 집계' }}</h1>
+<p class="lede">확정 인정보험료를 {{ '생명보험과 손해보험으로' if by == 'sector' else '상품 구분마다' }} 나눠 봅니다. 구분은 계약에 적힌 값을 먼저 씁니다.</p>
+<div class="seg perf-seg"><a class="{{ 'on' if by == 'category' }}" href="{{ path }}{{ qs(f, by='') }}">구분별</a><a class="{{ 'on' if by == 'sector' }}" href="{{ path }}{{ qs(f, by='sector', sector='') }}">업권별</a></div>
+{{ pf.seg(path, f, 'pt', PERIODS, pt) }}
+{% if by == 'category' %}{{ pf.seg(path, f, 'sector', SECTORS, sector) }}{% endif %}
+{{ pf.pick_form(path, f, yms, ym, orgs, sel) }}
+{{ pf.fresh_line(fresh) }}
+
+<div class="grid g2" style="margin-top:24px">
+  <div class="card"><div class="k">인정보험료 <span class="chip good">확정</span></div>
+    <div class="big">{{ t.converted_premium|won }}<span class="unit">원</span></div><div class="cap">순건수 {{ t.net_count|n }}건 · 월납보험료 {{ t.monthly_premium|won }}원</div></div>
+  <div class="card"><div class="k">청약 <span class="chip blue">예정</span></div>
+    <div class="mid">{{ t.applied_count|n }}<span class="unit">건</span></div><div class="cap">예정 인정보험료 {{ t.applied_converted|won }}원</div></div>
+</div>
+
+{% set shown = b.rows|selectattr('converted_premium')|list %}
+{% if shown %}
+<div class="card" style="margin-top:16px"><div class="k" style="margin-bottom:18px">확정 인정보험료</div>{{ pf.bars(shown, 'name', none, 'converted_premium') }}</div>
+{% endif %}
+
+<div class="card tablecard" style="margin-top:16px"><table>
+<tr><th>{{ '업권' if by == 'sector' else '구분' }}</th><th class="num hide-sm">청약</th><th class="num hide-sm hide-md">성립</th><th class="num hide-sm hide-md">철회</th><th class="num hide-sm">순건수</th><th class="num">인정보험료</th></tr>
+{% for r in b.rows %}
+<tr><td class="strong">{{ r.name }}<div class="sm-sub"><span>순건수 {{ r.net_count|n }}건 · 청약 {{ r.applied_count|n }}건</span></div></td>
+  <td class="num hide-sm">{{ r.applied_count|n }}</td><td class="num hide-sm hide-md">{{ r.new_count|n }}</td><td class="num hide-sm hide-md">{{ r.withdrawn_count|n }}</td>
+  <td class="num hide-sm">{{ r.net_count|n }}</td><td class="num">{{ r.converted_premium|won }}</td></tr>
+{% endfor %}
+<tr><td class="strong">합계<div class="sm-sub"><span>순건수 {{ t.net_count|n }}건</span></div></td><td class="num hide-sm">{{ t.applied_count|n }}</td><td class="num hide-sm hide-md">{{ t.new_count|n }}</td>
+  <td class="num hide-sm hide-md">{{ t.withdrawn_count|n }}</td><td class="num hide-sm">{{ t.net_count|n }}</td><td class="num strong">{{ t.converted_premium|won }}</td></tr>
+</table></div>
+<p class="cap">합계는 기간별 업적의 합계와 같습니다. 구분이 비어 있는 계약은 미분류로 모읍니다.</p>
+{% endblock %}

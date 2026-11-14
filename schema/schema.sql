@@ -1117,3 +1117,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_edu_card_code_live ON edu_card_code(agent_
 CREATE UNIQUE INDEX IF NOT EXISTS idx_edu_card_code_serial ON edu_card_code(serial) WHERE serial IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_edu_card_code_hash ON edu_card_code(code_sha256) WHERE code_sha256 IS NOT NULL;
 -- [education:end]
+
+-- ---------------------------------------------------------------------------
+-- 알림함의 읽음 표시 (파트 F). D-10 제안대로 앱 안 알림만 한다.
+-- 알림 자체는 표에 남기지 않는다. 알림함을 열 때 프로모션, 달성 현황, 교육, 명함 승인 대기의 원본에서 그때그때 만든다.
+-- 이 표에는 누가 어느 알림을 읽었는지만 둔다. note_key 는 종류와 대상 번호와 날짜로 만든 글이고 사람 이름과 금액을 넣지 않는다.
+-- 지우지 않는다. 오래된 DB 에서도 이 묶음만 다시 돌릴 수 있게 IF NOT EXISTS 로 쓴다. app/web/routes/notify.py 의 ensure 가 이 묶음을 읽는다.
+-- [notifications:begin]
+CREATE TABLE IF NOT EXISTS notification_read (
+    user_id    INTEGER NOT NULL REFERENCES user_account(user_id),
+    note_key   TEXT NOT NULL,                         -- 예: promo_due:12:2026-10-31, edu_due:3:2026-11-06, card_grant:7
+    read_at    TEXT NOT NULL,
+    PRIMARY KEY (user_id, note_key)
+);
+-- [notifications:end]

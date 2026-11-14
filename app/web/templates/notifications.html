@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block body %}
+<p class="eyebrow">{{ ctx.role_ko }} · {{ SCOPES[ctx.scope] }} · 기준일 {{ ref|md }}</p>
+<h1 class="display">안 읽은 알림 {{ unread }}건</h1>
+<p class="lede">프로모션 게시와 마감, 구간 근접, 교육 기한, 승인 대기를 앱 안에서 알려 드립니다. 금액과 구간은 예상입니다.</p>
+{% if msg %}<div class="okmsg" role="status">{{ msg }}</div>{% endif %}
+<div class="notif-bar">
+  <div class="seg" style="margin:0"><a class="{{ 'on' if show != 'unread' }}" href="/notifications">전체 {{ total }}</a><a class="{{ 'on' if show == 'unread' }}" href="/notifications?show=unread">안 읽음 {{ unread }}</a></div>
+  {% if unread %}<form method="post" action="/notifications"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="action" value="read_all"><input type="hidden" name="show" value="{{ show }}">
+    <button class="ghost notif-all" type="submit">모두 읽음</button></form>{% endif %}
+</div>
+{% if not items %}<div class="card" style="margin-top:24px"><div class="k">{{ '안 읽은 알림이 없습니다' if show == 'unread' else '알림이 없습니다' }}</div>
+  <div class="cap">새 프로모션이 게시되거나 마감, 교육 기한, 승인 대기가 생기면 여기에 보입니다.</div></div>
+{% else %}
+<div class="card notif-list" style="margin-top:24px">
+{% for n in items %}
+<div class="notif {{ 'read' if n.read else 'unread' }}" data-key="{{ n.key }}">
+  <span class="dot {{ {'bad':'bad','warn':'warn','good':'','blue':''}[n.tone] }}{{ ' off' if n.read }}" aria-hidden="true"></span>
+  <div class="notif-main">
+    <div class="notif-meta"><span class="chip {{ n.tone }}">{{ n.kind_ko }}</span><span>{{ n.at|md if n.at else '' }}</span>{% if not n.read %}<span class="sr">안 읽음</span>{% endif %}</div>
+    <div class="notif-title">{% if n.link %}<a href="{{ n.link }}">{{ n.title }}</a>{% else %}{{ n.title }}{% endif %}</div>
+    <div class="notif-body">{{ n.body }}</div>
+  </div>
+  {% if not n.read %}<form method="post" action="/notifications" class="notif-act"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="action" value="read"><input type="hidden" name="key" value="{{ n.key }}"><input type="hidden" name="show" value="{{ show }}">
+    <button class="ghost" type="submit">읽음</button></form>{% endif %}
+</div>
+{% endfor %}
+</div>
+{% endif %}
+<p class="cap" style="margin-top:20px">알림은 앱 안에서만 보입니다. 카카오나 문자로 보내지 않습니다. 프로모션 마감은 3일 전부터, 교육 기한은 7일 전부터 알려 드립니다. 13회차 도래 알림은 계산이 준비되면 넣습니다.</p>
+{% endblock %}

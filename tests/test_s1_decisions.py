@@ -25,7 +25,9 @@ from fastapi.testclient import TestClient
 
 from app import db
 from app.engine import org_award as oa
+from app.engine import performance
 from app.engine import promotion as pm
+from app.engine import results as rs
 from app.web import auth, menu
 from tests.test_s1_verify import _build as build_fake_real
 
@@ -324,8 +326,23 @@ def _secrets(con, agent_ids, ym) -> dict:
             by_month[ym_] = by_month.get(ym_, 0) + (v or 0)
         add(field + " 사람별 달 합계", *by_agent_month.values())
         add(field + " 범위 달 합계", *by_month.values())
-    for r in con.execute(f"SELECT paid, clawback, net FROM v_agent_monthly_commission WHERE agent_id IN ({q})", ids):
-        add("수수료 v_agent_monthly_commission", *tuple(r))
+    by_month = {}
+    for r in con.execute(f"SELECT period_ym, paid, clawback, net FROM v_agent_monthly_commission WHERE agent_id IN ({q})", ids):
+        add("수수료 v_agent_monthly_commission", r["paid"], r["clawback"], r["net"])
+        m = by_month.setdefault(r["period_ym"], [0, 0, 0])
+        for i, k in enumerate(("paid", "clawback", "net")):
+            m[i] += r[k] or 0
+    add("수수료 v_agent_monthly_commission 범위 달 합계", *(v for m in by_month.values() for v in m))
+    # 업적 run 이 곁들여 저장하는 수수료(지급분)와 환수 합계. 사람별 줄과 기간마다의 범위 합계
+    by_period = {}
+    for r in con.execute(f"""SELECT period_type, period_key, commission_amount, clawback_amount FROM agent_performance_summary
+                             WHERE agent_id IN ({q})""", ids):
+        add("수수료 agent_performance_summary.commission_amount", r["commission_amount"])
+        add("환수 agent_performance_summary.clawback_amount", r["clawback_amount"])
+        m = by_period.setdefault((r["period_type"], r["period_key"]), [0, 0])
+        m[0] += r["commission_amount"] or 0
+        m[1] += r["clawback_amount"] or 0
+    add("수수료 agent_performance_summary 범위 기간 합계", *(v for m in by_period.values() for v in m))
     cards, ref = _cards(con, ym)
     for p in cards:
         res = pm.progress(con, p, ids, ref)
@@ -338,9 +355,11 @@ def _secrets(con, agent_ids, ym) -> dict:
 def _public(con, ym, ids=None) -> set:
     """이 계정의 화면에 나와도 되는 숫자. ids 는 그 계정이 보는 설계사이고 None 이면 전체다. 금액이 우연히 이 값과 같으면 그 금액은 보지 않는다.
 
-    범위 안 사람의 실적(계약의 보험료와 인정보험료, 업적 집계 모든 칸과 범위 합계, 랭킹, 목표와 남은 양), 모든 조직의 조직 집계,
+    범위 안 사람의 실적(계약의 보험료와 인정보험료, 업적 집계의 실적 칸과 범위 합계, 구분별과 업권별 집계, 랭킹, 목표와 남은 양),
+    저장된 랭킹의 상위 10명 실적, 모든 조직의 조직 집계,
     프로모션 규칙(구간 기준과 보상, 건당 한도), 범위 안 사람의 프로모션 실적과 다음 구간까지 남은 양,
     모두에게 보이는 조직 부문 순위의 값과 수상권까지 남은 양, 연도와 연월 꼴 숫자다.
+    업적 run 의 수수료와 환수 합계 칸은 실적이 아니라 넣지 않는다.
     """
     out = set()
 
@@ -351,7 +370,9 @@ def _public(con, ym, ids=None) -> set:
     q = ",".join("?" * len(ids)) or "NULL"
     for r in con.execute(f"SELECT premium, premium_monthly, converted_premium FROM contract WHERE agent_id IN ({q})", ids):
         add(*tuple(r))
-    cols = [r[1] for r in con.execute("PRAGMA table_info(agent_performance_summary)") if r[2] in ("NUMERIC", "INTEGER", "REAL")]
+    # 업적 run 의 숫자 칸. 이 표에는 수수료와 환수 합계(commission_amount, clawback_amount)도 함께 있어 실적 칸만 고른다
+    cols = [k for k in performance.ROW_KEYS
+            if k in {r[1] for r in con.execute("PRAGMA table_info(agent_performance_summary)")}]
     perf = {}
     for r in con.execute(f"SELECT period_type, period_key, {', '.join(cols)} FROM agent_performance_summary WHERE agent_id IN ({q})", ids):
         add(*tuple(r)[2:])
@@ -360,6 +381,15 @@ def _public(con, ym, ids=None) -> set:
         add(*(sum(x[c] or 0 for x in rows) for c in cols))
     for (v,) in con.execute(f"SELECT value FROM ranking_snapshot WHERE agent_id IN ({q})", ids):
         add(v)
+    # 저장된 랭킹 run 의 상위 10명. 순위 원칙대로 모두에게 공개되는 실적이다(명예의전당의 전월 순위). 11위 아래 남의 값은 넣지 않는다
+    for (v,) in con.execute("SELECT value FROM ranking_snapshot WHERE rank_no<=?", (oa.SHOW_TOP,)):
+        add(v)
+    # 범위 안 사람의 구분별, 업권별 실적 집계(구분별 집계 화면). 기간마다 칸별 값과 합계다
+    for pt in rs.PERIOD_KO:
+        for by in ("category", "sector"):
+            b = rs.breakdown(con, ids, pt, ym, by=by)
+            for r in b["rows"] + [b["total"]]:
+                add(*(r[k] for k in rs.KEYS))
     for r in con.execute(f"SELECT agent_id, target_value FROM agent_goal WHERE agent_id IN ({q})", ids):
         add(r["target_value"])
         for s in con.execute("SELECT converted_premium FROM agent_performance_summary WHERE agent_id=? AND period_type='quarter'", (r["agent_id"],)):

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block body %}
+<p class="eyebrow">데이터 · 전체</p>
+<h1 class="display">수료자 명부</h1>
+<p class="lede">수료자 명부는 교육 묶음의 수료 기록 화면 한 곳에서 올립니다. 미리보기, 고쳐 다시 올리기, 명함 수료 코드 발급이 그 화면에 함께 있습니다.</p>
+<div class="actions" style="margin-top:28px"><a class="pill big-pill" href="/edu/completions">수료 기록에서 명부 올리기</a></div>
+
+<h2 class="sec">최근 명부 배치</h2>
+{% if batches %}
+<div class="card tablecard"><table>
+<tr><th class="num">배치</th><th>파일</th><th class="hide-sm">올린 때</th><th class="num">수료</th><th>상태</th></tr>
+{% for b in batches %}<tr><td class="num">{{ b.batch_id }}</td><td class="wrap-sm">{{ b.file_name }}<div class="sm-sub"><span>{{ b.loaded_label }}</span></div></td><td class="hide-sm">{{ b.loaded_label }}</td>
+<td class="num">{{ b.live }}</td><td><span class="chip {{ 'good' if b.status == 'active' else ('bad' if b.status == 'failed' else '') }}">{{ b.status_ko }}</span></td></tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">아직 올린 명부가 없습니다</div></div>{% endif %}
+<p class="cap">같은 일을 두 곳에 두지 않으려고 이 화면은 안내만 합니다.</p>
+{% endblock %}

@@ -1,0 +1,49 @@
+{% extends "base.html" %}{% import "_perf.html" as pf %}
+{% block body %}
+<p class="eyebrow">{% if r %}{{ r.period.label }} · {{ r.org.name }}{% if r.sector %} · {{ SECTORS[sector] }}{% endif %}{% else %}{{ ym|ymko }}{% endif %}</p>
+<h1 class="display">랭킹</h1>
+<p class="lede">{% if r %}{{ r.org.name }} 안에서 {{ METRICS[metric] }} 순위입니다.{% if ctx.role != 'main' %} 상위 10명과 {{ '우리 조직 사람' if ctx.role == 'manager' else '본인' }}의 순위가 보입니다.{% endif %}{% else %}볼 수 있는 조직이 없습니다.{% endif %}</p>
+{{ pf.seg(path, f, 'metric', METRICS, metric) }}
+{{ pf.seg(path, f, 'sector', SECTORS, sector) }}
+{{ pf.seg(path, f, 'pt', PERIODS, pt) }}
+{% if r %}
+<form class="perf-pick" method="get" action="{{ path }}">
+  {% for k, v in f.items() if k not in ('ym', 'org') and v not in (none, '') %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+  <label class="f">기준 월<select name="ym">{% for m in yms %}<option value="{{ m }}" {{ 'selected' if m == ym }}>{{ m|ymko }}</option>{% endfor %}</select></label>
+  <label class="f">조직<select name="org">{% for o in choices %}<option value="{{ o.org_id }}" {{ 'selected' if o.org_id == r.org.org_id }}>{{ '　' * o.depth }}{{ o.name }} · {{ o.level_ko }}</option>{% endfor %}</select></label>
+  <button class="ghost perf-go" type="submit">보기</button>
+</form>
+{% endif %}
+{{ pf.fresh_line(fresh) }}
+
+{% if r %}
+{% if r.me %}
+<div class="card" style="margin-top:24px" data-me="{{ r.me.agent_id }}"><div class="k">내 순위</div>
+  <div class="big">{{ r.me.rank }}<span class="unit">위 / {{ r.total }}명</span></div>
+  <div class="track"><i style="left:{{ ((r.total - r.me.rank) / ([r.total - 1, 1]|max) * 100)|round(1) }}%"></i></div>
+  <div class="track-ends"><span>{{ r.total }}위</span><span>1위</span></div>
+  <div class="cap">{{ METRICS[metric] }} {{ pf.val(r.me.value, r.unit) }}{{ r.unit }}</div></div>
+{% elif ctx.role == 'agent' %}
+<div class="card" style="margin-top:24px"><div class="k">내 순위</div><div class="mid" style="color:var(--faint)">순위 밖</div><div class="cap">이 조직의 순위 대상이 아닙니다</div></div>
+{% endif %}
+
+{% set podium = r.rows|selectattr('rank', 'le', 3)|list %}
+{% if podium %}<div class="podium">{% for x in podium[:3] %}<div class="pod {{ 'first' if x.rank == 1 }}"><div class="rk">{{ x.rank }}위</div><div class="nm">{{ x.name }}</div>
+  <div class="vl">{{ pf.val(x.value, r.unit) }}{{ r.unit }}</div></div>{% endfor %}</div>{% endif %}
+
+{% if r.rows %}
+{% set top = (r.rows|map(attribute='value')|max) or 1 %}
+<div class="card tablecard" style="margin-top:16px"><table>
+<tr><th>순위</th><th>성명</th><th class="hide-sm">소속</th><th class="num">{{ METRICS[metric] }}</th></tr>
+{% for x in r.rows %}
+<tr class="{{ 'me' if x.agent_id == ctx.agent_id }}" data-agent="{{ x.agent_id }}"><td class="strong">{{ x.rank }}</td>
+  <td class="strong">{{ x.name }}{% if x.agent_id == ctx.agent_id %} <span class="chip blue">나</span>{% endif %}<div class="sm-sub"><span>{{ x.org or '-' }}</span></div></td>
+  <td class="hide-sm">{{ x.org or '-' }}</td>
+  <td class="num" data-col="value"><span class="minibar hide-sm"><i style="width:{{ ([x.value, 0]|max / top * 100)|round(1) if top > 0 else 0 }}%"></i></span>{{ pf.val(x.value, r.unit) }}{{ r.unit }}</td></tr>
+{% endfor %}
+</table></div>
+{% if r.rows|length < r.total %}<p class="cap">순위에 든 {{ r.total }}명 가운데 {{ r.rows|length }}명을 보여 줍니다.</p>{% endif %}
+{% else %}<div class="card" style="margin-top:16px"><div class="k">순위에 든 사람이 없습니다</div></div>{% endif %}
+<p class="cap">재직 중인 설계사만 줄 세웁니다. 그 달 중간에 퇴사한 설계사는 순위에서 빠집니다. 같은 값이면 같은 순위이고 다음 사람은 그만큼 밀립니다. 값은 기간별 업적과 같은 기준입니다.</p>
+{% endif %}
+{% endblock %}

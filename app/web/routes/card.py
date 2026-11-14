@@ -6,11 +6,16 @@
 - 이름과 소속은 앱 DB 의 설계사 표에서 읽는다. 명함 사이트의 이름과 연락처는 쓰지 않는다.
 - 반려 사유는 앱에 저장하지 않는다. 세션, 변경 기록, 화면 되돌림 어디에도 남기지 않는다.
 - 잇기는 메인 관리자만 한다. CardLinkTable 이 계정을 한 번 더 본다.
-- 수료 코드 발급과 내리기는 이 화면에 없다.
+- 수료 코드 발급과 내리기는 이 화면에 없다. 발급은 /edu/completions 의 메인 관리자 묶음이다(app/web/routes/edu.py).
 - 관리자는 승인 요청을 메인 관리자가 /org/heads 에서 승인했거나 바로 켠 사람만 이 화면을 연다. 메뉴의 requires: card_approver 를 guard 가 본다.
 - 관리자 본인의 명함은 메인 관리자가 처리한다. 목록에 본인 줄이 섞여 와도 승인과 반려 단추와 확인 단계를 열지 않는다.
 - 신청본 미리보기는 같은 주소에 ?preview=주소 로 연다. guard 를 같은 규칙으로 거치고 card_decide.preview_card 만 부른다.
   다듬은 HTML 을 sandbox 값이 빈 iframe 의 srcdoc 에 넣고, 그림은 data: 로 넣는다. 가져온 신청본은 저장하지 않는다.
+
+내 명함 /sales/card 는 관리자와 설계사 본인이 쓴다. card_site.my_card 로 이어진 주소의 공개 상태를 한 번 읽는다(GET 만).
+- 상태는 공개, 대기, 반려, 없음 넷으로 보인다. 반려 사유는 D-39 가 열려 있어 보여 주지 않고 반려됨만 보인다. CardStatus 에도 사유가 없다.
+- 주소가 이어지지 않았으면 메인 관리자에게 연결을 요청하라고 안내하고 명함 만들기 사이트 링크를 둔다. 주소는 사이트 주소 뒤 /make/ 로 둔 가정이다.
+- 사이트 주소가 설정되지 않았거나 읽지 못하면 연결 표에 남은 마지막 확인 상태와 시각을 보여 준다.
 
 홈의 할 일 알림은 pending_count 를 부른다. 담아 두는 것은 사이트의 전체 대기 목록이고, 범위와 본인 빼기는 부를 때마다
 그 사람의 ctx 로 다시 거른다. 그래서 담아 둔 목록을 여러 사람이 함께 써도 남의 범위가 섞이지 않는다. 키가 없으면 부르지 않고, 있으면 시간 제한이 짧은 호출 한 번의 결과를
@@ -30,7 +35,7 @@ from app.connect.base import FAILED, NOT_CONFIGURED, OK, Outcome
 from app.connect.card_decide import ALREADY, DENIED, IN_FLIGHT, decide_card, pending_for_scope, preview_card
 from app.connect.card_html import iframe_tag
 from app.connect.card_link import CardLinkTable, LinkError
-from app.connect.card_site import NO_PENDING, NOT_FOUND, REASON_MAX, SLUG_RE, TOO_BIG, WRITE_OFF, CardFile, CardSiteClient
+from app.connect.card_site import NO_PENDING, NOT_FOUND, REASON_MAX, SLUG_RE, TOO_BIG, WRITE_OFF, CardFile, CardSiteClient, my_card
 from app.connect.state import StateStore
 from app.org.sync import org_texts
 from app.web.deps import _in, _q, get_con, guard, page
@@ -322,3 +327,57 @@ def card_approve_action(request: Request, action: str = Form(...), slug: str = F
         return _page(request, ctx, con, flash=flash, status_code=403)
     request.session[FLASH] = flash
     return RedirectResponse(PATH, status_code=303)
+
+
+# ---------------------------------------------------------------- 내 명함
+MY_STATE_KO = {"live": "공개", "pending": "대기", "rejected": "반려됨", "none": "없음"}
+MAKE_PATH = "/make/"              # 명함 만들기 화면. 명함 사이트 public/make/index.html 을 사이트 주소 뒤에 둔 가정이다
+
+
+def _my_state(status: str, live: bool) -> str:
+    """사이트 상태를 화면의 넷으로. 공개 중이면 공개다. 내린 명함과 신청 없음은 없음이다."""
+    if live:
+        return "live"
+    return status if status in ("pending", "rejected") else "none"
+
+
+def _local(s: str | None) -> str:
+    """db.now() 꼴(앱 시각)의 글을 '11월 14일 9시 05분' 으로."""
+    if not s:
+        return ""
+    try:
+        return _hm(datetime.strptime(str(s)[:19], "%Y-%m-%d %H:%M:%S"))
+    except ValueError:
+        return str(s)[:16]
+
+
+@router.get("/sales/card", response_class=HTMLResponse)
+def my_card_page(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
+    client = card_client(con)
+    links = CardLinkTable(con)
+    agent_id = ctx.get("agent_id")
+    slug = links.slug_for(agent_id) if agent_id is not None else None
+    view = {"slug": slug, "make_url": f"{client.base_url}{MAKE_PATH}" if client.base_url else None, "state": None, "fresh": False,
+            "url": None, "new_request": None, "live_at": None, "checked": None, "problem": None}
+    if slug is None:
+        view["problem"] = "unlinked"
+    elif not client.configured:
+        view["problem"] = "not_configured"
+    else:
+        out = my_card(client, links, agent_id)            # GET 한 번. 읽은 상태와 시각은 연결 표에 적는다
+        if out.status == OK and out.value is not None:
+            st = out.value
+            view.update(state=_my_state(st.status, st.live), fresh=True, url=st.url, live_at=_when(st.live_at) if st.live_at else None,
+                        new_request=st.status if st.live and st.status in ("pending", "rejected") else None)
+        else:
+            view["problem"] = "failed"
+    if slug is not None:
+        row = links.get(agent_id) or {}
+        if not view["fresh"] and row.get("last_status"):
+            view["state"] = _my_state(row["last_status"], bool(row.get("last_live")))
+            view["url"] = client.card_url(slug) if row.get("last_live") else None
+        view["checked"] = _local(row.get("last_checked_at"))
+    view["state_ko"] = MY_STATE_KO.get(view["state"]) if view["state"] else None
+    resp = page(request, ctx, "card_my.html", v=view)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp

@@ -1,0 +1,60 @@
+{% extends "base.html" %}{% import "_perf.html" as pf %}
+{% block body %}
+{% set t = s.total %}
+<p class="eyebrow">{{ s.period.label }} · {{ SCOPES[ctx.scope] }}{% if sel %} · {{ sel.name }}{% endif %}{% if sector %} · {{ s.sector_ko }}{% endif %}</p>
+<h1 class="display">기간별 업적</h1>
+<p class="lede">성립한 계약만 확정 업적으로 셉니다. 청약은 예정 업적이고, 철회는 철회한 달에 뺍니다.</p>
+{{ pf.seg(path, f, 'pt', PERIODS, pt) }}
+{{ pf.seg(path, f, 'sector', SECTORS, sector) }}
+{{ pf.pick_form(path, f, yms, ym, orgs, sel) }}
+{{ pf.fresh_line(fresh) }}
+
+<div class="grid g2" style="margin-top:24px">
+  <div class="card"><div class="k">인정보험료 <span class="chip good">확정</span></div>
+    <div class="big" data-col="premium">{{ t.converted_premium|won }}<span class="unit">원</span></div>
+    <div class="cap">{{ s.period.label }} · 월납보험료 {{ t.monthly_premium|won }}원</div></div>
+  {% if ctx.scope != 'self' %}
+  <div class="card"><div class="ringbox">{{ ui.ring(s.active / s.people * 100 if s.people else 0, '가동률', color='var(--fill-green)') }}
+    <div><div class="k">가동</div><div class="mid">{{ s.active }}<span class="unit">/ {{ s.people }}명</span></div><div class="cap">이 기간 순건수 1건 이상</div></div></div></div>
+  {% else %}
+  <div class="card"><div class="k">청약 <span class="chip blue">예정</span></div>
+    <div class="mid">{{ t.applied_count|n }}<span class="unit">건</span></div>
+    <div class="cap">예정 인정보험료 {{ t.applied_converted|won }}원 · 성립하면 확정으로 옮깁니다</div></div>
+  {% endif %}
+</div>
+<div class="grid g3 keep" style="margin-top:16px">
+  <div class="card"><div class="k">성립</div><div class="mid">{{ t.new_count|n }}<span class="unit">건</span></div></div>
+  <div class="card"><div class="k">철회</div><div class="mid">{{ t.withdrawn_count|n }}<span class="unit">건</span></div></div>
+  <div class="card"><div class="k">순건수</div><div class="mid" data-col="net">{{ t.net_count|n }}<span class="unit">건</span></div></div>
+</div>
+{% if ctx.scope != 'self' %}
+<div class="card" style="margin-top:16px"><div class="k">청약 <span class="chip blue">예정</span></div>
+  <div class="perf-split"><div><div class="mid">{{ t.applied_count|n }}<span class="unit">건</span></div></div>
+  <div><div class="cap" style="margin:0">예정 인정보험료</div><div class="perf-num">{{ t.applied_converted|won }}<span class="unit">원</span></div></div>
+  <div><div class="cap" style="margin:0">예정 보험료</div><div class="perf-num">{{ t.applied_premium|won }}<span class="unit">원</span></div></div></div>
+  <div class="cap">아직 성립하지 않은 청약입니다. 확정 업적에는 들지 않습니다.</div></div>
+{% endif %}
+
+{% if s.months|length > 1 %}
+<h2 class="sec">달마다</h2>
+<div class="card"><div class="k" style="margin-bottom:18px">확정 인정보험료</div>{{ pf.bars(s.months, 'label', 'sub', 'converted_premium') }}</div>
+{% endif %}
+
+{% if ctx.scope != 'self' %}
+<h2 class="sec">사람별</h2>
+{% set top = (s.rows|map(attribute='converted_premium')|map('default', 0, true)|max) or 1 %}
+{% if s.rows %}
+<div class="card tablecard"><table>
+<tr><th>성명</th><th class="hide-sm">소속</th><th class="num hide-sm">청약</th><th class="num hide-sm hide-md">성립</th><th class="num hide-sm hide-md">철회</th><th class="num hide-sm">순건수</th><th class="num">인정보험료</th></tr>
+{% for r in s.rows %}
+<tr data-agent="{{ r.agent_id }}"><td class="strong">{{ r.name }}{% if r.left %} <span class="chip bad">퇴사</span><div class="cap left-date">{{ r.termination_date|md }} 퇴사</div>{% endif %}
+  <div class="sm-sub"><span>{{ r.org or '-' }}</span><span>순건수 {{ r.net_count|n }}건 · 청약 {{ r.applied_count|n }}건</span></div></td>
+  <td class="hide-sm">{{ r.org or '-' }}</td><td class="num hide-sm">{{ r.applied_count|n }}</td><td class="num hide-sm hide-md">{{ r.new_count|n }}</td>
+  <td class="num hide-sm hide-md">{{ r.withdrawn_count|n }}</td><td class="num hide-sm" data-col="net">{{ r.net_count|n }}</td>
+  <td class="num" data-col="premium"><span class="minibar hide-sm"><i style="width:{{ ([r.converted_premium or 0, 0]|max / top * 100)|round(1) }}%"></i></span>{{ r.converted_premium|won }}</td></tr>
+{% endfor %}
+</table></div>
+<p class="cap">{{ s.people }}명{% if s.left %}. 퇴사 표시가 있는 {{ s.left }}명은 퇴사 전 실적만 셉니다. 합계에는 넣고 랭킹에서는 뺍니다{% endif %}. 수수료와 시상 금액은 이 화면에 없습니다.</p>
+{% else %}<div class="card"><div class="k">이 범위에 실적을 셀 사람이 없습니다</div></div>{% endif %}
+{% endif %}
+{% endblock %}

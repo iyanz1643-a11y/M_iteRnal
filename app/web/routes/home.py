@@ -9,6 +9,7 @@ from app.org import card_grant as cg
 from app.periods import period_key
 from app.web.deps import _cards, _last_load, _perf, _q, get_con, guard, page
 from app.web.routes import card, me
+from app.web.routes import edu as edu_routes
 
 router = APIRouter()
 
@@ -95,6 +96,8 @@ def home(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
         except sqlite3.OperationalError:                         # 표가 없는 오래된 DB
             con.rollback()
             data["grant_requests"] = 0
+    if role in ("agent", "manager"):                             # 교육 기한 임박. 설계사는 본인, 관리자는 범위 안. 엔진의 due_soon 을 센다
+        data["edu_soon"] = edu_routes.due_soon_count(con, ctx)
     if role == "manager":
         st = me.card_state(con, ctx)                             # 권한이 없고 대기 중이거나 반려된 요청도 없을 때만 한 줄 띄운다
         data["grant_hint"] = bool(st and st["state"] == "none")

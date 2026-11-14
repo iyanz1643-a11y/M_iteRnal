@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block body %}
+<p class="eyebrow">영업·제안 · 본인</p>
+<h1 class="display">모바일 명함</h1>
+<p class="lede">내 모바일 명함의 상태와 링크입니다. 명함은 명함 만들기 사이트에서 만들고 고칩니다. 승인되면 링크가 공개됩니다.</p>
+
+{% if v.problem == 'unlinked' %}
+<div class="card" style="margin-top:32px"><div class="k"><span class="dot off"></span>명함 주소</div>
+  <div class="mid word soft" style="margin-top:8px">아직 이어진 명함이 없습니다</div>
+  <p class="cap">명함을 만들었다면 메인 관리자에게 연결을 요청하세요. 메인 관리자가 내 명함 주소를 한 번 이어 주면 이 화면에서 상태를 봅니다.</p>
+  {% if v.make_url %}<div class="actions" style="margin-top:16px"><a class="pill" href="{{ v.make_url }}" target="_blank" rel="noopener noreferrer">명함 만들기 사이트</a></div>
+  {% else %}<p class="cap">명함 사이트 주소가 아직 앱에 설정되지 않았습니다. 명함 만들기 주소는 메인 관리자에게 물어 주세요.</p>{% endif %}
+</div>
+{% else %}
+{% if v.problem == 'not_configured' %}<div class="alert" style="margin-top:24px">명함 사이트 연동 설정이 아직 없어 지금 상태를 읽지 못했습니다.{% if v.state %} 마지막으로 확인한 상태를 보여 드립니다.{% endif %}</div>
+{% elif v.problem == 'failed' %}<div class="alert" style="margin-top:24px">명함 사이트에 닿지 않아 지금 상태를 읽지 못했습니다.{% if v.state %} 마지막으로 확인한 상태를 보여 드립니다.{% endif %} 잠시 뒤 <a href="{{ path }}">새로 고쳐</a> 주세요.</div>{% endif %}
+<div class="card" style="margin-top:32px"><div class="hero">
+  <div><div class="k"><span class="dot {{ {'live': '', 'pending': 'warn', 'rejected': 'bad'}.get(v.state, 'off') }}"></span>명함 상태</div>
+    <div class="big">{{ v.state_ko or '확인 전' }}</div>
+    <div class="cap">{% if v.checked %}명함 사이트 기준 {{ v.checked }} 확인{% else %}아직 확인한 적이 없습니다{% endif %}</div></div>
+  <div><div class="k">명함 주소</div><div class="mid word soft" style="margin-top:6px">{{ v.slug }}</div>
+    {% if v.live_at %}<div class="cap">{{ v.live_at }} 승인본 공개 중</div>{% endif %}</div>
+</div></div>
+<div class="card" style="margin-top:16px">
+  {% if v.state == 'live' %}
+  <div class="k">공개 중</div><p style="margin:8px 0 0">누구에게나 보이는 내 명함 링크입니다. 고객에게 이 링크를 보내면 됩니다.</p>
+  {% if v.new_request == 'pending' %}<p class="cap">고친 신청본이 승인을 기다리고 있습니다. 승인되면 공개본이 바뀝니다.</p>{% elif v.new_request == 'rejected' %}<p class="cap">고친 신청본은 반려됐습니다. 지금 공개본은 그대로입니다.</p>{% endif %}
+  {% if v.url %}<div class="actions" style="margin-top:16px"><a class="pill" href="{{ v.url }}" target="_blank" rel="noopener noreferrer">내 명함 열기</a>{% if v.make_url %}<a class="pill quiet" href="{{ v.make_url }}" target="_blank" rel="noopener noreferrer">명함 고치기</a>{% endif %}</div>
+  <p class="cap">{{ v.url }}</p>{% endif %}
+  {% elif v.state == 'pending' %}
+  <div class="k">승인 대기</div><p style="margin:8px 0 0">신청한 명함을 관리자가 확인하고 있습니다. 승인되면 링크가 공개됩니다.</p>
+  {% elif v.state == 'rejected' %}
+  <div class="k">반려됨</div><p style="margin:8px 0 0">신청한 명함이 반려됐습니다. 명함 만들기 사이트에서 고쳐 다시 신청해 주세요. 무엇을 고칠지는 관리자에게 물어 주세요.</p>
+  {% if v.make_url %}<div class="actions" style="margin-top:16px"><a class="pill" href="{{ v.make_url }}" target="_blank" rel="noopener noreferrer">명함 만들기 사이트</a></div>{% endif %}
+  {% elif v.state == 'none' %}
+  <div class="k">신청 없음</div><p style="margin:8px 0 0">이어진 주소에 공개 중이거나 신청한 명함이 없습니다. 명함 만들기 사이트에서 만들어 신청해 주세요.</p>
+  {% if v.make_url %}<div class="actions" style="margin-top:16px"><a class="pill" href="{{ v.make_url }}" target="_blank" rel="noopener noreferrer">명함 만들기 사이트</a></div>{% endif %}
+  {% else %}
+  <div class="k">상태 모름</div><p style="margin:8px 0 0">아직 명함 상태를 읽은 적이 없습니다.</p>
+  {% endif %}
+</div>
+{% endif %}
+<p class="cap" style="margin-top:20px">명함 상태는 명함 사이트에서 읽기만 합니다. 인증과 수상 배지, 공유는 다음 단계에 붙습니다.</p>
+{% endblock %}

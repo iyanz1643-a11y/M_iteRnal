@@ -1,0 +1,51 @@
+{% extends "base.html" %}{% import "_promo.html" as pr %}
+{% block body %}
+<p class="eyebrow">{{ ctx.ym|ymko }} · 기준일 {{ ref|md }}</p>
+<h1 class="display">시상 진척</h1>
+{% if not has_agent %}<div class="card" style="margin-top:24px"><div class="k">설계사 정보가 이어지지 않은 계정입니다</div><div class="cap">메인 관리자에게 계정과 사번 연결을 요청하세요.</div></div>
+{% else %}
+<div class="card my-hero" style="margin-top:20px"><div class="k">지금 수상권과 달성</div>
+  <div class="big">{{ hits }}<span class="unit">건</span></div>
+  <div class="cap">조직 부문 {{ divisions|length }}곳, 프로모션 {{ promos|length }}건을 봅니다. 금액과 구간은 모두 예상입니다. 확정은 월 마감과 보험사 정산을 따릅니다.</div>
+  <div class="cap">{% if fresh.last_load %}{{ fresh.last_load|when }} 계약 적재 기준입니다.{% else %}적재한 계약 자료가 없습니다.{% endif %}</div></div>
+
+<h2 class="sec">조직 부문 순위</h2>
+{% if divisions %}<div class="grid g2">{% for d in divisions %}
+  <div class="card"><div class="chips"><span class="chip blue">{{ d.org_name }}</span><span class="chip">{{ d.sector_ko }}</span><span class="chip">상위 {{ d.top_n }}명</span></div>
+    <div class="k" style="margin-top:12px">{{ d.name }}</div>
+    {% if d.me %}<div class="mid">{{ d.me.rank }}<span class="unit">위 / {{ d.total }}명</span></div>
+      <div class="cap">{{ d.metric_ko }} {% if d.metric == 'policy_count' %}{{ d.me.value|n }}건{% else %}{{ d.me.value|won }}원{% endif %}</div>
+      {% if d.me.winner %}<div class="cap my-good">수상권 안입니다{% if d.me.reward %} · 예상 시상 {{ d.me.reward }}{% endif %}</div>
+      {% elif d.gap is not none %}<div class="cap my-next">수상권까지 {% if d.metric == 'policy_count' %}{{ d.gap|n }}건{% else %}{{ d.gap|won }}원{% endif %} 남았습니다</div>{% endif %}
+    {% else %}<div class="mid word" style="color:var(--faint)">순위 밖</div>
+      <div class="cap">이번 달 이 부문에 잡힌 실적이 없습니다{% if d.gap is not none %} · 수상권 끝 값은 {% if d.metric == 'policy_count' %}{{ d.gap|n }}건{% else %}{{ d.gap|won }}원{% endif %}입니다{% endif %}</div>{% endif %}
+  </div>{% endfor %}</div>
+<p class="cap">집계 중인 순위입니다. 메인 관리자가 마감 뒤에 확정합니다. 같은 값이면 같은 순위입니다. <a href="/promo/org-awards">부문 전체 순위</a></p>
+{% else %}<div class="card"><div class="k">이번 달에 적용되는 부문이 없습니다</div></div>{% endif %}
+
+<h2 class="sec">구간시상</h2>
+{% if tiers %}<div class="card tablecard"><table class="my-table">
+<tr><th>시상</th><th class="num hide-sm">측정값</th><th class="num">구간</th><th class="num hide-sm">예상 금액</th></tr>
+{% for t in tiers %}<tr><td class="strong wrap-sm">{{ t.name }}{% if t.rule_kind == 'extra' %} <span class="chip">추가</span>{% endif %}
+  <div class="sm-sub"><span>{% if t.unit == '건' %}{{ t.metric_value|n }}건{% else %}{{ t.metric_value|won }}원{% endif %}</span>{% if t.qualified %}<span>예상 {{ t.reward_amount|won }}원</span>{% elif t.reason %}<span>{{ t.reason }}</span>{% endif %}</div>
+  {% if not t.qualified and t.reason %}<div class="cap hide-sm" style="margin-top:2px;font-weight:400;white-space:normal">{{ t.reason }}</div>{% endif %}</td>
+  <td class="num hide-sm">{% if t.unit == '건' %}{{ t.metric_value|n }}건{% else %}{{ t.metric_value|won }}원{% endif %}</td>
+  <td class="num">{% if t.qualified and t.tier_no %}<span class="chip good">{{ t.tier_no }}구간</span>{% else %}<span class="chip warn">미달</span>{% endif %}</td>
+  <td class="num hide-sm">{% if t.qualified %}{{ t.reward_amount|won }}원{% else %}-{% endif %}</td></tr>{% endfor %}
+</table></div>
+<p class="cap">구간시상 계산의 이번 달 결과입니다. 금액은 예상이며 시상 환수가 생기면 달라집니다.</p>
+{% else %}<div class="card"><div class="k">이번 달 구간시상 계산이 없습니다</div></div>{% endif %}
+
+<h2 class="sec">프로모션 달성</h2>
+{% if promos %}<div class="card tablecard"><table class="my-table">
+<tr><th>프로모션</th><th class="num hide-sm">내 실적</th><th class="num">진척</th><th class="num hide-sm">예상 시상</th></tr>
+{% for p in promos %}{% set r = p.r %}<tr><td class="strong wrap-sm">{{ p.name }}<div class="cap" style="margin-top:2px;font-weight:400">{{ p.insurer_name or '전 보험사' }} · {{ p.due }}</div>
+  <div class="sm-sub"><span>{{ pr.val(r.value, p) }}</span>{% if r.amount %}<span>예상 {{ r.amount|won }}원</span>{% endif %}</div></td>
+  <td class="num hide-sm">{{ pr.val(r.value, p) }}</td>
+  <td class="num">{% if r.status == 'missed' %}<span class="chip bad">미달</span>{% elif r.tier %}<span class="chip good">{{ r.reward }}</span>{% elif p.kind == 'rate' and r.value > 0 %}<span class="chip good">실적 있음</span>{% elif r.next %}<span class="chip blue">{{ pr.val(r.next.gap, p) }} 남음</span>{% else %}<span class="chip">실적 없음</span>{% endif %}</td>
+  <td class="num hide-sm">{% if r.amount %}{{ r.amount|won }}원{% elif p.kind == 'rate' and r.amount is none %}원문 확인{% else %}-{% endif %}</td></tr>{% endfor %}
+</table></div>
+<p class="cap">예상 금액입니다. 확정은 보험사 정산을 따릅니다. <a href="{{ '/promo/progress?view=me' if ctx.role == 'manager' else '/promo/progress' }}">프로모션별 자세히 보기</a></p>
+{% else %}<div class="card"><div class="k">진행 중인 프로모션이 없습니다</div></div>{% endif %}
+{% endif %}
+{% endblock %}

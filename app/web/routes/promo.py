@@ -1,4 +1,11 @@
-"""프로모션 묶음: 진행 중 프로모션, 달성 현황, 게시 관리, 구간과 조건 입력, 조직 부문 시상."""
+"""프로모션 묶음: 진행 중 프로모션, 달성 현황, 프로모션 비교, 지난 프로모션, 게시 관리, 구간과 조건 입력, 조직 부문 시상.
+
+- 비교(/promo/compare)는 pm.compare 를 그대로 그린다. D-19 제안대로 설계사에게도 열고 내부 참고용 안내를 붙인다.
+  D-21 제안대로 원안은 메인 관리자에게만 넘긴다. 설계사와 관리자에게는 줄에서 원안 칸을 떼고 넘긴다.
+- 지난 프로모션(/promo/archive)은 pm.past 로 낸 마감 전 예상이다. 설계사는 본인 줄만, 관리자는 범위 안 사람의 달성 여부만 본다.
+  D-17 에 따라 관리자 화면으로는 금액과 보상 글을 넘기지 않는다. 메인 관리자는 전부 본다.
+"""
+from datetime import date
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -8,9 +15,15 @@ from app import db
 from app.engine import org_award as oa
 from app.engine import promotion as pm
 from app.web import auth
-from app.web.deps import _cards, _in, _q, get_con, guard, page
+from app.web.deps import _cards, _in, _period_text, _q, get_con, guard, page
 
 router = APIRouter()
+NEAR_RATIO = 0.3            # 구간 근접: 다음 구간까지 남은 양이 다음 구간 문턱의 30% 이내. 달성 현황과 알림함이 함께 쓴다
+
+
+def near(r) -> bool:
+    """progress() 한 사람의 결과가 구간 근접인가. 실적이 있고 다음 구간까지 NEAR_RATIO 안이다."""
+    return bool(r["next"] and r["value"] > 0 and r["next"]["gap"] <= r["next"]["min_value"] * NEAR_RATIO)
 
 
 def _scope_agents(con, ctx):
@@ -43,10 +56,65 @@ def promo_progress(request: Request, p: int | None = None, view: str | None = No
         res = pm.progress(con, sel, [a["agent_id"] for a in agents], ref)
         rows = [{**a, "r": res[a["agent_id"]]} for a in agents]
         rows.sort(key=lambda x: -x["r"]["value"])
-        near = [x for x in rows if x["r"]["next"] and x["r"]["value"] > 0 and x["r"]["next"]["gap"] <= x["r"]["next"]["min_value"] * 0.3]
+        near_rows = [x for x in rows if near(x["r"])]
         summary = {"n": len(rows), "achieved": sum(1 for x in rows if x["r"]["tier"] or (sel["kind"] == "rate" and x["r"]["value"] > 0)),
-                   "near": len(near), "missed": sum(1 for x in rows if x["r"]["broken"]), "top": max((x["r"]["value"] for x in rows), default=0)}
+                   "near": len(near_rows), "missed": sum(1 for x in rows if x["r"]["broken"]), "top": max((x["r"]["value"] for x in rows), default=0)}
     return page(request, ctx, "promo_progress_team.html", cards=cards, sel=sel, rows=rows, summary=summary, ref=ref.isoformat(), show_amount=ctx["role"] == "main")
+
+
+# ---------------------------------------------------------------- 비교
+def _cat_names(con) -> dict:
+    return {r["code"]: r["name"] for r in con.execute("SELECT code, name FROM product_category ORDER BY sort_order")}
+
+
+@router.get("/promo/compare", response_class=HTMLResponse)
+def promo_compare(request: Request, cat: str | None = None, ctx: dict = Depends(guard), con=Depends(get_con)):
+    res = pm.compare(con, ctx["ym"])
+    show_original = ctx["role"] == "main"                       # D-21: 원안은 메인 관리자만
+    rows = res["rows"] if show_original else [{**r, "plan": {"distributed": r["plan"]["distributed"]}} for r in res["rows"]]
+    names = _cat_names(con)
+    present = [c for c in names if any(c in r["category_list"] for r in rows)]
+    sel_cat = cat if cat in present else None
+    if sel_cat:                                                 # 구분을 정하지 않은 줄은 모든 구분에 걸리므로 남긴다
+        rows = [r for r in rows if not r["category_list"] or sel_cat in r["category_list"]]
+    groups = [{"metric": m, "metric_ko": ko, "rows": [r for r in rows if r["metric"] == m]} for m, ko in pm.METRIC_KO.items()]
+    groups = [g for g in groups if g["rows"]]
+    for g in groups:
+        g["top"] = max((r["per_unit"] or 0 for r in g["rows"]), default=0)
+    return page(request, ctx, "promo_compare.html", cmp_groups=groups, n=len(rows), ref=res["ref"], unit=res["unit"], cats=[(c, names[c]) for c in present],
+                sel_cat=sel_cat, show_original=show_original, estimate_note=res["estimate_note"], plan_note=res["plan_note"], cat_names=names)
+
+
+# ---------------------------------------------------------------- 지난 프로모션
+HIDDEN_FOR_MANAGER = ("amount", "reward", "r")                  # D-17: 관리자에게 팀원의 시상 금액과 보상 글을 넘기지 않는다
+
+
+@router.get("/promo/archive", response_class=HTMLResponse)
+def promo_archive(request: Request, ym: str | None = None, p: int | None = None, view: str | None = None,
+                  ctx: dict = Depends(guard), con=Depends(get_con)):
+    today = date.today()
+    months = sorted({x["period_ym"] for x in pm.ended(con, ref=today)}, reverse=True)
+    sel_ym = ym if ym in months else (months[0] if months else None)
+    role = ctx["role"]
+    mine = role == "agent" or (role == "manager" and view == "me")
+    if mine:
+        ids = [ctx["agent_id"]] if ctx["agent_id"] else []
+    else:
+        ids = [a["agent_id"] for a in _scope_agents(con, ctx)]
+    results = pm.past(con, ids, ym=sel_ym, ref=today) if sel_ym and ids else []
+    show_amount = role == "main" or mine
+    for res in results:
+        if mine:                                                # 본인 줄만 남긴다
+            res["rows"] = [x for x in res["rows"] if x["agent_id"] == ctx["agent_id"]]
+        if not show_amount:
+            res["rows"] = [{k: v for k, v in x.items() if k not in HIDDEN_FOR_MANAGER} for x in res["rows"]]
+            res["summary"] = {k: v for k, v in res["summary"].items() if k != "amount"}
+        res["period_text"] = _period_text(res["promo"])
+    sel = None
+    if not mine and results:
+        sel = next((x for x in results if x["promo"]["promo_id"] == p), results[0])
+    return page(request, ctx, "promo_archive.html", months=months, sel_ym=sel_ym, results=results, sel=sel, mine=mine,
+                show_amount=show_amount, today=today.isoformat(), settle_ko=pm.SETTLE_KO["estimate"])
 
 
 @router.get("/promo/publish", response_class=HTMLResponse)

@@ -1,0 +1,81 @@
+{% extends "base.html" %}{% import "_edu.html" as e %}
+{% block body %}{% set t = prog.total %}
+<p class="eyebrow">팀 관리 · {{ SCOPES[ctx.scope] }} · {{ as_of }} 기준</p>
+<h1 class="display">교육 진척도</h1>
+<p class="lede">{% if t.targets %}필수 과정 대상 {{ t.targets }}건 가운데 {{ t.done }}건을 마쳤습니다. 재직자 {{ t.people }}명 가운데 {{ t.people_all_done }}명이 필수 과정을 모두 마쳤습니다.{% else %}범위 안에 필수 과정 대상자가 없습니다.{% endif %}</p>
+{{ e.flashbox(flash) }}
+{% if error %}<div class="alert bad" role="alert" style="margin-top:24px">{{ error }}</div>{% endif %}
+
+<div class="grid g2" style="margin-top:32px">
+  <div class="card"><div class="ringbox">{{ ui.ring((t.rate or 0) * 100, '필수 과정 수료율', color='var(--fill-green)') }}
+    <div><div class="k">필수 과정 수료율</div><div class="mid">{{ t.done }}<span class="unit">/ {{ t.targets }}건</span></div>
+    <div class="cap">사람과 과정의 짝으로 셉니다{% if t.left_excluded %} · 퇴사 {{ t.left_excluded }}명 제외{% endif %}</div></div></div></div>
+  <div class="grid g3 keep">
+    <div class="card"><div class="k">미수료</div><div class="mid">{{ t.not_done }}<span class="unit">건</span></div></div>
+    <div class="card"><div class="k"><span class="dot {{ 'bad' if t.overdue else 'off' }}"></span>지남</div><div class="mid">{{ t.overdue }}<span class="unit">건</span></div></div>
+    <div class="card"><div class="k"><span class="dot {{ 'bad' if t.soon else 'off' }}"></span>임박</div><div class="mid">{{ t.soon }}<span class="unit">건</span></div><div class="cap">{{ soon_days }}일 안</div></div>
+  </div>
+</div>
+
+{% if confirm %}
+<section class="card confirm" id="confirm" style="margin-top:16px">
+  <div class="k">수료 확인</div>
+  <h2 class="confirm-title">이 수료를 확인 처리할까요?</h2>
+  <div class="req-who"><span class="strong">{{ confirm.name }}</span> <span class="req-code">{{ confirm.code }}</span></div>
+  <div class="req-org">{{ confirm.org or '소속 없음' }}</div>
+  <div class="req-meta"><span class="chip">{{ confirm.kind_ko }}</span><span class="strong">{{ confirm.course_name }}</span><span>기한 {{ e.day(confirm.due, year) }}</span>{{ e.state(confirm) }}</div>
+  <form method="post" action="{{ path }}" class="wide" style="margin-top:16px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="action" value="confirm"><input type="hidden" name="confirm" value="1">
+    <input type="hidden" name="agent_id" value="{{ confirm.agent_id }}"><input type="hidden" name="course_id" value="{{ confirm.course_id }}">
+    <div class="frow">
+      <label class="f">수료일<input type="date" name="completed_on" value="{{ confirm.today }}" max="{{ confirm.today }}"></label>
+      <label class="f">차수<select name="session_id"><option value="">차수 없이 수료일로</option>{% for s in confirm.sessions %}<option value="{{ s.session_id }}">{{ s.session_no }}차 · {{ e.day(s.date_from, year) }} · {{ '온라인' if s.online else s.place }}</option>{% endfor %}</select></label>
+    </div>
+    <ul class="notes">
+      <li>수료자 명부 없이 관리자가 직접 확인한 수료로 남습니다. 확인한 사람과 시각이 변경 기록에 남습니다.</li>
+      <li>차수를 고르고 수료일을 비우면 그 차수의 마지막 날로 넣습니다.</li>
+      <li>같은 과정, 같은 주기의 수료가 이미 있으면 새로 넣지 않습니다.</li>
+    </ul>
+    <div class="actions"><button class="primary" type="submit">수료 확인하기</button><a class="pill quiet big-pill" href="{{ path }}">취소</a></div>
+  </form>
+</section>
+{% endif %}
+
+<h2 class="sec">과정별 수료율</h2>
+{% if prog.courses %}
+<div class="card tablecard"><table>
+<tr><th>과정</th><th class="hide-sm hide-md">기한</th><th class="num hide-sm">대상</th><th class="num">수료율</th><th class="num">미수료</th><th class="num hide-sm">지남</th><th class="num hide-sm">임박</th></tr>
+{% for c in prog.courses %}<tr><td class="strong wrap-sm">{{ c.course_name }}<div class="sm-sub"><span>{{ c.kind_ko }} · {{ c.deadline_ko }} · 대상 {{ c.targets }}명</span></div></td>
+<td class="hide-sm hide-md">{{ c.deadline_ko }}</td><td class="num hide-sm">{{ c.targets }}</td>
+<td class="num"><span class="minibar hide-sm"><i style="width:{{ ((c.rate or 0) * 100)|round(1) }}%"></i></span>{{ e.pct(c.rate) }}</td>
+<td class="num">{% if c.not_done %}<a href="?course={{ c.course_id }}#not-done">{{ c.not_done }}</a>{% else %}0{% endif %}</td>
+<td class="num hide-sm">{{ c.overdue }}</td><td class="num hide-sm">{{ c.soon }}</td></tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">열린 필수 과정이 없습니다</div></div>{% endif %}
+
+<h2 class="sec">조직별</h2>
+<nav class="seg" aria-label="묶는 계층">{% for lv in LEVELS %}<a class="{{ 'on' if lv == level }}" href="?level={{ lv }}{{ '&course=' ~ course if course }}">{{ LEVEL_KO.get(lv, lv) }}</a>{% endfor %}</nav>
+{% if by_org %}
+<div class="card tablecard" style="margin-top:12px"><table>
+<tr><th>조직</th><th class="num hide-sm">재직</th><th class="num">수료율</th><th class="num">미수료</th><th class="num hide-sm">지남</th></tr>
+{% for r in by_org %}<tr><td class="strong wrap-sm">{{ r.org_text }}</td><td class="num hide-sm">{{ r.people }}</td>
+<td class="num"><span class="minibar hide-sm"><i style="width:{{ ((r.rate or 0) * 100)|round(1) }}%"></i></span>{{ e.pct(r.rate) }}</td>
+<td class="num">{{ r.not_done }}</td><td class="num hide-sm">{{ r.overdue }}</td></tr>{% endfor %}
+</table></div>
+<p class="cap">그 계층의 위 조직이 없는 사람은 자기 소속 조직으로 묶습니다. 수료율이 낮은 조직부터 보입니다.</p>
+{% else %}<div class="card" style="margin-top:12px"><div class="k">묶을 조직이 없습니다</div></div>{% endif %}
+
+<h2 class="sec" id="not-done">미수료자 {{ n_rows }}건</h2>
+<nav class="seg" aria-label="과정 거르기"><a class="{{ 'on' if not course }}" href="?level={{ level }}#not-done">모든 과정</a>{% for c in courses %}<a class="{{ 'on' if course == c.course_id }}" href="?course={{ c.course_id }}&amp;level={{ level }}#not-done">{{ c.course_name }}</a>{% endfor %}</nav>
+{% if rows %}
+<div class="card tablecard md-sub" style="margin-top:12px"><table>
+<tr><th>이름</th><th class="hide-sm hide-md">사번</th><th class="hide-sm hide-md">소속</th><th class="hide-sm hide-md">과정</th><th class="hide-sm hide-md">기한</th><th>상태</th><th class="acts"><span class="hide-sm">확인</span></th></tr>
+{% for r in rows %}<tr><td class="strong wrap-sm">{{ r.name }}{% if r.mine %} <span class="chip">본인</span>{% endif %}<div class="sm-sub"><span>{{ r.course_name }}</span><span>{{ r.code }} · 기한 {{ e.day(r.due, year) }}</span></div></td>
+<td class="hide-sm hide-md">{{ r.code }}</td><td class="hide-sm hide-md wrap-sm">{{ r.org or '-' }}</td><td class="hide-sm hide-md">{{ r.course_name }}</td><td class="hide-sm hide-md">{{ e.day(r.due, year) }}</td>
+<td>{{ e.state(r) }}</td>
+<td class="acts">{% if r.mine %}<span class="cap" style="margin:0">다른 관리자 확인</span>{% else %}<a class="ghost" href="?confirm={{ r.agent_id }}-{{ r.course_id }}{{ '&course=' ~ course if course }}#confirm">수료 확인</a>{% endif %}</td></tr>{% endfor %}
+</table></div>
+{% if n_rows > rows|length %}<p class="cap">앞의 {{ rows|length }}건만 보여 줍니다. 과정을 골라 좁혀 보세요.</p>{% endif %}
+{% else %}<div class="card" style="margin-top:12px"><div class="k"><span class="dot"></span>미수료자가 없습니다</div></div>{% endif %}
+<p class="cap">{{ as_of }} 기준입니다. 진척도는 필수 과정만 세고, 퇴사자는 모수에서 빼되 수료 기록은 남깁니다. 수료는 수료자 명부와 관리자 확인으로 들어옵니다.</p>
+{% endblock %}
