@@ -7,6 +7,8 @@
                           요청 기록에는 이름과 연락처 전체가, 공개 기록에는 이름과 연락처 끝 네 자리가 있다
 - POST /api/admin/approve {slug}           머리글 x-admin-key. 성공 {ok, slug, at}. 대기 중이 아니면 404 no_pending
 - POST /api/admin/reject  {slug, reason}   머리글 x-admin-key. 성공 {ok}. reason 은 사이트가 200자로 자른다
+- GET /api/admin/file?slug=&path=&stage=   머리글 x-admin-key. 신청본(stage=pending) 파일 하나의 바이트.
+                          path 는 사이트의 ALLOWED 와 같은 목록만 받는다. 없으면 404, 꼴이 틀리면 400
 
 쓰기 규칙
 - 승인과 반려만 만든다. 내리기와 수료 코드 발급은 만들지 않는다.
@@ -16,7 +18,12 @@
   권한, 범위, 같은 요청 막기, 변경 기록은 그쪽에 있다.
 
 앱 쪽으로 넘기는 것은 주소, 공개 여부, 승인 시각, 대기와 반려 상태뿐이다.
-이름은 suggest_links 안에서 설계사와 잇는 데만 쓰고 결과와 상태 기록에 남기지 않는다. 연락처는 읽지 않는다.
+이름은 suggest_links 안에서 설계사와 잇는 데만 쓰고 결과와 상태 기록에 남기지 않는다. 목록의 연락처는 읽지 않는다.
+
+신청본 미리보기 (2026-11-14 대표님 결정)
+- pending_file 은 승인 대기 신청본 파일 하나를 읽는다. 읽기 GET 이라 다른 읽기와 같은 재시도 규칙을 따른다.
+- 가져온 바이트는 돌려주기만 하고 디스크, DB, 로그, 연결 상태 어디에도 남기지 않는다.
+- 화면은 이 함수를 바로 부르지 않고 card_decide.preview_card 를 부른다. 권한, 범위, 대기 확인, HTML 다듬기, 변경 기록은 그쪽에 있다.
 
 환경 변수: CARD_SITE_URL (사이트 주소), CARD_ADMIN_KEY (관리자 연동 키), CARD_SITE_WRITE (1 이면 쓰기 켬).
 키는 관리자 호출에만 붙인다.
@@ -26,7 +33,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import asdict, dataclass
-from typing import Iterable, Protocol
+from typing import Iterable, NamedTuple, Protocol
 
 import httpx
 
@@ -45,6 +52,17 @@ STATE_KO = {"pending": "승인 대기", "approved": "승인", "rejected": "반�
 CONN_STATUS = "card_site.status"
 CONN_ADMIN = "card_site.admin"
 CONN_WRITE = "card_site.write"
+CONN_FILE = "card_site.file"
+
+# 신청본 파일. 명함 사이트 lib.mjs 의 ALLOWED, TYPES 와 같은 규칙. fullmatch 로 쓴다
+FILE_RE = re.compile(r"(index\.html|card\.jpg|og\.jpg|contact\.vcf|(card|claim|kakao|blog|youtube|insta)/index\.html)")
+FILE_TYPES = {"html": "text/html; charset=utf-8", "jpg": "image/jpeg", "vcf": "text/vcard; charset=utf-8"}
+FILE_MAX_BYTES = 5 * 1024 * 1024  # 파일 하나의 상한. 사이트는 신청 전체를 4.5MB 로 막는다
+JPEG_MAGIC = b"\xff\xd8\xff"
+
+# 파일 읽기 결과 상태. OK, FAILED, NOT_CONFIGURED 와 함께 쓴다
+NOT_FOUND = "not_found"           # 사이트에 그 신청본 파일이 없다
+TOO_BIG = "too_big"               # 크기 상한을 넘어 읽다가 멈췄다
 
 # 쓰기 결과 상태. OK, FAILED, NOT_CONFIGURED 와 함께 쓴다
 WRITE_OFF = "write_off"           # CARD_SITE_WRITE 가 꺼져 있어 보내지 않았다
@@ -108,6 +126,26 @@ class WriteResult:
     action: str                   # approve / reject
     decided_at: str | None = None
     confirmed_by_status: bool = False   # 응답을 받지 못해 공개 상태를 읽어 결과를 확인했다
+
+
+class CardFile(NamedTuple):
+    """신청본 파일 하나. (바이트, 내용 종류) 로 풀어 쓸 수 있다. repr 에는 크기만 보여 내용이 로그에 찍히지 않게 한다."""
+    data: bytes
+    content_type: str
+
+    def __repr__(self) -> str:
+        return f"CardFile({len(self.data)} bytes, {self.content_type!r})"
+
+    __str__ = __repr__
+
+
+def file_type(path: str) -> str:
+    """사이트의 typeOf 와 같다. 내용 종류는 사이트 응답 머리글이 아니라 파일 이름으로 정한다."""
+    return FILE_TYPES.get(str(path).rsplit(".", 1)[-1], "application/octet-stream")
+
+
+def valid_file_path(path) -> bool:
+    return isinstance(path, str) and FILE_RE.fullmatch(path) is not None
 
 
 @dataclass(frozen=True)
@@ -239,6 +277,58 @@ class CardSiteClient:
             return out
         return self._call(CONN_ADMIN, go)
 
+    # ---------------------------------------------------------- 신청본 파일
+    def pending_file(self, slug: str, path: str, *, max_bytes: int = FILE_MAX_BYTES) -> Outcome:
+        """승인 대기 신청본 파일 하나를 읽는다. 돌려주는 값은 Outcome(value=CardFile(바이트, 내용 종류)).
+        상태는 ok / not_found / too_big / not_configured / failed. 5xx, 429, 연결 오류, 시간 초과만 다시 시도한다.
+        slug 와 path 는 사이트와 같은 규칙으로 먼저 보고, 맞지 않으면 보내지 않는다.
+        HTML 은 다듬지 않은 원본이다. 화면은 card_decide.preview_card 를 거쳐 다듬은 것만 받는다."""
+        slug = str(slug or "").strip().lower()
+        path = str(path or "").strip()
+        if not SLUG_RE.match(slug):
+            return Outcome(FAILED, reason="명함 주소는 영문 소문자, 숫자, 하이픈 2자에서 30자입니다")
+        if not valid_file_path(path):
+            return Outcome(FAILED, reason="명함 사이트가 받는 신청본 파일 이름이 아닙니다")
+        if not self.admin_configured:
+            return self._not_configured(CONN_FILE, "신청본 파일을 가져오지 않습니다")
+        limit = max(1, int(max_bytes))
+        ctype = file_type(path)
+
+        def go():
+            headers = {"accept": "*/*", "user-agent": "ga-app-connect/1", ADMIN_HEADER: self._admin_key}
+            params = {"slug": slug, "path": path, "stage": "pending"}
+            with httpx.Client(base_url=self.base_url, timeout=self.timeout, transport=self.transport) as c:
+                with c.stream("GET", "/api/admin/file", params=params, headers=headers) as r:
+                    if r.status_code >= 500 or r.status_code == 429:
+                        raise Retryable(f"명함 사이트가 {r.status_code} 를 돌려줬습니다")
+                    if r.status_code == 401:
+                        raise CardSiteError("관리자 키가 맞지 않습니다 (401)")
+                    if r.status_code == 404:
+                        return (NOT_FOUND, None)
+                    if r.status_code >= 400:
+                        raise CardSiteError(f"명함 사이트가 요청을 받지 않았습니다 ({r.status_code})")
+                    size = r.headers.get("content-length", "")
+                    if size.isdigit() and int(size) > limit:
+                        return (TOO_BIG, None)
+                    buf = bytearray()
+                    for chunk in r.iter_bytes():
+                        buf += chunk
+                        if len(buf) > limit:
+                            return (TOO_BIG, None)
+            return (OK, bytes(buf))
+
+        out = self._call(CONN_FILE, go)
+        if out.status != OK:
+            return out
+        kind, data = out.value
+        if kind == NOT_FOUND:
+            return Outcome(NOT_FOUND, reason="명함 사이트에 그 신청본 파일이 없습니다. 이미 처리되었을 수 있습니다", attempts=out.attempts)
+        if kind == TOO_BIG:
+            return Outcome(TOO_BIG, reason=f"신청본 파일이 {limit // (1024 * 1024) or 1}MB 상한을 넘어 읽지 않았습니다", attempts=out.attempts)
+        if ctype == FILE_TYPES["jpg"] and not data.startswith(JPEG_MAGIC):
+            return Outcome(FAILED, reason="그림 파일이 JPEG 가 아니라 보여 주지 않습니다", attempts=out.attempts)
+        return Outcome(OK, value=CardFile(data, ctype), attempts=out.attempts)
+
     # ---------------------------------------------------------- 쓰기. 승인과 반려만
     def approve(self, slug: str) -> Outcome:
         """승인 요청을 한 번 보낸다. 돌려주는 값은 Outcome(value=WriteResult).
@@ -323,11 +413,11 @@ class CardSiteClient:
         except Exception:
             pass
 
-    def _not_configured(self) -> Outcome:
+    def _not_configured(self, conn: str = CONN_ADMIN, what: str = "관리자 목록을 열지 않습니다") -> Outcome:
         missing = [k for k, v in ((ENV_URL, self.base_url), (ENV_KEY, self._admin_key)) if not v]
-        out = Outcome(NOT_CONFIGURED, reason=f"설정 안 됨: 환경 변수 {', '.join(missing)} 가 없어 관리자 목록을 열지 않습니다")
+        out = Outcome(NOT_CONFIGURED, reason=f"설정 안 됨: 환경 변수 {', '.join(missing)} 가 없어 {what}")
         try:
-            self.state.record(CONN_ADMIN, NOT_CONFIGURED, reason=out.reason)
+            self.state.record(conn, NOT_CONFIGURED, reason=out.reason)
         except Exception:
             pass
         return out

@@ -15,6 +15,14 @@
 변경 기록 audit_log
 - action 은 card_approve 나 card_reject, target 은 agent:ID. 이어지지 않은 주소면 agent:none 이다.
 - after_json 에는 주소, 결과, 신청 시각, 범위 종류, 반려 사유의 길이만 둔다. 이름, 연락처, 사유 원문은 두지 않는다.
+
+신청본 미리보기 preview_card (2026-11-14 대표님 결정)
+- 범위 판단은 decide_card 와 같다. 이어진 설계사가 범위 안이거나 메인 관리자여야 하고, 이어지지 않은 주소는 메인 관리자만 본다.
+- 공개 상태가 승인 대기일 때만 가져온다. 쓰기 스위치와 상관없이 읽기 GET 만 쓴다.
+- 볼 수 있는 파일은 HTML 과 JPEG 다. contact.vcf 는 연락처뿐이라 미리보기에서 뺐다. 가정이다.
+- HTML 은 card_html.clean_card_html 로 다듬은 것만 돌려준다. 그림은 기본으로 data: 로 넣는다.
+- 가져온 파일은 돌려주기만 하고 디스크, DB, 로그에 남기지 않는다.
+- 실제로 본 일만 audit_log 에 action card_preview, target agent:ID, after_json {"slug"} 로 남긴다. 거부는 남기지 않는다.
 """
 from __future__ import annotations
 
@@ -28,7 +36,20 @@ from typing import Iterable
 from app import db
 from app.connect import tables
 from app.connect.base import FAILED, NOT_CONFIGURED, OK, Outcome
-from app.connect.card_site import NO_PENDING, REASON_MAX, SLUG_RE, STATE_KO, WRITE_ACTIONS, WRITE_OFF, CardEntry, CardSiteClient, CardStatus
+from app.connect.card_site import (
+    FILE_TYPES,
+    NO_PENDING,
+    REASON_MAX,
+    SLUG_RE,
+    STATE_KO,
+    WRITE_ACTIONS,
+    WRITE_OFF,
+    CardEntry,
+    CardFile,
+    CardSiteClient,
+    CardStatus,
+    valid_file_path,
+)
 
 # 판단 결과 상태. card_site 의 OK, NO_PENDING, WRITE_OFF, NOT_CONFIGURED, FAILED 와 함께 쓴다
 DENIED = "denied"                 # 권한이나 범위 밖, 사유에 개인정보 꼴
@@ -41,6 +62,9 @@ DECIDE_KO = {
 }
 ACTION_KO = {"approve": "승인", "reject": "반려"}
 AUDIT_ACTION = {"approve": "card_approve", "reject": "card_reject"}
+AUDIT_PREVIEW = "card_preview"
+PREVIEW_EXT = (".html", ".jpg")   # 미리보기로 보는 파일. contact.vcf 는 뺀다
+PREVIEW_INLINE_MAX = 4            # HTML 하나에 data: 로 넣는 그림 수의 상한
 
 # 반려 사유에 있으면 거부하는 꼴. 사유는 명함 사이트로 나가므로 연락처와 주민번호를 막는다
 _PII = (
@@ -283,3 +307,80 @@ def pending_for_scope(client: CardSiteClient, link_table, scope_agent_ids: Itera
         elif is_main or agent_id in keep:
             linked.append(row)
     return Outcome(OK, value={"linked": linked, "unlinked": unlinked}, reason=out.reason, attempts=out.attempts)
+
+
+# ------------------------------------------------------------------ 신청본 미리보기
+def _audit_preview(con, actor, slug, agent_id) -> None:
+    with tables.write(con, "card_preview"):
+        con.execute("INSERT INTO audit_log(at, actor, action, target, before_json, after_json) VALUES(?,?,?,?,?,?)",
+                    (db.now(), str(actor or "")[:64], AUDIT_PREVIEW, f"agent:{agent_id if agent_id is not None else 'none'}",
+                     None, json.dumps({"slug": slug}, ensure_ascii=False)))
+
+
+def preview_card(con, client: CardSiteClient, *, slug: str, path: str, actor: str, scope_agent_ids: Iterable, is_main: bool,
+                 asset_url: str | None = None, inline_images: bool = True, link_table=None, today: date | None = None) -> Outcome:
+    """승인 대기 신청본 파일 하나를 화면에 보여 줄 수 있게 가져온다. 예외를 올리지 않는다.
+
+    돌려주는 값은 Outcome(status, value=CardFile(바이트, 내용 종류), reason).
+    status: ok / denied / no_pending / not_found / too_big / not_configured / failed
+    - HTML 이면 다듬은 HTML 의 UTF-8 바이트다. 원본은 돌려주지 않는다. sandbox iframe 안에 넣는다.
+    - inline_images 가 참이면 HTML 이 부르는 신청본 JPEG 를 data: 로 넣는다. 그림 주소 요청이 따로 없다.
+    - asset_url 은 data: 로 넣지 못한 그림에 쓰는 화면의 주소 틀이다. 예: "/cards/preview/{slug}/{path}".
+    - JPEG 이면 원본 바이트다. 사이트에서 JPEG 머리를 확인했다.
+    본 일은 audit_log 에 남긴다. 기록을 남기지 못하면 보여 주지 않는다."""
+    slug = str(slug or "").strip().lower()
+    path = str(path or "").strip() or "index.html"
+    if not SLUG_RE.match(slug):
+        return Outcome(FAILED, reason="명함 주소는 영문 소문자, 숫자, 하이픈 2자에서 30자입니다")
+    if not valid_file_path(path) or not path.endswith(PREVIEW_EXT):
+        return Outcome(DENIED, reason="미리보기로 볼 수 있는 신청본 파일이 아닙니다")
+    links = _links(con, link_table)
+    agent_id = links.agent_for(slug)
+
+    # 두 번째 잠금과 범위. decide_card 와 같다
+    ok, why = actor_allowed(con, actor, is_main, today=today)
+    if not ok:
+        return Outcome(DENIED, reason=why.replace("처리하지 않았습니다", "보여 드리지 않습니다"))
+    if agent_id is None and not is_main:
+        return Outcome(DENIED, reason="설계사와 이어지지 않은 명함은 메인 관리자만 봅니다")
+    if not is_main and agent_id not in set(scope_agent_ids or ()):
+        return Outcome(DENIED, reason="범위 밖 설계사의 명함입니다")
+    if not client.admin_configured:
+        return client.pending_file(slug, path)                         # 보내지 않고 설정 안 됨과 상태 기록만 남긴다
+
+    # 승인 대기일 때만
+    pre = client.status(slug)
+    if pre.status != OK or pre.value is None:
+        return Outcome(FAILED if pre.status != NOT_CONFIGURED else NOT_CONFIGURED,
+                       reason=f"명함 사이트의 상태를 읽지 못했습니다. {pre.reason}".strip()[:300], attempts=pre.attempts)
+    cur: CardStatus = pre.value
+    _record_check(links, slug, cur)
+    if cur.status != "pending":
+        return Outcome(NO_PENDING, reason=f"승인 대기 중인 신청이 아니라 볼 수 없습니다. 지금 상태는 {STATE_KO.get(cur.status, cur.status)} 입니다")
+
+    out = client.pending_file(slug, path)
+    if out.status != OK or not isinstance(out.value, CardFile):
+        return Outcome(out.status if out.status != OK else FAILED, reason=out.reason, attempts=out.attempts)
+    value: CardFile = out.value
+    if path.endswith(".html"):
+        try:
+            value = _clean_page(client, slug, path, value.data, asset_url=asset_url, inline_images=inline_images)
+        except Exception:
+            return Outcome(FAILED, reason="신청본 HTML 을 다듬지 못해 보여 드리지 않습니다", attempts=out.attempts)
+    try:
+        _audit_preview(con, actor, slug, agent_id)
+    except Exception:
+        return Outcome(FAILED, reason="변경 기록을 남기지 못해 보여 드리지 않습니다", attempts=out.attempts)
+    return Outcome(OK, value=value, attempts=out.attempts)
+
+
+def _clean_page(client: CardSiteClient, slug: str, path: str, raw: bytes, *, asset_url, inline_images) -> CardFile:
+    from app.connect.card_html import clean_card_html, referenced_assets
+    inline = {}
+    if inline_images:
+        for ref in referenced_assets(raw, slug=slug, page_path=path, site_base=client.base_url)[:PREVIEW_INLINE_MAX]:
+            got = client.pending_file(slug, ref)
+            if got.status == OK and isinstance(got.value, CardFile):
+                inline[ref] = got.value.data
+    text = clean_card_html(raw, slug=slug, page_path=path, asset_url=asset_url, inline=inline, site_base=client.base_url)
+    return CardFile(text.encode("utf-8"), FILE_TYPES["html"])

@@ -1025,3 +1025,264 @@ def test_pending_for_scope_filters_and_hides_phone(decide_env):
     # 키가 없으면 빈 목록과 설정 안 됨
     none = pending_for_scope(_client(env["site"], env["tmp"], key=""), env["links"], env["scope"], is_main=False)
     assert none.status == NOT_CONFIGURED and none.value == {"linked": [], "unlinked": []}
+
+
+# ------------------------------------------------------------------ 신청본 미리보기
+PREVIEW_MARK = "preview-marker-7f3a"                 # 신청본 안의 표시. 저장소, DB, 로그에 남으면 안 된다
+JPEG = b"\xff\xd8\xff\xe0" + PREVIEW_MARK.encode() + b"\x00" * 16
+PAGE = (f'<!doctype html><html><head><title>{PREVIEW_MARK}</title><script>alert(1)</script>'
+        '<style>body{background:url(card.jpg)} @import url(https://evil.test/a.css);</style></head>'
+        '<body onload="x()"><img src="og.jpg" onerror="alert(2)"><img src="https://evil.test/t.png">'
+        '<a href="javascript:alert(3)">link</a><iframe src="https://evil.test"></iframe></body></html>').encode()
+
+
+class PreviewSite(WriteSite):
+    """신청본 파일을 주는 가짜 명함 사이트. /api/admin/file 을 사이트처럼 처리한다."""
+
+    def __init__(self, files=None, file_fail=None, **kw):
+        super().__init__(**kw)
+        self.files = files if files is not None else {
+            ("card-a", "index.html"): PAGE, ("card-a", "og.jpg"): JPEG, ("card-a", "card.jpg"): JPEG,
+            ("card-x", "index.html"): PAGE, ("card-x", "og.jpg"): JPEG, ("card-c", "index.html"): PAGE}
+        self.file_fail = list(file_fail or [])
+
+    def __call__(self, request):
+        if request.url.path == "/api/admin/file":
+            self.requests.append(request)
+            if request.headers.get("x-admin-key") != KEY:
+                return httpx.Response(401, json={"error": "unauthorized"})
+            if self.file_fail:
+                f = self.file_fail.pop(0)
+                if isinstance(f, Exception):
+                    raise f
+                return httpx.Response(f, json={"error": "server_error"})
+            q = request.url.params
+            if not card_site.SLUG_RE.match(q.get("slug", "")) or not card_site.valid_file_path(q.get("path", "")):
+                return httpx.Response(400, json={"error": "bad_request"})
+            data = self.files.get((q["slug"], q["path"])) if q.get("stage") == "pending" and q["slug"] in self.pending else None
+            if data is None:
+                return httpx.Response(404, json={"error": "not_found"})
+            if callable(data):
+                return data()
+            return httpx.Response(200, content=data, headers={"content-type": card_site.file_type(q["path"])})
+        return super().__call__(request)
+
+    def file_requests(self):
+        return [r for r in self.requests if r.url.path == "/api/admin/file"]
+
+
+def _preview(env, slug, path, actor, *, is_main=False, client=None, **kw):
+    from app.connect.card_decide import preview_card
+    return preview_card(env["con"], client or env["client"], slug=slug, path=path, actor=actor,
+                        scope_agent_ids=[] if is_main else env["scope"], is_main=is_main, link_table=env["links"], **kw)
+
+
+def _preview_audit(con):
+    return [(r[0], r[1], r[2], json.loads(r[3])) for r in
+            con.execute("SELECT actor, action, target, after_json FROM audit_log WHERE action='card_preview' ORDER BY id")]
+
+
+@pytest.fixture()
+def preview_env(decide_env):
+    site = PreviewSite()
+    decide_env["site"] = site
+    decide_env["client"] = _client(site, decide_env["tmp"])                           # 쓰기 꺼짐. 미리보기는 읽기만 한다
+    return decide_env
+
+
+def test_card_pending_file_reads_pending_stage_with_key(tmp_path):
+    site = PreviewSite()
+    out = _client(site, tmp_path).pending_file("card-a", "og.jpg")
+    assert out.status == OK and out.value == (JPEG, "image/jpeg")
+    data, ctype = out.value
+    assert data == JPEG and ctype == "image/jpeg"
+    (req,) = site.requests
+    assert req.method == "GET" and req.headers["x-admin-key"] == KEY
+    assert dict(req.url.params) == {"slug": "card-a", "path": "og.jpg", "stage": "pending"}
+    assert PREVIEW_MARK not in repr(out) and PREVIEW_MARK not in str(out.value)    # 로그에 찍혀도 내용은 보이지 않는다
+    html_out = _client(site, tmp_path).pending_file("card-a", "index.html")
+    assert html_out.value.content_type == "text/html; charset=utf-8"
+
+
+@pytest.mark.parametrize("slug, path", [
+    ("card-a", "../index.html"), ("card-a", "card/../index.html"), ("card-a", "/index.html"), ("card-a", "index.htm"),
+    ("card-a", "INDEX.html"), ("card-a", "other/index.html"), ("card-a", "og.jpg?x=1"), ("card-a", "og.png"),
+    ("card-a", "og.jpg\nx"), ("card-a", ""), ("-bad", "index.html"), ("a", "index.html"), ("card_a", "og.jpg"),
+])
+def test_card_pending_file_rejects_bad_slug_or_path_without_calling(tmp_path, slug, path):
+    site = PreviewSite()
+    out = _client(site, tmp_path).pending_file(slug, path)
+    assert out.status == FAILED and site.requests == []
+
+
+def test_card_pending_file_allows_site_paths(tmp_path):
+    for path in ("index.html", "card.jpg", "og.jpg", "contact.vcf", "card/index.html", "claim/index.html", "insta/index.html"):
+        assert card_site.valid_file_path(path), path
+    assert card_site.file_type("contact.vcf").startswith("text/vcard")
+
+
+def test_card_pending_file_without_key_is_not_configured(tmp_path):
+    site = PreviewSite()
+    out = _client(site, tmp_path, key="").pending_file("card-a", "og.jpg")
+    assert out.status == NOT_CONFIGURED and card_site.ENV_KEY in out.reason and site.requests == []
+    assert StateStore(tmp_path / "state").get(card_site.CONN_FILE)["last_status"] == NOT_CONFIGURED
+
+
+def test_card_pending_file_retries_like_other_reads(tmp_path):
+    site = PreviewSite(file_fail=[503, httpx.ReadTimeout("느림")])
+    out = _client(site, tmp_path, attempts=3).pending_file("card-a", "og.jpg")
+    assert out.status == OK and out.attempts == 3 and len(site.file_requests()) == 3
+    site = PreviewSite(file_fail=[503, 503, 503])
+    out = _client(site, tmp_path, attempts=3).pending_file("card-a", "og.jpg")
+    assert out.status == FAILED and len(site.file_requests()) == 3
+    assert StateStore(tmp_path / "state").get(card_site.CONN_FILE)["last_status"] == FAILED
+    site = PreviewSite()
+    out = _client(site, tmp_path, key="wrong-key").pending_file("card-a", "og.jpg")   # 키가 틀리면 한 번만
+    assert out.status == FAILED and "401" in out.reason and len(site.file_requests()) == 1
+    out = _client(PreviewSite(), tmp_path).pending_file("card-a", "contact.vcf")       # 사이트에 없는 파일
+    assert out.status == card_site.NOT_FOUND and out.attempts == 1
+
+
+def test_card_pending_file_size_limit(tmp_path):
+    assert card_site.FILE_MAX_BYTES == 5 * 1024 * 1024
+    big = b"\xff\xd8\xff" + b"0" * card_site.FILE_MAX_BYTES                          # 상한보다 3바이트 크다
+    site = PreviewSite(files={("card-a", "og.jpg"): big})
+    out = _client(site, tmp_path).pending_file("card-a", "og.jpg")
+    assert out.status == card_site.TOO_BIG and out.value is None and len(site.file_requests()) == 1
+    # 길이 머리글 없이 조각으로 오는 응답도 읽다가 멈춘다
+    chunks = []
+
+    def streamed():
+        def gen():
+            for _ in range(100):
+                chunks.append(1)
+                yield b"\xff\xd8\xff" + b"0" * 997
+        return httpx.Response(200, content=gen())
+    site = PreviewSite(files={("card-a", "og.jpg"): streamed})
+    out = _client(site, tmp_path).pending_file("card-a", "og.jpg", max_bytes=5000)
+    assert out.status == card_site.TOO_BIG and len(chunks) < 100
+    ok = _client(PreviewSite(), tmp_path).pending_file("card-a", "og.jpg", max_bytes=len(JPEG))
+    assert ok.status == OK
+
+
+def test_card_pending_file_checks_jpeg_head(tmp_path):
+    site = PreviewSite(files={("card-a", "og.jpg"): b"<svg onload=alert(1)>"})
+    out = _client(site, tmp_path).pending_file("card-a", "og.jpg")
+    assert out.status == FAILED and "JPEG" in out.reason and out.value is None
+
+
+def test_card_preview_in_scope_returns_cleaned_html(preview_env):
+    env = preview_env
+    out = _preview(env, "card-a", "index.html", MGR)
+    assert out.status == OK
+    data, ctype = out.value
+    page = data.decode("utf-8")
+    assert ctype == "text/html; charset=utf-8"
+    for bad in ("<script", "alert(", "onload", "onerror", "javascript:", "evil.test", "<iframe", "@import"):
+        assert bad not in page, bad
+    assert 'http-equiv="Content-Security-Policy"' in page and "default-src &#x27;none&#x27;" in page
+    assert page.count("data:image/jpeg;base64,") == 2                                 # og.jpg 와 CSS 의 card.jpg
+    assert {r.method for r in env["site"].requests} == {"GET"}
+    assert sorted(r.url.params["path"] for r in env["site"].file_requests()) == ["card.jpg", "index.html", "og.jpg"]
+    assert _preview_audit(env["con"]) == [(MGR, "card_preview", f"agent:{env['a1']}", {"slug": "card-a"})]
+    # 대리도 범위 안이면 본다. 그림 하나도 본다
+    img = _preview(env, "card-a", "og.jpg", DEP)
+    assert img.status == OK and img.value == (JPEG, "image/jpeg")
+    assert len(_preview_audit(env["con"])) == 2
+
+
+def test_card_preview_asset_template_without_inline(preview_env):
+    env = preview_env
+    out = _preview(env, "card-a", "index.html", MGR, inline_images=False, asset_url="/cards/preview/{slug}/{path}?v={x}")
+    page = out.value.data.decode("utf-8")
+    assert 'src="/cards/preview/card-a/og.jpg?v={x}"' in page and "data:image/jpeg" not in page
+    assert [r.url.params["path"] for r in env["site"].file_requests()] == ["index.html"]
+
+
+@pytest.mark.parametrize("slug, actor, is_main, why", [
+    ("card-c", MGR, False, "범위 밖"),                     # 이어진 설계사가 범위 밖
+    ("card-x", MGR, False, "메인 관리자만"),               # 이어지지 않은 주소는 관리자가 못 본다
+    ("card-x", DEP, False, "메인 관리자만"),
+    ("card-a", FC, False, "조직장이나 대리가 아니라"),
+    ("card-a", OUT_MGR, False, "조직장이나 대리가 아니라"),
+    ("card-a", "no-such-login", False, "활성 계정이 아니라"),
+    ("card-x", DEP, True, "메인 관리자 계정이 아니라"),    # 화면이 메인이라 해도 DB 가 아니면 막는다
+])
+def test_card_preview_denied_without_calling(preview_env, slug, actor, is_main, why):
+    from app.connect.card_decide import DENIED
+    env = preview_env
+    out = _preview(env, slug, "index.html", actor, is_main=is_main)
+    assert out.status == DENIED and why in out.reason and out.value is None
+    assert env["site"].requests == [] and _preview_audit(env["con"]) == []
+
+
+def test_card_preview_main_admin_sees_unlinked_and_out_of_scope(preview_env):
+    env = preview_env
+    assert _preview(env, "card-x", "index.html", MAIN, is_main=True).status == OK
+    assert _preview(env, "card-c", "index.html", MAIN, is_main=True).status == OK
+    assert [(a[2], a[3]) for a in _preview_audit(env["con"])] == [("agent:none", {"slug": "card-x"}),
+                                                                   (f"agent:{env['a2']}", {"slug": "card-c"})]
+
+
+@pytest.mark.parametrize("path", ["contact.vcf", "../index.html", "index.htm", "x/index.html", "og.png"])
+def test_card_preview_refuses_paths(preview_env, path):
+    from app.connect.card_decide import DENIED
+    env = preview_env
+    out = _preview(env, "card-a", path, MGR)
+    assert out.status == DENIED and env["site"].requests == [] and _preview_audit(env["con"]) == []
+
+
+def test_card_preview_only_while_pending(preview_env):
+    env = preview_env
+    env["site"].pending.pop("card-a")                                                 # 이미 처리된 신청
+    out = _preview(env, "card-a", "index.html", MGR)
+    assert out.status == card_site.NO_PENDING and out.value is None
+    assert env["site"].file_requests() == [] and _preview_audit(env["con"]) == []
+    # 키가 없으면 보내지 않는다
+    out = _preview(env, "card-a", "index.html", MGR, client=_client(env["site"], env["tmp"], key=""))
+    assert out.status == NOT_CONFIGURED and env["site"].file_requests() == []
+
+
+def test_card_preview_stores_nothing(preview_env, caplog):
+    import logging
+    env = preview_env
+    caplog.set_level(logging.DEBUG)
+    before = {p for p in env["tmp"].rglob("*") if p.is_file()}
+    for actor, slug, path, main in ((MGR, "card-a", "index.html", False), (MGR, "card-a", "og.jpg", False),
+                                    (MAIN, "card-x", "index.html", True)):
+        out = _preview(env, slug, path, actor, is_main=main)
+        assert out.status == OK and PREVIEW_MARK not in repr(out)
+    env["con"].commit()
+    lines = _dump(env["path"]) + _dump(env["tmp"] / "state.db")
+    assert any("card_preview" in line for line in lines)
+    assert not any(PREVIEW_MARK in line for line in lines)
+    after = {p for p in env["tmp"].rglob("*") if p.is_file()}
+    assert {p.name for p in after - before} <= {"state.db", "d.db-journal", "d.db-wal", "state.db-journal", "state.db-wal"}   # 연결 상태 표만 새로 생긴다
+    for p in after:
+        assert PREVIEW_MARK.encode() not in p.read_bytes(), p.name
+    assert PREVIEW_MARK not in caplog.text
+    st = StateStore(env["tmp"] / "state").get(card_site.CONN_FILE)
+    assert st["last_status"] == OK and PREVIEW_MARK not in json.dumps(st, ensure_ascii=False)
+
+
+def test_card_html_cleaner_blocks_active_content():
+    from app.connect.card_html import clean_card_html, iframe_tag, preview_headers, referenced_assets
+    raw = ('<!doctype html><meta http-equiv="refresh" content="0;url=https://evil.test"><base href="https://evil.test/">'
+           '<link rel="stylesheet" href="https://evil.test/a.css"><svg><script>alert(1)</script><image href="og.jpg"/>'
+           '<animate attributeName="href" to="javascript:alert(2)"/><foreignObject><img src=x onerror=alert(3)></foreignObject></svg>'
+           '<form action="https://evil.test"><input formaction="https://evil.test"></form><!-- <script>c</script> -->'
+           '<img srcset="og.jpg 1x, https://evil.test/a.png 2x"><img src="/card-a/card.jpg"><img src="../../etc/passwd">'
+           '<img src="https://card.test/card-a/og.jpg"><img src="https://other.test/card-a/og.jpg">'
+           '<object data="x"><embed src="y"></object><a href="tel:000" target="_blank">t</a><p>&lt;b&gt;</p>')
+    assert referenced_assets(raw, slug="card-a", site_base=BASE) == ["og.jpg", "card.jpg"]
+    page = clean_card_html(raw, slug="card-a", site_base=BASE, asset_url="/p/{slug}/{path}")
+    for bad in ("<script", "alert(", "onerror", "javascript:", "evil.test", "other.test", "refresh", "<base", "<link",
+                "<form", "formaction", "<object", "<embed", "passwd", "target=", "<!--", "foreignobject", "<animate"):
+        assert bad not in page, bad
+    assert page.startswith("<!DOCTYPE html><meta charset=\"utf-8\">")
+    assert page.count('"/p/card-a/og.jpg') == 3 and '"/p/card-a/card.jpg"' in page
+    assert '<a title="tel:000">t</a>' in page and "<p>&lt;b&gt;</p>" in page
+    h = preview_headers("text/html; charset=utf-8")
+    assert h["content-security-policy"].startswith("sandbox;") and h["x-content-type-options"] == "nosniff"
+    tag = iframe_tag(srcdoc=page)
+    assert tag.startswith('<iframe sandbox="" ') and "allow-" not in tag and "<script" not in tag
