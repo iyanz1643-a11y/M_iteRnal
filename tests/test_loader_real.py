@@ -1,4 +1,5 @@
 """실제 계약현황(56열)과 사원현황 양식의 적재기 시험. 가짜 샘플 파일로 돈다."""
+import json
 import pathlib
 import tempfile
 
@@ -240,15 +241,23 @@ def test_employee_parser_blocks_missing_required(env):
 
 
 # ------------------------------------------------------------------ 분류표
-def test_category_map_is_draft_with_low_confidence_lines():
+def test_category_map_is_confirmed_d04():
+    """D-04 는 2026-11-14 초안 그대로 확정됐다. 초안 때 확신이 낮던 줄은 이력으로 남고 확정 날짜가 붙는다."""
     text = ec.CATEGORY_MAP.read_text(encoding="utf-8")
-    assert text.splitlines()[0] == "# 초안. 대표님 확인 전"
+    assert text.splitlines()[0] == "# 확정 2026-11-14, D-04"
     doc = yaml.safe_load(text)
-    assert doc["status"] == "draft"
+    assert doc["status"] == "confirmed" and doc["confirmed"] == "2026-11-14" and doc["decision"] == "D-04"
     types = [l["product_type"] for l in doc["map"]]
     assert sorted(types) == sorted(fe.LIFE_TYPES + fe.NONLIFE_TYPES) and len(types) == 19
-    low = {l["product_type"] for l in doc["map"] if l.get("confidence") == "low"}
-    assert low == {"생보정기", "경영인정기", "손보운전자", "생보단체"}
+    low = {l["product_type"]: l for l in doc["map"] if l.get("confidence") == "low"}
+    assert set(low) == {"생보정기", "경영인정기", "손보운전자", "생보단체"}
+    assert all(l["confirmed"] == "2026-11-14" and l.get("note") for l in low.values())
+    assert {k: v["category"] for k, v in low.items()} == {"생보정기": "whole_life", "경영인정기": "whole_life",
+                                                          "생보단체": "general", "손보운전자": "general"}
+    cmap = ec.load_category_map()
+    assert cmap["_meta"]["status"] == "confirmed" and cmap["_meta"]["confirmed"] == "2026-11-14"
+    assert all(v["confirmed"] == "2026-11-14" for k, v in cmap.items() if k != "_meta")
+    assert cmap["생보정기"]["confidence"] == "low" and cmap["종신"]["confidence"] == "high"
 
 
 def test_category_map_is_applied(env):
@@ -264,6 +273,136 @@ def test_category_map_is_applied(env):
     assert con.execute("SELECT DISTINCT product_category FROM contract WHERE product_type_raw='손보운전자'").fetchone()[0] == "general"
     msg = con.execute("SELECT message FROM quality_issue WHERE batch_id=? AND check_code='unknown_category'", (s["batch_id"],)).fetchone()[0]
     assert fe.UNKNOWN_PRODUCT_TYPE in msg
+
+
+# ------------------------------------------------------------------ D-31 철회 계약의 부호
+def _excel_row(rows, r):
+    """rows 안의 행 r 이 엑셀에서 몇 번째 행인가. 1행이 머리글이다."""
+    return rows.index(r) + 2
+
+
+def _num(v):
+    return int(str(v).replace(",", ""))
+
+
+def test_withdrawn_negative_is_stored_positive_and_raw_row_kept(env):
+    con, tmp = env["con"], env["tmp"]
+    path, rows = fe.make_contract_file(tmp / "neg.xlsx", period_ym=YM, roster=env["roster"], negative_withdrawn=True)
+    neg = [r for r in rows if r["계약상태"] == "철회"]
+    assert len(neg) == 2 and all(r["인정보험료"].startswith("-") for r in neg)
+    neg[1]["계약상태"] = "청약철회"                       # 철회로 읽는 두 번째 원문 값
+    path = fe.write_xlsx(tmp / "neg2.xlsx", fe.CONTRACT_HEADERS, rows)
+    src = _source_totals(path)
+    s = ec.load_contract(con, path, YM)
+    assert s["block"] == 0 and s["loaded"] == len(rows) and s["sign_fixed"] == 2
+
+    for r in neg:
+        c = con.execute("SELECT status, converted_premium, premium, premium_monthly, collected_premium, perf_y1 FROM contract WHERE policy_no=?",
+                        (r["증권번호"],)).fetchone()
+        assert c["status"] == "withdrawn"
+        assert c["converted_premium"] == -_num(r["인정보험료"]) > 0
+        assert c["premium"] == c["premium_monthly"] == -_num(r["초회보험료"]) > 0
+        assert c["collected_premium"] == -_num(r["수금보험료"]) > 0
+        assert c["perf_y1"] == _num(r["1차년성적"]) < 0             # 보관만 하는 성적 칸은 원본 그대로다
+        raw = json.loads(con.execute("SELECT raw_json FROM raw_row WHERE batch_id=? AND row_no=?",
+                                     (s["batch_id"], _excel_row(rows, r))).fetchone()[0])
+        assert raw["인정보험료"] == r["인정보험료"] and raw["초회보험료"] == r["초회보험료"] and raw["인정보험료"].startswith("-")
+
+    # 품질 기록에는 건수만 남는다. 금액은 없다
+    q = con.execute("SELECT severity, message FROM quality_issue WHERE batch_id=? AND check_code='sign_aligned'", (s["batch_id"],)).fetchall()
+    assert len(q) == 1 and q[0]["severity"] == "warn" and "(2행," in q[0]["message"]
+    for r in neg:
+        assert str(-_num(r["인정보험료"])) not in q[0]["message"] and r["인정보험료"].lstrip("-") not in q[0]["message"]
+    assert "negative_amount" not in _codes(con, s["batch_id"])
+
+    # 원본 부호의 합은 그대로 보이고, 부호를 맞춘 합이 원장과 맞는다
+    flipped = sum(-_num(r["인정보험료"]) for r in neg)
+    assert s["file_recognized_sum"] == src["recognized"]
+    assert s["file_recognized_sum_aligned"] == src["recognized"] + 2 * flipped == s["loaded_recognized_sum"]
+    assert con.execute("SELECT SUM(converted_premium) FROM contract").fetchone()[0] == s["loaded_recognized_sum"]
+
+
+def test_withdrawn_negative_counts_in_contract_month_and_out_in_withdrawal_month(env):
+    """부호를 맞춘 철회 계약은 업적 집계에서 성립 달에 더해지고 철회 달에 빠진다. 같은 달이면 0 이다."""
+    from app.engine import performance
+
+    con, tmp, roster = env["con"], env["tmp"], env["roster"]
+    base = fe.fake_contract_rows(n=3, period_ym=YM, roster=roster)
+    same, later, other = (dict(r) for r in base)
+    for r, scd in ((same, "20260220"), (later, "20260310")):
+        r.update({"계약상태": "철회", "계약일자": "20260205", "최종상태변경일": scd,
+                  "인정보험료": "-120,000", "초회보험료": "-100,000", "수금보험료": "-100,000"})
+    other.update({"계약상태": "정상", "계약일자": "20260205", "인정보험료": "50,000", "초회보험료": "50,000"})
+    rows = [same, later, other]
+    assert len({r["모집사원번호"] for r in rows}) == 3
+    s = ec.load_contract(con, fe.write_xlsx(tmp / "perf.xlsx", fe.CONTRACT_HEADERS, rows), YM)
+    assert s["block"] == 0 and s["loaded"] == 3 and s["sign_fixed"] == 2
+    aid = {r["internal_code"]: r["agent_id"] for r in con.execute("SELECT internal_code, agent_id FROM agent")}
+    feb, mar = performance.compute_range(con, "202602", "202602"), performance.compute_range(con, "202603", "202603")
+
+    a = feb[aid[same["모집사원번호"]]]                                     # 같은 달에 성립하고 철회
+    assert (a["new_count"], a["withdrawn_count"], a["net_count"]) == (1, 1, 0)
+    assert a["converted_premium"] == 0 and a["monthly_premium"] == 0
+    assert aid[same["모집사원번호"]] not in mar
+
+    b_feb, b_mar = feb[aid[later["모집사원번호"]]], mar[aid[later["모집사원번호"]]]   # 2월 성립, 3월 철회
+    assert b_feb["converted_premium"] == 120000 and b_feb["monthly_premium"] == 100000 and b_feb["net_count"] == 1
+    assert b_mar["converted_premium"] == -120000 and b_mar["monthly_premium"] == -100000 and b_mar["net_count"] == -1
+    assert feb[aid[other["모집사원번호"]]]["converted_premium"] == 50000
+
+
+def test_negative_on_non_withdrawn_is_warned_and_kept(env):
+    con, rows = env["con"], [dict(r) for r in env["rows"]]
+    inforce = next(r for r in rows if r["계약상태"] == "정상")
+    lapsed = next(r for r in rows if r["계약상태"] == "실효")
+    for r in (inforce, lapsed):
+        r["인정보험료"], r["초회보험료"] = "-" + r["인정보험료"], "-" + r["초회보험료"]
+    path = fe.write_xlsx(env["tmp"] / "neg_other.xlsx", fe.CONTRACT_HEADERS, rows)
+    s = ec.load_contract(con, path, YM)
+    assert s["block"] == 0 and s["loaded"] == len(rows) and s["sign_fixed"] == 0
+    for r in (inforce, lapsed):
+        c = con.execute("SELECT converted_premium, premium FROM contract WHERE policy_no=?", (r["증권번호"],)).fetchone()
+        assert c["converted_premium"] == _num(r["인정보험료"]) < 0 and c["premium"] == _num(r["초회보험료"]) < 0
+        raw = json.loads(con.execute("SELECT raw_json FROM raw_row WHERE batch_id=? AND row_no=?",
+                                     (s["batch_id"], _excel_row(rows, r))).fetchone()[0])
+        assert raw["인정보험료"] == r["인정보험료"]
+    warned = {r[0] for r in con.execute("SELECT row_no FROM quality_issue WHERE batch_id=? AND check_code='negative_amount'", (s["batch_id"],))}
+    assert warned == {_excel_row(rows, inforce), _excel_row(rows, lapsed)}
+    assert "sign_aligned" not in _codes(con, s["batch_id"])
+    assert s["file_recognized_sum"] == s["file_recognized_sum_aligned"] == s["loaded_recognized_sum"]
+
+
+def test_sample_org_contract_loader_aligns_withdrawn_sign(tmp_path):
+    """기존 샘플 적재기(본부 계약현황)도 같은 규칙이다. 파일 합계 대조는 원본 부호로 한다."""
+    from datetime import date
+
+    from app.loader import excel_loader
+
+    con = db.init_db(tmp_path / "t.db")
+    for i, (code, name, elig) in enumerate(masters.CATEGORIES):
+        con.execute("INSERT INTO product_category(code, name, incentive_eligible, sort_order) VALUES(?,?,?,?)", (code, name, elig, i))
+    ins = con.execute("INSERT INTO insurer(code, name, sector) VALUES('SAM', '샘플생명', 'life')").lastrowid
+    con.execute("INSERT INTO product(insurer_id, product_code, product_name, product_category, conversion_rate, effective_from) "
+                "VALUES(?, 'P1', '시험상품', 'health', 1.0, '202601')", (ins,))
+    con.execute("INSERT INTO agent(internal_code, name) VALUES('T0001', '가상일')")
+    con.commit()
+    d = date(2026, 2, 10)
+    base = {"본부": "가상본부", "사번": "T0001", "성명": "가상일", "원수사": "샘플생명", "상품명": "시험상품", "구분": "건강",
+            "청약일": d, "계약일": d, "상태변경일": d, "납입주기": "월납", "납입기간": 20, "건수": 1}
+    rows = [dict(base, 청약번호="APP1", 상태="철회", 보험료=-100000, 인정보험료=-100000),
+            dict(base, 청약번호="APP2", 상태="성립", 보험료=-30000, 인정보험료=-30000),
+            dict(base, 청약번호="APP3", 상태="성립", 보험료=50000, 인정보험료=50000)]
+    rows.append({"사번": "합계", "인정보험료": sum(r["인정보험료"] for r in rows)})   # 원본 부호의 합계 줄
+    s = excel_loader.load_org_contract(con, _org_contract_xlsx(tmp_path / "oc.xlsx", rows), YM, None)
+    assert s["block"] == 0 and s["inserted"] == 3 and s["sign_fixed"] == 1
+    got = {r["application_no"]: (r["status"], r["premium"], r["converted_premium"]) for r in con.execute(
+        "SELECT application_no, status, premium, converted_premium FROM contract")}
+    assert got == {"APP1": ("withdrawn", 100000, 100000), "APP2": ("inforce", -30000, -30000), "APP3": ("inforce", 50000, 50000)}
+    codes = {r[0]: r[1] for r in con.execute("SELECT check_code, COUNT(*) FROM quality_issue WHERE batch_id=? GROUP BY 1", (s["batch_id"],))}
+    assert codes["sign_aligned"] == 1 and codes["negative_amount"] == 1 and "total_mismatch" not in codes
+    raw = [json.loads(x[0]) for x in con.execute("SELECT raw_json FROM raw_row WHERE batch_id=?", (s["batch_id"],))]
+    assert next(r for r in raw if r.get("청약번호") == "APP1")["인정보험료"] == -100000
+    con.close()
 
 
 # ------------------------------------------------------------------ 마스터에 없는 값

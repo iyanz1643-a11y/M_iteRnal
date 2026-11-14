@@ -59,3 +59,8 @@ versions:
       label: "합계"
       value_column: "인정보험료"
       compare_to: recognized_premium
+    # D-31 확정 2026-11-14. 상태가 철회인 행의 금액이 음수로 오면 원장에는 절댓값으로 넣는다.
+    # 파일 합계 대조는 원본 부호로 먼저 끝내고, 원본 행(raw_row)은 원래 값 그대로 둔다. 철회가 아닌 음수는 경고만 남긴다.
+    sign_align:
+      when_status: [withdrawn]
+      fields: [premium, recognized_premium]

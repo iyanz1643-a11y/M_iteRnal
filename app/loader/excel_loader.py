@@ -43,6 +43,27 @@ def issue(con, batch_id, severity, code, message, row_no=None):
                 (batch_id, row_no, severity, code, message))
 
 
+SIGN_ALIGN_MESSAGE = "철회 계약의 음수 금액을 양수로 맞췄습니다 (D-31). 원본 행은 그대로 두었습니다"
+
+
+def align_withdrawn_sign(std, status, rule) -> bool:
+    """D-31. 철회 계약의 금액 칸에 음수가 오면 절댓값으로 바꾼다. 바꾼 칸이 하나라도 있으면 True.
+
+    rule 은 매핑의 sign_align 이다: {when_status: [withdrawn], fields: [...]}. 없으면 아무것도 바꾸지 않는다.
+    계산 엔진은 철회 계약의 금액이 양수라고 보고 성립한 달에 더하고 철회한 달에 뺀다. 철회가 아닌 계약의 음수는 건드리지 않는다.
+    std 만 고친다. 원본 행(raw_row)은 원래 값 그대로 남는다.
+    """
+    if not rule or status not in rule.get("when_status", ()):
+        return False
+    changed = False
+    for f in rule.get("fields", ()):
+        v = std.get(f)
+        if isinstance(v, (int, float)) and v < 0:
+            std[f] = -v
+            changed = True
+    return changed
+
+
 def finish_batch(con, batch_id, row_count, failed=False):
     con.execute("UPDATE import_batch SET status=?, loaded_at=?, row_count=? WHERE batch_id=?",
                 ("failed" if failed else "active", db.now(), row_count, batch_id))
@@ -146,9 +167,16 @@ def load_org_contract(con, path, period_ym, upload_org_id, by="system"):
     products = {(r["insurer_id"], r["product_name"]): r for r in con.execute("SELECT * FROM product")}
     categories = {r["name"]: r["code"] for r in con.execute("SELECT * FROM product_category")}
     hq_members = org_members(con, upload_org_id, period_ym)
-    seen, inserted, updated, skipped = {}, 0, 0, 0
+    seen, inserted, updated, skipped, sign_fixed = {}, 0, 0, 0, 0
+    first_fixed = None
     for r in rows:
         n = r["_row"]
+        # 파일 합계 대조(check_total)는 원본 부호로 끝냈다. 원장에 넣을 값만 부호를 맞춘다
+        if align_withdrawn_sign(r, r.get("status"), m.get("sign_align")):
+            sign_fixed += 1
+            first_fixed = first_fixed or n
+        elif any(isinstance(r.get(f), (int, float)) and r[f] < 0 for f in ("premium", "recognized_premium")):
+            issue(con, batch_id, "warn", "negative_amount", "철회가 아닌 계약의 보험료나 인정보험료가 음수입니다. 값은 그대로 두었습니다", n)
         if r["application_no"] in seen:
             issue(con, batch_id, "warn", "duplicate_key", f"청약번호 {r['application_no']} 가 {seen[r['application_no']]}행과 중복 (뒤 행으로 반영)", n)
         seen[r["application_no"]] = n
@@ -221,8 +249,10 @@ def load_org_contract(con, path, period_ym, upload_org_id, by="system"):
             con.execute("INSERT INTO contract_status_history(contract_id, status, status_date, batch_id, created_at) VALUES(?,?,?,?,?)",
                         (old["contract_id"], status, sdate, batch_id, db.now()))
             updated += 1
+    if sign_fixed:
+        issue(con, batch_id, "warn", "sign_aligned", f"{SIGN_ALIGN_MESSAGE} ({sign_fixed}행, 첫 행 {first_fixed})", first_fixed)
     finish_batch(con, batch_id, len(rows))
-    return summary(con, batch_id, rows=len(rows), inserted=inserted, updated=updated, skipped=skipped)
+    return summary(con, batch_id, rows=len(rows), inserted=inserted, updated=updated, skipped=skipped, sign_fixed=sign_fixed)
 
 
 # ------------------------------------------------------------------ 보험사 정산서

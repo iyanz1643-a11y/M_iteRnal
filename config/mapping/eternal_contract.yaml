@@ -8,7 +8,7 @@
 #
 # 적재 규칙
 # - 키는 (보험사, 증권번호). 같은 증권번호가 다시 오면 상태 변화로 다룬다.
-# - 인정보험료는 파일 값을 그대로 쓰고 다시 계산하지 않는다.
+# - 인정보험료는 파일 값을 그대로 쓰고 다시 계산하지 않는다. 철회 계약의 음수만 부호를 맞춘다 (D-31, 아래 sign_align).
 # - 1차년에서 4차년 성적과 수기성적은 보관만 한다 (D-03).
 # - 원본 행은 raw_row 에 남긴다. 버린 열은 raw_row 에도 남기지 않는다.
 source: eternal
@@ -201,3 +201,11 @@ versions:
       "연납": annual
       "3월납": quarterly
       "6월납": semiannual
+    # D-31 확정 2026-11-14. 철회 계약의 금액이 음수로 오면 원장에는 절댓값으로 넣는다.
+    # 철회는 계약상태(status_raw)를 위 status_map 으로 옮긴 값이 withdrawn 인 것이다. 지금은 "철회"와 "청약철회" 두 가지다.
+    # 계산 엔진은 철회 계약의 금액을 양수로 보고 성립한 달에 더하고 철회한 달에 뺀다.
+    # 원본 행(raw_row)과 file_recognized_sum 은 원래 부호 그대로다. 철회가 아닌 계약의 음수는 값을 두고 경고만 남긴다.
+    # 1차년에서 4차년 성적과 수기성적은 보관만 하는 칸이라 여기 넣지 않았다.
+    sign_align:
+      when_status: [withdrawn]
+      fields: [recognized_premium, first_premium, collected_premium]

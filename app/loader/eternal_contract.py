@@ -5,6 +5,8 @@
 - 같은 파일(import_batch.file_hash)은 DuplicateFile 로 막는다.
 - 키는 (보험사, 증권번호)다. 이미 있는 계약은 값을 새로 고치고, 계약상태나 최종상태변경일이 바뀌면 contract_status_history 에 쌓는다.
 - 인정보험료는 파일 값을 그대로 쓴다. 1차년에서 4차년 성적은 보관만 한다 (D-03).
+- 철회 계약의 금액이 음수로 오면 원장에는 절댓값으로 넣고 품질 기록에 건수만 남긴다 (D-31, 매핑의 sign_align).
+  원본 행과 file_recognized_sum 은 원래 부호 그대로다. 철회가 아닌 계약의 음수는 값을 두고 경고만 남긴다.
 - 경고와 오류 메시지에는 사람 이름과 금액을 넣지 않는다. 사번, 보험사, 상품종류 같은 분류 값만 넣는다.
 """
 import hashlib
@@ -15,7 +17,7 @@ import yaml
 
 from app import db
 from app.loader import mapping, org_path
-from app.loader.excel_loader import DuplicateFile, finish_batch, issue, register_batch, summary  # noqa: F401  (DuplicateFile 을 여기서도 꺼내 쓴다)
+from app.loader.excel_loader import SIGN_ALIGN_MESSAGE, DuplicateFile, align_withdrawn_sign, finish_batch, issue, register_batch, summary  # noqa: F401  (DuplicateFile 을 여기서도 꺼내 쓴다)
 from app.loader.sheet import HeaderMismatch, check_headers, iter_raw, open_sheet, to_standard
 from app.loader.transforms import normalize_header, normalize_policy_no
 from app.periods import date_ym
@@ -28,15 +30,21 @@ DATA_TYPE = "org_contract"
 
 # ------------------------------------------------------------------ 분류표
 def load_category_map(path=CATEGORY_MAP) -> dict:
-    """상품종류 → {category, sector, confidence}. 표의 구분 코드가 일곱 구분 밖이면 오류."""
+    """상품종류 → {category, sector, confidence, confirmed}. 표의 구분 코드가 일곱 구분 밖이면 오류.
+
+    confidence 는 초안 때의 확신 정도로 이력일 뿐이다. 적재는 confidence 와 상관없이 category 를 쓴다.
+    confirmed 는 그 줄이 확정된 날이다. 줄에 없으면 표 전체의 confirmed 를 쓰고, 표가 아직 초안이면 None 이다.
+    """
     doc = yaml.safe_load(pathlib.Path(path).read_text(encoding="utf-8"))
+    table_confirmed = str(doc["confirmed"]) if doc.get("status") == "confirmed" and doc.get("confirmed") else None
     out = {}
     for line in doc["map"]:
         if line["category"] not in SEVEN:
             raise ValueError(f"분류표의 구분 코드 '{line['category']}' 가 일곱 구분에 없습니다")
+        confirmed = str(line["confirmed"]) if line.get("confirmed") else table_confirmed
         out[normalize_header(line["product_type"])] = {
-            "category": line["category"], "sector": line.get("sector"), "confidence": line.get("confidence", "high")}
-    out["_meta"] = {"status": doc.get("status"), "version": doc.get("version")}
+            "category": line["category"], "sector": line.get("sector"), "confidence": line.get("confidence", "high"), "confirmed": confirmed}
+    out["_meta"] = {"status": doc.get("status"), "version": doc.get("version"), "decision": doc.get("decision"), "confirmed": table_confirmed}
     return out
 
 
@@ -102,6 +110,7 @@ def _load_rows(con, m, ws, hrow, headers, batch_id, dropped):
     agg = _Agg()
 
     raw_buf, file_rows, file_sum = [], 0, 0
+    sign_fixed, sign_fixed_amount = 0, 0   # D-31 으로 부호를 맞춘 행 수와 그 인정보험료의 절댓값 합. 대조에만 쓰고 메시지에는 넣지 않는다
     stats = dict(inserted=0, updated=0, refreshed=0, stale=0, skipped=0, history=0)
     written = {}  # (insurer_id, policy_no) → 인정보험료. 파일 안에서 같은 키가 다시 오면 뒤 행이 남는다
     seen_rows = {}
@@ -121,6 +130,14 @@ def _load_rows(con, m, ws, hrow, headers, batch_id, dropped):
                 issue(con, batch_id, "block", "bad_row", f"{b}. 이 행은 넣지 않았습니다", r_idx)
             stats["skipped"] += 1
             continue
+
+        # ---------- D-31 철회 계약의 부호 ----------
+        before = std.get("recognized_premium")
+        if align_withdrawn_sign(std, status, m.get("sign_align")):
+            sign_fixed += 1
+            if isinstance(before, (int, float)) and before < 0:
+                sign_fixed_amount += -before
+            agg.add("sign_aligned", None, SIGN_ALIGN_MESSAGE, r_idx)
 
         # ---------- 품질 검사 ----------
         path = org_path.path_of(std)
@@ -142,7 +159,7 @@ def _load_rows(con, m, ws, hrow, headers, batch_id, dropped):
         if std.get("payment_mode_raw") and mode is None:
             agg.add("unknown_payment_mode", std["payment_mode_raw"], f"납입주기 '{std['payment_mode_raw']}' 을 매핑에서 찾지 못했습니다", r_idx)
         if std["recognized_premium"] < 0:
-            issue(con, batch_id, "warn", "negative_amount", "인정보험료가 음수입니다. 철회나 환수를 음수로 보내는지 확인이 필요합니다", r_idx)
+            issue(con, batch_id, "warn", "negative_amount", "철회가 아닌 계약의 인정보험료가 음수입니다. 처리 기준이 정해지지 않아 값은 그대로 두었습니다", r_idx)
 
         ag = agents.get(std.get("agent_code")) if std.get("agent_code") else None
         if std.get("agent_code") is None:
@@ -238,7 +255,9 @@ def _load_rows(con, m, ws, hrow, headers, batch_id, dropped):
               f"원장 대조가 맞지 않습니다: 반영할 계약 {len(written)}건, 원장 {db_n}건. 합계 차이 {db_sum - exp_sum:,.0f}")
         failed = True
     finish_batch(con, batch_id, file_rows, failed=failed)
-    return summary(con, batch_id, file_rows=file_rows, file_recognized_sum=file_sum, loaded=len(written), loaded_recognized_sum=db_sum,
+    # file_recognized_sum 은 원본 부호 그대로의 합이다. 철회 음수의 부호를 맞춘 합은 file_recognized_sum_aligned 이고, 막힌 행이 없으면 원장 합과 같다
+    return summary(con, batch_id, file_rows=file_rows, file_recognized_sum=file_sum, file_recognized_sum_aligned=file_sum + 2 * sign_fixed_amount,
+                   loaded=len(written), loaded_recognized_sum=db_sum, sign_fixed=sign_fixed,
                    dropped_columns=dropped, category_map=cmap["_meta"], **stats)
 
 

@@ -8,6 +8,7 @@
 샘플에 일부러 넣는 것: 센터와 팀이 빈 행, 둘 이상의 지점 아래 나오는 센터 이름, 둘 이상의 센터 아래 나오는 팀 이름,
 철회와 실효와 해지와 반송 행, 일시납 행, 분류표에 없는 상품종류 하나, 원수사 마스터에 없는 보험사 하나,
 설계사 마스터에 없는 모집사원번호 하나, 모집과 수금이 다른 행.
+negative_withdrawn=True 를 주면 철회 행의 금액(인정보험료, 초회보험료, 수금보험료, 1차년성적)을 음수로 쓴다. D-31 시험용이다.
 """
 import pathlib
 import random
@@ -96,8 +97,12 @@ def fake_roster(seed=11) -> list:
     return roster
 
 
-def fake_contract_rows(n=300, period_ym="202602", seed=7, roster=None) -> list:
-    """가짜 계약현황 행. 머리글을 키로 하는 dict 목록이다. 값은 실제 파일처럼 글자로 둔다(No. 만 숫자)."""
+NEGATIVE_FIELDS = ("인정보험료", "초회보험료", "수금보험료", "1차년성적")
+
+
+def fake_contract_rows(n=300, period_ym="202602", seed=7, roster=None, negative_withdrawn=False) -> list:
+    """가짜 계약현황 행. 머리글을 키로 하는 dict 목록이다. 값은 실제 파일처럼 글자로 둔다(No. 만 숫자).
+    negative_withdrawn 이면 철회 행의 NEGATIVE_FIELDS 를 음수로 쓴다. 난수 순서는 그대로라 다른 값은 같다."""
     rng = random.Random(seed)
     roster = roster or fake_roster()
     y, mo = int(period_ym[:4]), int(period_ym[4:])
@@ -145,6 +150,9 @@ def fake_contract_rows(n=300, period_ym="202602", seed=7, roster=None) -> list:
             "최초등록자": "SYS0001", "최초등록자명": "가상관리", "최종수정자": "SYS0001", "최종수정자명": "가상관리",
             "수정일시": f"{y}{mo:02d}{sday:02d} 10:00:00", "최종상태변경일": scd, "최종수금일": cdate, "비고": "",
         })
+        if negative_withdrawn and status == "철회":
+            for k in NEGATIVE_FIELDS:
+                rows[-1][k] = "-" + rows[-1][k]
     return rows
 
 
@@ -192,8 +200,8 @@ def write_xlsx(path, headers, rows, sheet="Sheet1", extra_sheets=None):
     return path
 
 
-def make_contract_file(path, n=300, period_ym="202602", seed=7, roster=None):
-    rows = fake_contract_rows(n, period_ym, seed, roster)
+def make_contract_file(path, n=300, period_ym="202602", seed=7, roster=None, negative_withdrawn=False):
+    rows = fake_contract_rows(n, period_ym, seed, roster, negative_withdrawn=negative_withdrawn)
     return write_xlsx(path, CONTRACT_HEADERS, rows, sheet="계약현황"), rows
 
 
