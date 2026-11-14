@@ -22,7 +22,7 @@ sources:
     org_center: center
     org_team: team
   # 사원현황. 열 이름은 app/loader/eternal_employee.py 가 돌려주는 org 의 키다
-  # 가정: 총괄은 GA, 직할지점은 센터 계층으로 본다. D-02 의 실제 파일을 받으면 다시 본다
+  # D-41 확정 2026-11-14
   employee:
     총괄: ga
     본부: hq
