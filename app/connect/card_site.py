@@ -256,8 +256,8 @@ def pending_entries(entries: Iterable[CardEntry]) -> list:
 
 # ------------------------------------------------------------------ 설계사와 명함 주소를 잇는 표
 class CardLinkStore(Protocol):
-    """설계사와 명함 주소를 잇는 표의 자리. 테이블이 생기면 그 테이블로 이 꼴을 채운다.
-    잇기와 끊기는 앱 안의 기록이고 메인 관리자만 한다."""
+    """설계사와 명함 주소를 잇는 표의 꼴. DB 구현은 app/connect/card_link.py 의 CardLinkTable 이다.
+    잇기와 끊기는 앱 안의 기록이고 메인 관리자만 한다. record_check 는 있으면 쓰는 선택 함수다."""
 
     def slug_for(self, agent_id) -> str | None: ...
     def agent_for(self, slug: str): ...
@@ -266,7 +266,7 @@ class CardLinkStore(Protocol):
 
 
 class MemoryLinkStore:
-    """시험과 테이블이 생기기 전까지 쓰는 메모리 표."""
+    """시험에서 쓰는 메모리 표."""
 
     def __init__(self, pairs: dict | None = None):
         self._by_agent = dict(pairs or {})
@@ -290,8 +290,16 @@ class MemoryLinkStore:
 
 
 def my_card(client: CardSiteClient, links: CardLinkStore, agent_id) -> Outcome:
-    """내 명함 화면용. 이어진 주소가 없으면 value=None 인 성공으로 돌려준다."""
+    """내 명함 화면용. 이어진 주소가 없으면 value=None 인 성공으로 돌려준다.
+    표가 record_check 를 갖고 있으면 읽은 상태와 시각을 표에도 적는다. 적지 못해도 화면은 그대로 보인다."""
     slug = links.slug_for(agent_id)
     if not slug:
         return Outcome(OK, value=None, reason="이어진 명함 주소가 없습니다")
-    return client.status(slug)
+    out = client.status(slug)
+    check = getattr(links, "record_check", None)
+    if check and out.status == OK and out.value is not None:
+        try:
+            check(slug, out.value)
+        except Exception:
+            pass
+    return out

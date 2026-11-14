@@ -923,3 +923,57 @@ JOIN calc_run r ON r.run_id = s.run_id AND r.status = 'done' AND r.run_type = 'p
 JOIN v_org_closure t ON t.org_id = s.org_id
 JOIN org_unit o ON o.org_id = t.ancestor_id
 GROUP BY r.period_ym, s.period_type, s.period_key, t.ancestor_id, o.name, o.level;
+
+-- ---------------------------------------------------------------------------
+-- 운영 연결 (app/connect). 연결 상태, 폴더 감시 목록, 설계사와 명함 주소를 잇는 표.
+-- 앱이 오래된 DB 를 열 때도 이 묶음만 다시 돌릴 수 있게 모두 IF NOT EXISTS 로 쓴다. app/connect/tables.py 가 이 묶음을 읽는다.
+-- 사람 이름, 연락처, 금액, 키는 넣지 않는다.
+-- [connect:begin]
+-- ---------------------------------------------------------------------------
+-- 연결마다 한 줄. 메인 관리자 화면의 마지막 성공 시각과 실패 사유가 여기서 나온다.
+CREATE TABLE IF NOT EXISTS connection_state (
+    name                 TEXT PRIMARY KEY,            -- upload, gdrive, folder:경로, card_site.status, card_site.admin
+    last_status          TEXT,                        -- ok / failed / not_configured
+    last_attempt_at      TEXT,
+    last_success_at      TEXT,
+    last_failure_at      TEXT,
+    last_failure_reason  TEXT NOT NULL DEFAULT '',    -- 300자까지. 설정 안 됨 사유도 여기 둔다
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,  -- 성공하면 0 으로 돌아간다
+    detail_json          TEXT,                        -- 결과 건수 같은 요약
+    updated_at           TEXT NOT NULL,
+    migrated_from        TEXT                         -- data/state/connections.json 에서 옮긴 줄이면 그 파일 이름
+);
+
+-- 폴더 감시가 이미 끝낸 파일. 크기와 바뀐 시각이 같고 끝난 상태면 다시 읽지 않는다.
+CREATE TABLE IF NOT EXISTS connection_watch (
+    name        TEXT NOT NULL,                        -- 감시 이름. connection_state.name 과 같다
+    rel_path    TEXT NOT NULL,                        -- 감시 폴더 아래 상대 경로
+    file_size   INTEGER,
+    file_mtime  REAL,
+    file_hash   TEXT,                                 -- sha256
+    status      TEXT,                                 -- loaded / duplicate / failed / no_handler / skipped
+    seen_at     TEXT,
+    PRIMARY KEY (name, rel_path)
+);
+
+-- 설계사와 명함 주소. 메인 관리자가 확인한 것만 들어온다. 이름 대조 제안은 표에 넣지 않고 확인 화면에만 보인다.
+-- 끊을 때는 지우지 않고 unlinked_at 을 채운다. 이어진 줄은 주소마다 하나, 설계사마다 하나다.
+CREATE TABLE IF NOT EXISTS card_link (
+    id               INTEGER PRIMARY KEY,
+    agent_id         INTEGER NOT NULL REFERENCES agent(agent_id),
+    slug             TEXT NOT NULL,                   -- 명함 주소. 영문 소문자, 숫자, 하이픈 2자에서 30자
+    linked_via       TEXT NOT NULL DEFAULT 'manual',  -- manual(직접 입력) / suggest(이름 대조 제안을 확인)
+    linked_by        TEXT NOT NULL,                   -- 이은 메인 관리자의 login_id
+    linked_at        TEXT NOT NULL,
+    last_status      TEXT,                            -- 마지막으로 확인한 상태: pending / approved / rejected / removed / none
+    last_live        INTEGER,                         -- 마지막으로 확인했을 때 공개 중이면 1
+    last_live_at     TEXT,                            -- 공개본이 승인된 시각. 명함 사이트의 값
+    last_checked_at  TEXT,
+    unlinked_by      TEXT,
+    unlinked_at      TEXT,
+    unlink_reason    TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_card_link_slug_active ON card_link(slug) WHERE unlinked_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_card_link_agent_active ON card_link(agent_id) WHERE unlinked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_card_link_agent ON card_link(agent_id, linked_at);
+-- [connect:end]

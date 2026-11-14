@@ -2,7 +2,8 @@
 
     python -m app.connect ingest <파일> --kind contract --ym 202610
     python -m app.connect watch <폴더> [--kind plan] [--ym 202610] [--loop --interval 60]
-    python -m app.connect status
+    python -m app.connect status [--db data/demo.db]
+    python -m app.connect migrate-state [--json data/state/connections.json]
     python -m app.connect gdrive
     python -m app.connect card-status <명함 주소>
     python -m app.connect card-list
@@ -22,7 +23,7 @@ from app import db
 from app.connect.base import KINDS, NOT_CONFIGURED, OK
 from app.connect.pipeline import Pipeline
 from app.connect.sources import FolderWatchSource, GoogleDriveSource, UploadSource
-from app.connect.state import StateStore
+from app.connect.state import StateStore, default_state_db
 
 
 def _print(obj) -> None:
@@ -56,8 +57,9 @@ def cmd_ingest(a) -> int:
 def cmd_watch(a) -> int:
     con = _open_db(a.db)
     try:
-        src = FolderWatchSource(a.folder, kind=a.kind, period_ym=a.ym, min_age=a.settle, rescan=a.rescan)
-        pipe = Pipeline(con)
+        state = StateStore(con=con)
+        src = FolderWatchSource(a.folder, kind=a.kind, period_ym=a.ym, state=state, min_age=a.settle, rescan=a.rescan)
+        pipe = Pipeline(con, state=state)
         while True:
             run = pipe.run(src)
             _print(run.to_dict())
@@ -71,9 +73,25 @@ def cmd_watch(a) -> int:
         con.close()
 
 
+def _state(a) -> StateStore:
+    """명령줄의 상태 기록. DB 파일이 없으면 새로 만들지 않는다."""
+    return StateStore(db_path=a.db, create=False)
+
+
 def cmd_status(a) -> int:
-    _print(StateStore().all())
+    if not pathlib.Path(a.db).exists():
+        _print({})
+        return 0
+    _print(_state(a).all())
     return 0
+
+
+def cmd_migrate_state(a) -> int:
+    if not pathlib.Path(a.db).exists():
+        raise SystemExit(f"DB 가 없습니다: {a.db}. --db 로 경로를 정해 주세요")
+    out = _state(a).migrate_json(a.json)
+    _print(out)
+    return 1 if out.get("error") else 0
 
 
 def cmd_gdrive(a) -> int:
@@ -85,7 +103,7 @@ def cmd_gdrive(a) -> int:
 def cmd_card_status(a) -> int:
     from app.connect.card_site import CardSiteClient
 
-    out = CardSiteClient().status(a.slug)
+    out = CardSiteClient(state=_state(a)).status(a.slug)
     _print({"status": out.status, "reason": out.reason, "card": out.value.to_dict() if out.value else None})
     return 0 if out.status == OK else (2 if out.status == NOT_CONFIGURED else 1)
 
@@ -93,7 +111,7 @@ def cmd_card_status(a) -> int:
 def cmd_card_list(a) -> int:
     from app.connect.card_site import CardSiteClient
 
-    out = CardSiteClient().admin_list()
+    out = CardSiteClient(state=_state(a)).admin_list()
     counts: dict = {}
     for e in out.value or []:
         counts[e.request_status] = counts.get(e.request_status, 0) + 1
@@ -124,17 +142,27 @@ def main(argv=None) -> int:
     p.add_argument("--interval", type=float, default=60.0)
     p.set_defaults(fn=cmd_watch)
 
+    state_db = str(default_state_db())
+
     p = sub.add_parser("status", help="연결마다 마지막 성공 시각과 실패 사유")
+    p.add_argument("--db", default=state_db)
     p.set_defaults(fn=cmd_status)
+
+    p = sub.add_parser("migrate-state", help="예전 상태 파일 connections.json 을 표로 옮긴다. 파일은 그대로 둔다")
+    p.add_argument("--json", help="없으면 CONNECT_STATE_DIR 아래 connections.json")
+    p.add_argument("--db", default=state_db)
+    p.set_defaults(fn=cmd_migrate_state)
 
     p = sub.add_parser("gdrive", help="구글 드라이브 가져오기. 지금은 설정 확인만 한다")
     p.set_defaults(fn=cmd_gdrive)
 
     p = sub.add_parser("card-status", help="명함 하나의 공개 상태")
     p.add_argument("slug")
+    p.add_argument("--db", default=state_db)
     p.set_defaults(fn=cmd_card_status)
 
     p = sub.add_parser("card-list", help="명함 관리자 목록의 상태별 건수")
+    p.add_argument("--db", default=state_db)
     p.set_defaults(fn=cmd_card_list)
 
     a = ap.parse_args(argv)

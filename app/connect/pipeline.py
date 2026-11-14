@@ -2,7 +2,7 @@
 
 - 출처의 fetch 는 시간 제한과 재시도 안에서 부른다. 실패해도 예외는 위로 새지 않고 SourceRun 결과로 돌아온다.
 - 적재는 DB 에 쓰므로 시간 제한을 걸지 않는다. 실패하면 되돌리고 실패 결과로 돌려준다.
-- 연결 상태는 출처 이름으로 StateStore 에 남긴다.
+- 연결 상태는 출처 이름으로 StateStore 에 남긴다. DB 를 정하지 않은 상태 기록은 이 흐름의 DB 연결에 붙인다.
 """
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ class Pipeline:
         self.con = con
         self.registry = registry or DEFAULT_REGISTRY
         self.data_dir = data_dir or default_data_dir()
-        self.state = state or StateStore()
+        self.state = (state or StateStore()).bind(con)
 
     # ---------------------------------------------------------- 파일 하나
     def ingest(self, raw: RawFile) -> IngestResult:
@@ -104,6 +104,9 @@ class Pipeline:
     # ---------------------------------------------------------- 출처 하나
     def run(self, source, *, attempts: int = 3, timeout: float | None = 60.0, backoff: float = 1.0, sleep=time.sleep) -> SourceRun:
         name = getattr(source, "name", type(source).__name__)
+        src_state = getattr(source, "state", None)
+        if isinstance(src_state, StateStore):      # 폴더 감시 목록도 같은 DB 에 둔다
+            src_state.bind(self.con)
         got = call_with_retry(source.fetch, attempts=attempts, timeout=timeout, backoff=backoff, sleep=sleep)
         run = SourceRun(source=name, status=got.status, reason=got.reason, attempts=got.attempts)
         if got.status != OK:

@@ -31,6 +31,7 @@ def _isolate(tmp_path, monkeypatch):
     for k in (card_site.ENV_URL, card_site.ENV_KEY, "GDRIVE_SERVICE_ACCOUNT_FILE", "GDRIVE_FOLDER_ID"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("CONNECT_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("CONNECT_STATE_DB", str(tmp_path / "state.db"))   # 연결 상태가 data/demo.db 로 가지 않게 한다
     monkeypatch.setenv("CONNECT_DATA_DIR", str(tmp_path / "data"))
 
     def _no_network(self, request):
@@ -50,6 +51,16 @@ def env(tmp_path):
 
 def _no_sleep(_):
     return None
+
+
+def _dump(path):
+    """DB 의 모든 줄을 글로. 남으면 안 되는 값을 찾을 때 쓴다."""
+    import sqlite3
+    c = sqlite3.connect(str(path))
+    try:
+        return list(c.iterdump())
+    finally:
+        c.close()
 
 
 # ------------------------------------------------------------------ 같은 파일과 원본 보관
@@ -298,8 +309,10 @@ def test_cli_ingest_and_status(env, tmp_path, capsys):
     assert cli.main(["ingest", str(env["contract"]), "--kind", "contract", "--ym", YM, "--db", dbp]) == 0
     assert json.loads(capsys.readouterr().out)["counts"] == {DUPLICATE: 1}
     assert (tmp_path / "data" / "raw" / "contract" / YM).is_dir()
-    assert cli.main(["status"]) == 0
+    assert cli.main(["status", "--db", dbp]) == 0
     assert json.loads(capsys.readouterr().out)["upload"]["last_success_at"]
+    assert cli.main(["status", "--db", str(tmp_path / "없는.db")]) == 0      # DB 가 없으면 빈 목록. 파일을 만들지 않는다
+    assert json.loads(capsys.readouterr().out) == {} and not (tmp_path / "없는.db").exists()
     assert cli.main(["gdrive"]) == 2
     env["con"] = db.connect(tmp_path / "t.db")
 
@@ -400,7 +413,7 @@ def test_card_admin_list_drops_names_and_phones(tmp_path):
     fields = {f.name for f in dataclasses.fields(card_site.CardEntry)}
     assert not fields & {"name", "phone", "phone4", "title", "reason"}
     dumped = json.dumps([dataclasses.asdict(e) for e in out.value], ensure_ascii=False) + repr(out)
-    dumped += (tmp_path / "state" / "connections.json").read_text(encoding="utf-8")
+    dumped += "\n".join(_dump(tmp_path / "state.db"))
     for secret in (*FAKE_NAMES, FAKE_PHONE, "5791", KEY):
         assert secret not in dumped
 
@@ -468,3 +481,244 @@ def test_my_card_uses_link_store(tmp_path):
     assert card_site.my_card(c, links, 7).value.slug == "card-a"
     with pytest.raises(ValueError):
         links.link(8, "card-a", by="main-admin")
+
+
+# ------------------------------------------------------------------ 연결 상태 표
+def test_state_is_kept_in_db(env, tmp_path):
+    con = env["con"]
+    run = env["pipe"].run(UploadSource.from_path(env["contract"], kind="contract", period_ym=YM))
+    assert run.ok
+    row = con.execute("SELECT * FROM connection_state WHERE name='upload'").fetchone()
+    assert row["last_status"] == OK and row["last_success_at"] and json.loads(row["detail_json"]) == {LOADED: 1}
+    env["state"].record_failure("gdrive", "시간 초과")
+    # 다른 연결, 다른 객체로 열어도 같은 값이 보인다
+    again = StateStore(db_path=tmp_path / "t.db")
+    assert again.get("upload")["last_success_at"] == row["last_success_at"]
+    assert again.get("gdrive")["last_failure_reason"] == "시간 초과" and again.get("gdrive")["consecutive_failures"] == 1
+    assert not (tmp_path / "state" / "connections.json").exists()         # 파일에는 더 쓰지 않는다
+    assert not (tmp_path / "state.db").exists()                          # Pipeline 의 DB 에 붙었다
+
+
+def test_state_watch_index_is_in_db(env, tmp_path):
+    root = tmp_path / "sync" / "contract"
+    root.mkdir(parents=True)
+    (root / f"계약현황_{YM}.xlsx").write_bytes(env["contract"].read_bytes())
+    src = FolderWatchSource(tmp_path / "sync", min_age=0)                 # 상태 기록을 주지 않아도 흐름의 DB 를 쓴다
+    assert [r.status for r in env["pipe"].run(src).results] == [LOADED]
+    rows = env["con"].execute("SELECT rel_path, status, file_hash FROM connection_watch").fetchall()
+    assert [(r[0], r[1]) for r in rows] == [(f"contract/계약현황_{YM}.xlsx", LOADED)] and len(rows[0][2]) == 64
+    assert env["pipe"].run(FolderWatchSource(tmp_path / "sync", min_age=0)).results == []
+
+
+def test_state_write_does_not_commit_outer_transaction(tmp_path):
+    path = tmp_path / "o.db"
+    db.init_db(path).close()
+    con = db.connect(path)
+    con.execute("INSERT INTO insurer(code, name, sector) VALUES('ZZ', '되돌릴 보험사', 'life')")
+    StateStore(con=con).record_success("upload")
+    con.rollback()
+    assert con.execute("SELECT COUNT(*) FROM insurer WHERE code='ZZ'").fetchone()[0] == 0
+    StateStore(con=con).record_success("upload")                          # 거래 밖에서는 바로 확정한다
+    other = db.connect(path)
+    assert other.execute("SELECT last_status FROM connection_state WHERE name='upload'").fetchone()[0] == OK
+    other.close()
+    con.close()
+
+
+def test_state_creates_tables_in_old_db(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.db"
+    sqlite3.connect(str(path)).close()                                    # 연결 표가 없는 DB
+    st = StateStore(db_path=path)
+    st.record("card_site.status", NOT_CONFIGURED, reason="설정 안 됨: 주소 없음")
+    got = st.get("card_site.status")
+    assert got["last_status"] == NOT_CONFIGURED and got["consecutive_failures"] == 0 and got["last_failure_at"] is None
+    assert not StateStore(db_path=tmp_path / "없음.db", create=False).create
+    with pytest.raises(FileNotFoundError):
+        StateStore(db_path=tmp_path / "없음.db", create=False).all()
+
+
+def _legacy_json(tmp_path):
+    p = tmp_path / "state" / "connections.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    doc = {"connections": {
+        "upload": {"name": "upload", "last_status": "ok", "last_attempt_at": "2026-11-13 10:00:00", "last_success_at": "2026-11-13 10:00:00",
+                   "last_failure_at": None, "last_failure_reason": "", "consecutive_failures": 0, "detail": {"loaded": 2}},
+        "gdrive": {"name": "gdrive", "last_status": "failed", "last_attempt_at": "2026-11-13 11:00:00", "last_success_at": None,
+                   "last_failure_at": "2026-11-13 11:00:00", "last_failure_reason": "시간 초과", "consecutive_failures": 3}},
+        "watch": {"folder:/x": {"contract/a_202610.xlsx": {"size": 10, "mtime": 1.5, "hash": "h" * 64, "status": "loaded", "at": "2026-11-13 10:00:00"}}}}
+    p.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    return p
+
+
+def test_state_migrates_from_json_once_and_keeps_file(tmp_path):
+    legacy = _legacy_json(tmp_path)
+    before = legacy.read_bytes()
+    path = tmp_path / "m.db"
+    db.init_db(path).close()
+    st = StateStore(tmp_path / "state", db_path=path)
+    got = st.all()                                                         # 처음 읽을 때 옮긴다
+    assert set(got) == {"upload", "gdrive"}
+    assert got["upload"]["detail"] == {"loaded": 2} and got["upload"]["migrated_from"] == "connections.json"
+    assert got["gdrive"]["consecutive_failures"] == 3 and got["gdrive"]["last_failure_reason"] == "시간 초과"
+    assert st.watch_index("folder:/x")["contract/a_202610.xlsx"] == {
+        "size": 10, "mtime": 1.5, "hash": "h" * 64, "status": "loaded", "at": "2026-11-13 10:00:00"}
+    # 표의 값이 새로워진 뒤 다시 옮겨도 덮어쓰지 않고 두 번 넣지 않는다
+    st.record_success("gdrive")
+    assert StateStore(tmp_path / "state", db_path=path).migrate_json() == {"connections": 0, "watch": 0, "file": "connections.json"}
+    con = db.connect(path)
+    assert con.execute("SELECT COUNT(*) FROM connection_state").fetchone()[0] == 2
+    assert con.execute("SELECT consecutive_failures FROM connection_state WHERE name='gdrive'").fetchone()[0] == 0
+    con.close()
+    assert legacy.read_bytes() == before                                    # 원본 파일은 그대로 있다
+
+
+def test_state_migrate_cli_and_broken_json(tmp_path, capsys):
+    legacy = _legacy_json(tmp_path)
+    path = tmp_path / "c.db"
+    db.init_db(path).close()
+    assert cli.main(["migrate-state", "--db", str(path), "--json", str(legacy)]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["connections"] in (0, 2) and set(StateStore(db_path=path).all()) == {"upload", "gdrive"}
+    broken = tmp_path / "broken" / "connections.json"
+    broken.parent.mkdir()
+    broken.write_text("{깨짐", encoding="utf-8")
+    assert cli.main(["migrate-state", "--db", str(path), "--json", str(broken)]) == 1
+    assert "error" in json.loads(capsys.readouterr().out) and broken.read_text(encoding="utf-8") == "{깨짐"
+    assert StateStore(broken.parent, db_path=path).get("upload")                # 깨진 파일이 있어도 상태는 읽힌다
+
+
+def test_schema_has_connect_tables(tmp_path):
+    import sqlite3
+
+    from app.connect import tables
+    assert all("IF NOT EXISTS" in s for s in tables.statements())
+    full = db.init_db(tmp_path / "s.db")
+    bare = sqlite3.connect(":memory:")
+    tables.ensure(bare)                                                     # 오래된 DB 에 덧붙이는 길도 같은 표를 만든다
+    for t in tables.TABLES:
+        cols = [tuple(r)[1:] for r in full.execute(f"PRAGMA table_info({t})")]
+        assert cols and cols == [tuple(r)[1:] for r in bare.execute(f"PRAGMA table_info({t})")]
+    full.close()
+    bare.close()
+
+
+# ------------------------------------------------------------------ 명함 연결 표
+ADMIN, NOT_ADMIN = "admin", "fc-login"
+
+
+@pytest.fixture()
+def links_env(tmp_path):
+    from app.connect.card_link import CardLinkTable
+    con = db.init_db(tmp_path / "l.db")
+    ids = []
+    for i, name in enumerate((FAKE_NAMES[0], FAKE_NAMES[1], FAKE_NAMES[1], "다른사람")):
+        ids.append(con.execute("INSERT INTO agent(internal_code, name) VALUES(?,?)", (f"T{i:03d}", name)).lastrowid)
+    for login, main in ((ADMIN, 1), (NOT_ADMIN, 0)):
+        con.execute("INSERT INTO user_account(login_id, password_hash, display_name, is_main_admin, created_at) VALUES(?,?,?,?,?)",
+                    (login, "x", "시험 계정", main, db.now()))
+    con.commit()
+    site = FakeSite()
+    yield {"con": con, "ids": ids, "links": CardLinkTable(con), "site": site, "client": _client(site, tmp_path), "path": tmp_path / "l.db"}
+    con.close()
+
+
+def _agents(env):
+    return [(r[0], r[1]) for r in env["con"].execute("SELECT agent_id, name FROM agent")]
+
+
+def test_card_link_suggestion_is_not_stored_until_confirmed(links_env):
+    from app.connect.card_link import LinkError
+    env = links_env
+    con, links, a = env["con"], env["links"], env["ids"]
+    sugg = env["client"].suggest_links(_agents(env)).value
+    assert {s.slug: s.agent_ids for s in sugg} == {"card-a": (a[0],), "card-b": (a[1], a[2])}
+    assert con.execute("SELECT COUNT(*) FROM card_link").fetchone()[0] == 0          # 제안만으로는 표에 없다
+    opened = links.open_suggestions(sugg)
+    assert [s.slug for s in opened] == ["card-a", "card-b"]
+    b = next(s for s in opened if s.slug == "card-b")
+    with pytest.raises(LinkError):
+        links.confirm_suggestion(b, a[3], by=ADMIN)                                  # 후보가 아닌 설계사
+    with pytest.raises(LinkError):
+        links.confirm_suggestion(b, a[1], by=NOT_ADMIN)                              # 메인 관리자가 아니다
+    assert con.execute("SELECT COUNT(*) FROM card_link").fetchone()[0] == 0
+    row = links.confirm_suggestion(b, a[2], by=ADMIN)
+    assert row["slug"] == "card-b" and row["agent_id"] == a[2] and row["linked_via"] == "suggest"
+    assert row["linked_by"] == ADMIN and row["linked_at"]
+    # 확정한 주소와 설계사는 다음 제안에서 빠진다
+    again = links.open_suggestions(env["client"].suggest_links(_agents(env)).value)
+    assert [(s.slug, s.agent_ids) for s in again] == [("card-a", (a[0],))]
+    audit = con.execute("SELECT actor, action, target FROM audit_log WHERE action LIKE 'card_%'").fetchall()
+    assert [tuple(r) for r in audit] == [(ADMIN, "card_link", f"agent:{a[2]}")]
+    assert {r.method for r in env["site"].requests} == {"GET"}                       # 명함 사이트에는 읽기만 보냈다
+
+
+def test_card_link_one_slug_one_agent(links_env):
+    import sqlite3
+
+    from app.connect.card_link import LinkError
+    env = links_env
+    con, links, a = env["con"], env["links"], env["ids"]
+    links.link(a[0], "Card-A ", by=ADMIN)
+    assert links.slug_for(a[0]) == "card-a" and links.agent_for("card-a") == a[0]
+    assert links.link(a[0], "card-a", by=ADMIN)["id"] == links.get(a[0])["id"]     # 같은 짝은 그대로
+    with pytest.raises(LinkError):
+        links.link(a[1], "card-a", by=ADMIN)
+    with pytest.raises(sqlite3.IntegrityError):                                       # 표의 색인도 막는다
+        con.execute("INSERT INTO card_link(agent_id, slug, linked_by, linked_at) VALUES(?,?,?,?)", (a[1], "card-a", ADMIN, db.now()))
+    con.rollback()
+    for bad in ("Bad Slug!", "a", ""):
+        with pytest.raises(LinkError):
+            links.link(a[1], bad, by=ADMIN)
+    with pytest.raises(LinkError):
+        links.link(99999, "card-z", by=ADMIN)
+    # 다른 주소로 바꾸면 이전 줄은 지우지 않고 닫는다. 닫힌 주소는 다른 설계사에게 이을 수 있다
+    links.link(a[0], "card-c", by=ADMIN)
+    links.link(a[1], "card-a", by=ADMIN)
+    hist = links.history(a[0])
+    assert [(h["slug"], bool(h["unlinked_at"])) for h in hist] == [("card-a", True), ("card-c", False)]
+    assert hist[0]["unlink_reason"] == "다른 주소로 바꿈"
+    with pytest.raises(LinkError):
+        links.unlink(a[0], by=NOT_ADMIN)
+    links.unlink(a[0], by=ADMIN, reason="해촉")
+    assert links.slug_for(a[0]) is None and len(links.history(a[0])) == 2
+    assert [r["agent_id"] for r in links.links()] == [a[1]] and links.links(agent_ids=[a[0]]) == []
+
+
+def test_card_link_records_last_checked_status(links_env):
+    env = links_env
+    links, a, client = env["links"], env["ids"], env["client"]
+    links.link(a[0], "card-a", by=ADMIN)
+    links.link(a[1], "card-b", by=ADMIN)
+    out = card_site.my_card(client, links, a[0])
+    assert out.value.slug == "card-a"
+    row = links.get(a[0])
+    assert row["last_status"] == "pending" and row["last_live"] is True and row["last_live_at"] == "2026-10-01T00:00:00Z" and row["last_checked_at"]
+    assert links.record_entries(client.admin_list().value) == 2
+    assert links.get(a[1])["last_status"] == "rejected" and links.get(a[1])["last_live"] is False
+    assert links.refresh(client) == {"checked": 2, "failed": 0}
+    assert links.get(a[1])["last_status"] == "none"                                # 가짜 사이트의 공개 상태 응답
+    assert {r.method for r in env["site"].requests} == {"GET"}
+
+
+def test_card_link_keeps_no_name_or_phone(links_env):
+    env = links_env
+    con, links, a, client = env["con"], env["links"], env["ids"], env["client"]
+    cols = {r[1] for r in con.execute("PRAGMA table_info(card_link)")}
+    assert not cols & {"name", "phone", "phone4", "title", "contact", "reason"}
+    for s in links.open_suggestions(client.suggest_links(_agents(env)).value):
+        links.confirm_suggestion(s, s.agent_ids[0], by=ADMIN)
+    links.record_entries(client.admin_list().value)
+    links.refresh(client)
+    card_site.my_card(client, links, a[0])
+    assert con.execute("SELECT COUNT(*) FROM card_link").fetchone()[0] == 2
+    con.commit()
+    dump = _dump(env["path"])
+    # 연락처와 끝 네 자리, 관리자 키는 DB 어디에도 없다
+    for secret in (FAKE_PHONE, "5791", KEY):
+        assert not any(secret in line for line in dump)
+    # 이름은 사원 표에만 있고 연결 표와 변경 기록에는 없다
+    mine = [line for line in dump if any(t in line for t in ('"card_link"', '"audit_log"', '"connection_state"', '"connection_watch"'))]
+    assert mine and not any(n in line for line in mine for n in FAKE_NAMES)
+    out = json.dumps([links.get(x) for x in a], ensure_ascii=False)
+    assert not any(n in out for n in (*FAKE_NAMES, FAKE_PHONE))
