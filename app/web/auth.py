@@ -3,6 +3,7 @@
 역할은 계정에 적어 두지 않는다. 메인 관리자 표시가 있으면 main, 지금 조직장이나 대리로 지정돼 있으면 manager, 아니면 agent 다.
 조직 범위는 조직장이나 대리로 지정된 조직과 그 아래 전부다. 계층은 여섯 단계이고 이름은 config/org_levels.yaml 을 따른다.
 조직장은 자료 기준 달로, 대리는 오늘 날짜로 따진다.
+명함 승인과 반려 권한 card_approver 는 조직장이 되었다고 생기지 않는다. 메인 관리자가 켠다. app/org/card_grant.py 를 본다.
 """
 import hashlib
 import hmac
@@ -11,7 +12,7 @@ import secrets
 from datetime import date, datetime, timedelta
 
 from app import db
-from app.org import levels
+from app.org import card_grant, levels
 
 ITER = 200_000
 MAX_FAIL, LOCK_MINUTES = 5, 10
@@ -113,10 +114,12 @@ def context(con, user_id: int) -> dict | None:
         agent_ids = set()
     if u["agent_id"]:
         agent_ids.add(u["agent_id"])                       # 본인 것은 언제나 본다
+    # 명함 승인과 반려 권한. 메인 관리자는 늘, 관리자는 메인 관리자가 켜 주고 지금도 조직장이거나 대리일 때만, 설계사는 없다
+    card_approver = role == "main" or (role == "manager" and card_grant.is_granted(con, u["login_id"]))
     return {"user_id": u["user_id"], "login_id": u["login_id"], "name": u["display_name"], "agent_id": u["agent_id"],
             "role": role, "role_ko": ROLE_KO[role], "ym": ym, "must_change_password": bool(u["must_change_password"]),
             "heads": [dict(h) for h in heads], "home_org": dict(home) if home else None,
-            "org_ids": org_ids, "agent_ids": agent_ids}
+            "org_ids": org_ids, "agent_ids": agent_ids, "card_approver": card_approver}
 
 
 def can_see_agent(ctx: dict, agent_id: int) -> bool:

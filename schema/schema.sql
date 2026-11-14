@@ -977,3 +977,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_card_link_slug_active ON card_link(slug) W
 CREATE UNIQUE INDEX IF NOT EXISTS idx_card_link_agent_active ON card_link(agent_id) WHERE unlinked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_card_link_agent ON card_link(agent_id, linked_at);
 -- [connect:end]
+
+-- ---------------------------------------------------------------------------
+-- 명함 승인 권한. D-44 를 고친 11월 14일 결정: 조직장이 되었다고 저절로 생기지 않고 메인 관리자가 골라서 켠다.
+-- 대상은 지금 조직장이거나 대리인 관리자 계정이다. 조직장에서 빠지거나 대리 기간이 끝나면 줄이 남아 있어도 효력이 없다.
+-- 끌 때는 지우지 않고 revoked_at 을 채운다. 켜진 줄은 계정마다 하나다. app/org/card_grant.py 가 이 묶음을 읽는다.
+-- [card_grant:begin]
+CREATE TABLE IF NOT EXISTS card_approver (
+    id          INTEGER PRIMARY KEY,
+    login_id    TEXT NOT NULL,                        -- user_account.login_id. 관리자는 사번
+    agent_id    INTEGER REFERENCES agent(agent_id),   -- 켤 때의 계정에 이어진 설계사
+    granted_by  TEXT NOT NULL,                        -- 켠 메인 관리자의 login_id
+    granted_at  TEXT NOT NULL,
+    revoked_by  TEXT,                                 -- 끈 메인 관리자의 login_id
+    revoked_at  TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_card_approver_active ON card_approver(login_id) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_card_approver_login ON card_approver(login_id, granted_at);
+-- [card_grant:end]
