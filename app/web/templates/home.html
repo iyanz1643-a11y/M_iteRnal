@@ -56,6 +56,13 @@
 <h1 class="display">{{ ctx.name }}님,<br>{{ {'main': '오늘의 운영입니다.', 'manager': '우리 조직의 이번 달입니다.', 'agent': '이번 달 진척입니다.'}[ctx.role] }}</h1>
 <p class="lede">{% if d.last_load %}{{ d.last_load_label }} 적재 기준입니다. 실적은 계약 자료를 올린 시점까지 반영됩니다.{% else %}아직 적재된 계약 자료가 없습니다.{% endif %}</p>
 
+{% if d.card_pending and d.card_pending.n %}
+<h2 class="sec">할 일</h2>
+<a class="card todo" href="/sales/card-approve"><div><div class="k"><span class="dot warn"></span>명함 승인</div>
+  <div class="mid word" style="margin-top:6px">명함 승인 대기 {{ d.card_pending.n }}건</div>
+  <div class="cap">명함 사이트 기준 {{ d.card_pending.at_label }} · 눌러서 확인하고 처리합니다</div></div><span class="todo-go" aria-hidden="true">›</span></a>
+{% endif %}
+
 {% if d.ops %}
 <h2 class="sec">운영 상태</h2>
 <div class="grid g5">

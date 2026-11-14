@@ -6,6 +6,7 @@ from fastapi.responses import HTMLResponse
 
 from app.periods import period_key
 from app.web.deps import _cards, _last_load, _perf, _q, get_con, guard, page
+from app.web.routes import card
 
 router = APIRouter()
 
@@ -84,6 +85,8 @@ def home(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
         data["team"] = {"n": len(team), "active": sum(1 for t in team if (t["net_count"] or 0) > 0), "left": sum(1 for t in team if t["left"]),
                         "premium": sum(t["converted_premium"] or 0 for t in team), "count": sum(t["net_count"] or 0 for t in team),
                         "top": [t for t in team if not t["left"]][:5]}
+    if role in ("manager", "main"):
+        data["card_pending"] = card.pending_count(con, ctx)      # 키가 없으면 None. 짧은 시간 제한과 잠깐 담아 둔 목록을 쓴다
     if role == "main":
         one = lambda sql, p=(): con.execute(sql, p).fetchone()[0]
         data["ops"] = {

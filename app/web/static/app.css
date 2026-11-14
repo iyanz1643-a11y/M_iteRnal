@@ -193,3 +193,30 @@ tr.me td{background:var(--tint)}tr.me td:first-child{border-radius:10px 0 0 10px
 
 .only-sm{display:none}
 @media (max-width:760px){.only-sm{display:inline}}
+
+/* ---------- 명함 승인 */
+.alert.bad{background:rgba(255,59,48,.14);color:var(--red)}
+.flash-detail{font-weight:400;font-size:14px;margin-top:4px}
+.req-split{display:flex;gap:32px;flex-wrap:wrap}
+.reqs{padding:4px var(--pad);overflow:hidden}
+.req{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:20px 0;border-bottom:1px solid var(--line)}
+.req:last-child{border-bottom:none}
+.req.on{background:var(--tint);margin:0 calc(-1 * var(--pad));padding:20px var(--pad)}
+.req-main{min-width:0;flex:1}
+.req-who{font-size:18px}.req-who .strong{font-weight:700}
+.req-code{font-size:14px;color:var(--quiet);font-variant-numeric:tabular-nums}
+.req-org{font-size:14px;color:var(--quiet);margin-top:2px}
+.req-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;font-size:14px;color:var(--quiet);margin-top:10px}
+.req-acts{display:flex;gap:8px;flex:none}
+.req-link{display:flex;align-items:flex-end;gap:8px;margin-top:14px;max-width:420px}
+.req-link label.f{flex:1}
+.req-link button.ghost{height:48px;padding:0 18px}
+a.pill{display:inline-flex;align-items:center;justify-content:center;min-height:48px;min-width:72px;padding:0 20px;border-radius:999px;background:var(--blue);color:#fff;font-weight:600;font-size:15px;white-space:nowrap}
+a.pill.quiet{background:var(--bg);color:var(--ink)}
+a.pill.big-pill{min-height:52px;font-size:17px;padding:0 28px}
+.confirm .k:first-child{color:var(--blue)}
+.confirm-title{font-size:clamp(24px,3vw,30px);line-height:1.2;font-weight:700;letter-spacing:-.02em;margin:6px 0 16px}
+ul.notes{margin:16px 0;padding-left:20px;color:var(--quiet);font-size:15px;display:grid;gap:4px}
+@media (max-width:760px){.req{flex-direction:column;align-items:stretch}.req-acts a.pill{flex:1}.req-link{max-width:none}}
+a.card.todo{display:flex;align-items:center;justify-content:space-between;gap:16px;color:var(--ink)}
+.todo-go{font-size:40px;line-height:1;color:var(--faint);flex:none}

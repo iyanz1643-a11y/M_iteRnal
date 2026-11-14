@@ -128,6 +128,8 @@ groups:
          desc: "리포트를 카드뉴스로 만들어 심사 뒤 게시한다"}
       - {id: sales-card, name: 모바일 명함, path: /sales/card, roles: {manager: self, agent: self}, phase: 3, status: planned,
          desc: "내 명함, 인증과 수상 배지, 공유"}
+      - {id: sales-card-approve, name: 명함 승인, path: /sales/card-approve, roles: {main: all, manager: org}, phase: 2, status: built,
+         desc: "범위 안 설계사의 명함 링크 승인 대기를 보고 승인하거나 반려한다. 메인 관리자는 설계사와 이어지지 않은 요청도 잇고 처리한다. D-44"}
 
   - id: data
     name: 데이터
