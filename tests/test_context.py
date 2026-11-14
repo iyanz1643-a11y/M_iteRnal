@@ -52,6 +52,19 @@ def test_decision_ids():
     assert any("날짜가 없습니다" in m for m in errors(cc.check_decisions(undated, {})))
 
 
+def test_confirmed_decision_ids_stay_valid():
+    plan = ("### 7.1 확정\n\n| 날짜 | 결정 |\n| --- | --- |\n| 11월 13일 | 정함 |\n| 11월 14일 | D-01 센터를 쓴다 |\n\n"
+            "### 7.2 열린\n\n| ID | 질문 |\n| --- | --- |\n| D-02 | 둘 |\n")
+    assert cc.confirmed_ids(plan) == ({"D-01"}, [])
+    assert errors(cc.check_decisions(plan, {"x.md": "D-01 에서 정했고 D-02 는 남았다"})) == []
+    mention = plan.replace("| 11월 13일 | 정함 |", "| 11월 13일 | 정함. D-03 은 그대로다 |")
+    assert any("D-03" in m for m in errors(cc.check_decisions(mention, {"x.md": "D-03 을 본다"})))
+    both = plan + "| D-01 | 또 |\n"
+    assert any("D-01" in m and "함께" in m for m in errors(cc.check_decisions(both, {})))
+    twice = plan.replace("| 11월 14일 | D-01 센터를 쓴다 |", "| 11월 14일 | D-01 센터를 쓴다 |\n| 11월 15일 | D-01 다시 |")
+    assert any("7.1 에 두 번" in m for m in errors(cc.check_decisions(twice, {})))
+
+
 def test_claude_md_length_and_date():
     good = "# 글\n\n## 지금 어디까지 왔나\n\n갱신: 2026-11-14\n"
     assert cc.check_claude_md(good, dt.date(2026, 11, 20)) == []

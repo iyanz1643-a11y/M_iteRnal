@@ -108,6 +108,10 @@ def check_tables(menu: dict, docs: dict) -> list:
     return out
 
 
+def _confirmed_section(plan_text: str) -> str:
+    return plan_text.split("### 7.1", 1)[1].split("### 7.2", 1)[0] if "### 7.1" in plan_text else ""
+
+
 def decision_ids(plan_text: str) -> tuple:
     """docs/10 7.2 의 열린 결정 ID 와 겹친 ID."""
     sec = plan_text.split("### 7.2", 1)[1] if "### 7.2" in plan_text else ""
@@ -116,20 +120,32 @@ def decision_ids(plan_text: str) -> tuple:
     return set(ids), dup
 
 
+def confirmed_ids(plan_text: str) -> tuple:
+    """docs/10 7.1 에서 확정된 결정 ID 와 겹친 ID. 결정 칸의 첫머리에 적은 ID 만 센다."""
+    ids = re.findall(r"^\| \d{1,2}월 \d{1,2}일 \| (D-\d{2})(?![0-9])", _confirmed_section(plan_text), flags=re.M)
+    dup = sorted({i for i in ids if ids.count(i) > 1})
+    return set(ids), dup
+
+
 def check_decisions(plan_text: str, others: dict) -> list:
+    """다른 문서가 가리키는 ID 는 7.2 의 열린 결정이나 7.1 의 확정된 결정에 있어야 한다."""
     out = []
     ids, dup = decision_ids(plan_text)
+    done, done_dup = confirmed_ids(plan_text)
     if not ids:
         out.append(("error", "결정 ID: docs/10 7.2 에 열린 결정 표가 없습니다"))
     for d in dup:
         out.append(("error", f"결정 ID: {d} 가 docs/10 7.2 에 두 번 있습니다"))
-    sec = plan_text.split("### 7.1", 1)[1].split("### 7.2", 1)[0] if "### 7.1" in plan_text else ""
-    for ln in sec.splitlines():
+    for d in done_dup:
+        out.append(("error", f"결정 ID: {d} 가 docs/10 7.1 에 두 번 있습니다"))
+    for d in sorted(ids & done):
+        out.append(("error", f"결정 ID: {d} 가 7.1 확정과 7.2 열린 결정에 함께 있습니다. 7.2 의 행을 지우세요"))
+    for ln in _confirmed_section(plan_text).splitlines():
         if ln.startswith("| ") and not ln.startswith(("| 날짜", "| ---")) and not re.match(r"^\| \d{1,2}월 \d{1,2}일 \|", ln):
             out.append(("error", f"결정 ID: 확정된 결정에 날짜가 없습니다: {ln[:40]}"))
     for name, text in others.items():
-        for ref in sorted(set(re.findall(r"(?<![A-Za-z0-9])D-\d{2}(?![0-9])", text)) - ids):
-            out.append(("error", f"결정 ID: {name} 가 가리키는 {ref} 가 docs/10 7.2 에 없습니다"))
+        for ref in sorted(set(re.findall(r"(?<![A-Za-z0-9])D-\d{2}(?![0-9])", text)) - ids - done):
+            out.append(("error", f"결정 ID: {name} 가 가리키는 {ref} 가 docs/10 7.1 과 7.2 에 없습니다"))
     return out
 
 
