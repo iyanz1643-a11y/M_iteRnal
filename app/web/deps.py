@@ -29,8 +29,15 @@ def get_con():
         con.close()
 
 
+PASSWORD_PATH = "/me"
+
+
 class NeedLogin(Exception):
     pass
+
+
+class NeedPasswordChange(Exception):
+    """초기 비밀번호로 들어온 사람은 비밀번호를 바꾸기 전까지 내 정보 화면만 쓴다."""
 
 
 def current(request: Request, con=Depends(get_con)) -> dict:
@@ -50,6 +57,8 @@ def guard(request: Request, ctx: dict = Depends(current), con=Depends(get_con)) 
     if ctx["role"] not in item["roles"]:
         auth.log(con, ctx["login_id"], "access_denied", request.url.path)
         raise HTTPException(403, "이 화면을 볼 권한이 없습니다.")
+    if ctx["must_change_password"] and request.url.path != PASSWORD_PATH:
+        raise NeedPasswordChange()
     return {**ctx, "item": item, "scope": item["roles"][ctx["role"]]}
 
 
@@ -87,9 +96,9 @@ async def csrf_protect(request: Request):
 templates.env.globals["csrf_token"] = csrf_token
 
 
-def page(request, ctx, name, **kw):
+def page(request, ctx, name, status_code=200, **kw):
     cfg = menu.load()
-    return templates.TemplateResponse(request, name, {
+    return templates.TemplateResponse(request, name, status_code=status_code, context={
         "ctx": ctx, "groups": menu.for_role(ctx["role"]), "mobile_tabs": cfg["mobile_tabs"], "item": ctx.get("item"),
         "path": request.url.path, "SCOPES": menu.SCOPES, "PHASES": menu.PHASES, "STATUS": menu.STATUS,
         "LEVEL_KO": auth.LEVEL_KO, "HEAD_KO": auth.HEAD_KO, "pm": pm, **kw})

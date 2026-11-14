@@ -89,6 +89,8 @@ def main(path=db.DEFAULT_DB):
          GROUP BY p.program_id ORDER BY p.sort_order""")
     print("\n== 승격 후보 ==")
     print(career.promotion_candidates(con, AS_OF).head(6).to_string(index=False))
+    # 실제 원수사 32곳은 샘플 파일을 다 만든 뒤에 넣는다. 샘플 유지율과 정산서가 원수사마다 파일을 만들기 때문이다
+    print(f"\n[insurers] 실제 원수사 {masters.seed_real_insurers(con)}곳을 마스터에 넣었습니다 (샘플 원수사 {len(masters.INSURERS)}곳은 그대로)")
     con.close()
 
 

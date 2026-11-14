@@ -1,0 +1,41 @@
+# 조직 계층의 원본 (D-01). 계층의 수와 이름은 코드에 박지 않고 이 파일을 따른다.
+# 위에서 아래 순서다. 맨 위 계층은 하나뿐인 뿌리이고, 설계사는 맨 아래 조직에 소속으로 붙는다.
+# code 는 org_unit.level 에 들어가는 값, head_role 은 org_manager.role 에 들어가는 값이다.
+levels:
+  - {code: ga,     name: GA,        head_role: null,        head_name: null}
+  - {code: hq,     name: 지사·본부, head_role: hq_head,     head_name: 지사장·본부장}
+  - {code: branch, name: 지점,      head_role: branch_head, head_name: 지점장}
+  - {code: center, name: 센터,      head_role: center_head, head_name: 센터장}
+  - {code: team,   name: 팀,        head_role: team_head,   head_name: 팀장}
+
+# 맨 위 뿌리가 자료에 없을 때 쓰는 이름
+root_name: GA
+
+# 파일의 조직 열과 계층의 짝. 파일마다 계층 이름이 달라서 여기서 맞춘다.
+# 빈 칸은 그 계층이 없는 것으로 보고 건너뛴다. 중간 계층이 비어도 받아들인다.
+sources:
+  # 실제 계약현황. 열 이름은 app/loader/org_path.py 의 LEVELS 다
+  contract:
+    org_head_office: ga
+    org_hq: hq
+    org_branch: branch
+    org_center: center
+    org_team: team
+  # 사원현황. 열 이름은 app/loader/eternal_employee.py 가 돌려주는 org 의 키다
+  # 가정: 총괄은 GA, 직할지점은 센터 계층으로 본다. D-02 의 실제 파일을 받으면 다시 본다
+  employee:
+    총괄: ga
+    본부: hq
+    지점: branch
+    직할지점: center
+    팀: team
+
+# 사원현황의 직위와 조직장 역할의 짝. 그 사람의 경로에서 해당 계층 조직의 조직장이 된다.
+# 여기 없는 직위는 조직장으로 지정하지 않는다.
+positions:
+  본부장: hq_head
+  지사장: hq_head
+  지점장: branch_head
+  직할지점장: center_head
+  센터장: center_head
+  팀장: team_head

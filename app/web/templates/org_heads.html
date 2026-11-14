@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block body %}
+<p class="eyebrow">{{ ctx.ym[:4] }}년 {{ ctx.ym[4:]|int }}월 기준</p>
+<h1 class="display">조직장과 대리</h1>
+<p class="lede">조직장으로 지정되면 그 조직과 아래를 보는 관리자가 되고, 끝 달이 지나면 따로 손대지 않아도 설계사로 돌아갑니다. 대리는 날짜로 기간을 정하며 그 기간에만 같은 범위를 봅니다.</p>
+{% if msg %}<div class="okmsg" style="margin-top:20px">{{ msg }}</div>{% endif %}{% if err %}<div class="alert" style="margin-top:20px">{{ err }}</div>{% endif %}
+
+<div class="grid g2" style="margin-top:32px">
+<form class="card wide" method="post" action="/org/heads"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="action" value="assign">
+  <div class="k">조직장 지정</div>
+  <label class="f">조직<select name="org_id" required>{% for c in choices %}<option value="{{ c.org_id }}">{{ c.text }} · {{ LEVEL_KO.get(c.level, c.level) }}</option>{% endfor %}</select></label>
+  <div class="frow">
+    <label class="f">사번<input class="sm" type="text" name="code" required autocomplete="off"></label>
+    <label class="f">시작 달<input class="sm" type="text" name="from_ym" value="{{ ctx.ym }}" pattern="20[0-9]{4}" required></label>
+    <label class="f">끝 달<input class="sm" type="text" name="to_ym" pattern="20[0-9]{4}" placeholder="없으면 비워 둠"></label>
+  </div>
+  <div><button class="primary" type="submit">지정하기</button></div>
+</form>
+<form class="card wide" method="post" action="/org/heads"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="action" value="deputy">
+  <div class="k">기간제 대리 지정</div>
+  <label class="f">조직<select name="org_id" required>{% for c in choices %}<option value="{{ c.org_id }}">{{ c.text }} · {{ LEVEL_KO.get(c.level, c.level) }}</option>{% endfor %}</select></label>
+  <div class="frow">
+    <label class="f">사번<input class="sm" type="text" name="code" required autocomplete="off"></label>
+    <label class="f">시작일<input type="date" name="date_from" value="{{ today }}" required></label>
+    <label class="f">끝일<input type="date" name="date_to" required></label>
+  </div>
+  <label class="f">사유<input class="sm" type="text" name="reason" maxlength="200" placeholder="예: 휴가"></label>
+  <div><button class="primary" type="submit">대리 지정하기</button></div>
+</form>
+</div>
+
+<h2 class="sec">지금과 앞으로의 조직장 {{ rows|length }}명</h2>
+<div class="card tablecard"><table><tr><th>조직</th><th>역할</th><th>이름</th><th class="hide-sm">사번</th><th>기간</th><th class="hide-sm">출처</th><th></th></tr>
+{% for r in rows %}<tr><td class="strong" style="white-space:normal">{{ r.org }}</td><td><span class="chip">{{ HEAD_KO.get(r.role, r.role) }}</span></td><td>{{ r.name }}</td><td class="hide-sm">{{ r.code }}</td>
+<td>{{ r.effective_from }} ~ {{ r.effective_to or '' }}{% if not r.now %} <span class="chip blue">예정</span>{% endif %}</td>
+<td class="hide-sm">{{ '사원현황' if r.source == 'staff' else '화면 지정' }}</td>
+<td><form method="post" action="/org/heads" style="display:inline"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="item_id" value="{{ r.id }}"><button class="ghost" name="action" value="end">해제</button></form></td></tr>
+{% else %}<tr><td colspan="7" class="cap">지정된 조직장이 없습니다.</td></tr>{% endfor %}
+</table></div>
+<p class="cap">해제하면 {{ ctx.ym[:4] }}년 {{ ctx.ym[4:]|int }}월부터 설계사로 돌아갑니다. 지정과 해제는 변경 기록에 남습니다.</p>
+
+<h2 class="sec">대리 {{ deputies|length }}명</h2>
+<div class="card tablecard"><table><tr><th>조직</th><th>이름</th><th class="hide-sm">사번</th><th>기간</th><th class="hide-sm">사유</th><th></th></tr>
+{% for d in deputies %}<tr><td class="strong" style="white-space:normal">{{ d.org }}</td><td>{{ d.name }}</td><td class="hide-sm">{{ d.code }}</td>
+<td>{{ d.date_from|md }} ~ {{ d.date_to|md }}{% if d.now %} <span class="chip good">대리 중</span>{% else %} <span class="chip blue">예정</span>{% endif %}</td><td class="hide-sm">{{ d.reason or '' }}</td>
+<td><form method="post" action="/org/heads" style="display:inline"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="item_id" value="{{ d.id }}"><button class="ghost" name="action" value="deputy_end">끝내기</button></form></td></tr>
+{% else %}<tr><td colspan="6" class="cap">지정된 대리가 없습니다.</td></tr>{% endfor %}
+</table></div>
+
+<h2 class="sec">조직장이 없는 조직 {{ vacant|length }}개</h2>
+{% if vacant %}<div class="card"><div class="chips">{% for c in vacant[:60] %}<span class="chip">{{ c.text }}</span>{% endfor %}{% if vacant|length > 60 %}<span class="chip">외 {{ vacant|length - 60 }}개</span>{% endif %}</div></div>
+{% else %}<div class="card"><div class="k">모든 조직에 조직장이 있습니다</div></div>{% endif %}
+{% endblock %}

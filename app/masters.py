@@ -1,4 +1,4 @@
-"""마스터 샘플 데이터: 구분, 원수사, 상품, 조직(본부·지점·관리자), 설계사, 규칙, 인증·임원·어워드 프로그램.
+"""마스터 샘플 데이터: 구분, 원수사, 상품, 조직(GA·본부·지점·센터·팀·관리자), 설계사, 규칙, 인증·임원·어워드 프로그램.
 계약·정산서·유지율·시상 구간은 여기서 넣지 않는다. 그것들은 samples.py 가 만든 엑셀·PDF 를 적재기로 읽어 들인다."""
 import random
 
@@ -20,6 +20,17 @@ LINEUP = {
 }
 ABBR = {"whole_life": "WL", "health": "HL", "savings": "SV", "annuity": "AN", "property": "PR", "auto": "AU", "general": "GN"}
 ORGS = {"서울본부": ["강남지점", "종로지점"], "부산본부": ["해운대지점", "서면지점"]}
+GA_NAME = "샘플GA"
+# 여섯 단계가 보이도록 지점 아래에 센터와 팀을 둔다: (지점, 센터, 팀, 센터장 이름, 팀장 이름).
+# 샘플 설계사는 지점에 그대로 둔다. 본부 계약현황 적재기가 본부 바로 아래 지점까지만 소속으로 보기 때문이다.
+SUB_ORGS = [("강남지점", "강남센터", "강남1팀", "윤서희", "장도훈")]
+# 실제 원수사 32곳. 업권은 이름으로 정한다(insurer_sector). 샘플 원수사 넷과 따로 두고 seed_real_insurers 로 넣는다
+REAL_INSURERS = [
+    "흥국생명", "흥국화재", "KB손보", "DB손보", "메리츠화재", "KB라이프", "삼성화재", "현대해상", "한화손보", "롯데손보", "삼성생명",
+    "라이나생명", "신한라이프", "한화생명", "메트라이프", "미래에셋생명", "동양생명", "하나손보", "DB생명", "농협손보", "ABL생명",
+    "KDB생명", "AIG손보", "하나생명", "교보생명", "IBK연금", "NH생명", "카디프생명", "라이나손보", "iM라이프", "처브라이프생명", "푸본현대생명",
+]
+LIFE_WORDS, NONLIFE_WORDS = ("생명", "라이프", "연금"), ("화재", "손보", "해상")
 SURNAMES = "김이박최정강조윤장임한오서신권황안송류전홍"
 GIVEN = ["민준", "서연", "도윤", "지우", "하준", "지호", "수아", "예준", "하은", "시우", "유진", "지민", "현우", "서준", "지아", "은우",
          "채원", "준서", "다은", "건우", "소율", "태윤", "나은", "승현"]
@@ -54,6 +65,31 @@ PROGRAMS = [
     ("HALL_OF_FAME", "명예의전당", "자사", "award", "agent", None, "all", None,
      [("all", "award_count", "SALES_EXCELLENT", ">=", 3)]),
 ]
+
+
+def insurer_sector(name: str) -> str:
+    """이름으로 업권을 정한다. 생명, 라이프, 연금은 생명보험(life), 화재, 손보, 해상은 손해보험(nonlife). 둘 다이거나 둘 다 아니면 오류."""
+    life, nonlife = any(w in name for w in LIFE_WORDS), any(w in name for w in NONLIFE_WORDS)
+    if life == nonlife:
+        raise ValueError(f"업권을 이름으로 정할 수 없습니다: {name}")
+    return "life" if life else "nonlife"
+
+
+def seed_real_insurers(con) -> int:
+    """실제 원수사 32곳을 마스터에 넣는다. 다시 돌려도 같다. 적재기가 임시로 만든 같은 이름의 줄은 마스터로 바꾼다."""
+    n = 0
+    for k, name in enumerate(REAL_INSURERS, 1):
+        sector = insurer_sector(name)
+        row = con.execute("SELECT insurer_id, origin FROM insurer WHERE name=?", (name,)).fetchone()
+        if row:
+            if row["origin"] != "master":
+                con.execute("UPDATE insurer SET origin='master', sector=? WHERE insurer_id=?", (sector, row["insurer_id"]))
+                n += 1
+            continue
+        con.execute("INSERT INTO insurer(code, name, sector, origin) VALUES(?,?,?,'master')", (f"R{k:02d}", name, sector))
+        n += 1
+    con.commit()
+    return n
 
 
 def seed(con, rng=None):
@@ -134,6 +170,20 @@ def seed(con, rng=None):
     con.execute("UPDATE agent_org_history SET effective_to='202606' WHERE agent_id=?", (mover["agent_id"],))
     con.execute("INSERT INTO agent_org_history(agent_id, org_id, effective_from) VALUES(?,?,'202607')", (mover["agent_id"], new_br["org_id"]))
     mover["branch_after"] = new_br
+
+    # ---------- GA 뿌리, 센터, 팀 (여섯 단계). 앞의 조직과 설계사의 번호가 바뀌지 않게 뒤에 붙인다 ----------
+    from app.org import sync as org_sync
+    org_sync.backfill(con, GA_NAME)
+    for br_name, center, team, c_head, t_head in SUB_ORGS:
+        br = next(b for b in branches if b["name"] == br_name)
+        steps = [("hq", br["hq"]), ("branch", br_name), ("center", center)]
+        for org_id, role, nm in ((org_sync.ensure_path(con, steps), "center_head", c_head),
+                                 (org_sync.ensure_path(con, steps + [("team", team)]), "team_head", t_head)):
+            mgr_no += 1
+            mid = con.execute("INSERT INTO agent(internal_code, name, hire_date, status, job_type) VALUES(?,?,?,'active','manager')",
+                              (f"M{mgr_no:04d}", nm, f"{2012 + mgr_no}-03-01")).lastrowid
+            con.execute("INSERT INTO agent_org_history(agent_id, org_id, effective_from) VALUES(?,?,'202401')", (mid, org_id))
+            con.execute("INSERT INTO org_manager(org_id, agent_id, role, effective_from) VALUES(?,?,?,'202401')", (org_id, mid, role))
 
     # ---------- 인증 · 임원제도 · 어워드 프로그램 ----------
     prog_id = {}

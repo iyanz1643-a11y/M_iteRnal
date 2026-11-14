@@ -1,21 +1,25 @@
 """계정, 비밀번호, 역할과 조직 범위.
 
-역할은 계정에 적어 두지 않는다. 메인 관리자 표시가 있으면 main, 지금 조직장으로 지정돼 있으면 manager, 아니면 agent 다.
-조직 범위는 조직장으로 지정된 조직과 그 아래 전부다.
+역할은 계정에 적어 두지 않는다. 메인 관리자 표시가 있으면 main, 지금 조직장이나 대리로 지정돼 있으면 manager, 아니면 agent 다.
+조직 범위는 조직장이나 대리로 지정된 조직과 그 아래 전부다. 계층은 여섯 단계이고 이름은 config/org_levels.yaml 을 따른다.
+조직장은 자료 기준 달로, 대리는 오늘 날짜로 따진다.
 """
 import hashlib
 import hmac
 import os
 import secrets
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from app import db
+from app.org import levels
 
 ITER = 200_000
 MAX_FAIL, LOCK_MINUTES = 5, 10
 ROLE_KO = {"main": "메인 관리자", "manager": "관리자", "agent": "설계사"}
-LEVEL_KO = {"ga": "GA", "hq": "지사·본부", "branch": "지점", "team": "팀"}
-HEAD_KO = {"hq_head": "지사장·본부장", "branch_head": "지점장", "team_head": "팀장"}
+LEVEL_KO = levels.level_ko()          # {ga: GA, hq: 지사·본부, branch: 지점, center: 센터, team: 팀}
+HEAD_KO = levels.head_ko()            # {hq_head: 지사장·본부장, branch_head: 지점장, center_head: 센터장, team_head: 팀장, deputy: 대리}
+TEMP_PW_CHARS = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # 헷갈리는 글자(0, O, 1, l, I)는 뺀다
+TEMP_PW_LEN = 12
 
 
 def hash_password(pw: str, salt: str | None = None) -> str:
@@ -84,6 +88,11 @@ def context(con, user_id: int) -> dict | None:
         """SELECT m.org_id, m.role, o.name, o.level FROM org_manager m JOIN org_unit o ON o.org_id=m.org_id
            WHERE m.agent_id=? AND m.effective_from<=? AND (m.effective_to IS NULL OR m.effective_to>=?)""",
         (u["agent_id"], ym, ym)).fetchall() if u["agent_id"] else []
+    today = date.today().isoformat()
+    heads += con.execute(
+        """SELECT d.org_id, 'deputy' role, o.name, o.level FROM org_deputy d JOIN org_unit o ON o.org_id=d.org_id
+           WHERE d.agent_id=? AND d.ended_at IS NULL AND d.date_from<=? AND d.date_to>=?""",
+        (u["agent_id"], today, today)).fetchall() if u["agent_id"] else []
     home = con.execute(
         """SELECT o.org_id, o.name, o.level FROM agent_org_history h JOIN org_unit o ON o.org_id=h.org_id
            WHERE h.agent_id=? AND h.effective_from<=? AND (h.effective_to IS NULL OR h.effective_to>=?)""",
@@ -112,6 +121,32 @@ def context(con, user_id: int) -> dict | None:
 
 def can_see_agent(ctx: dict, agent_id: int) -> bool:
     return agent_id in ctx["agent_ids"]
+
+
+def temp_password() -> str:
+    return "".join(secrets.choice(TEMP_PW_CHARS) for _ in range(TEMP_PW_LEN))
+
+
+def issue_account(con, agent_id: int) -> tuple:
+    """계정이 없는 재직 설계사에게 계정을 만든다. 아이디는 사번, 초기 비밀번호는 무작위이고 첫 접속 때 바꾸게 한다.
+    돌려주는 것: (아이디, 초기 비밀번호). 비밀번호는 저장하지 않으므로 화면에서 한 번만 보여 준다. 커밋하지 않는다."""
+    a = con.execute("SELECT agent_id, internal_code, name FROM agent WHERE agent_id=? AND status='active'", (agent_id,)).fetchone()
+    if not a:
+        raise ValueError("재직 중인 설계사가 아닙니다.")
+    if con.execute("SELECT 1 FROM user_account WHERE agent_id=? OR login_id=?", (agent_id, a["internal_code"])).fetchone():
+        raise ValueError("이미 계정이 있습니다.")
+    pw = temp_password()
+    con.execute("INSERT INTO user_account(login_id, password_hash, agent_id, display_name, must_change_password, created_at) VALUES(?,?,?,?,1,?)",
+                (a["internal_code"], hash_password(pw), agent_id, a["name"], db.now()))
+    return a["internal_code"], pw
+
+
+def reset_password(con, user_id: int) -> str:
+    """새 초기 비밀번호를 만들고 잠금을 풀며 첫 접속 때 바꾸게 한다. 커밋하지 않는다."""
+    pw = temp_password()
+    con.execute("UPDATE user_account SET password_hash=?, must_change_password=1, failed_count=0, locked_until=NULL WHERE user_id=?",
+                (hash_password(pw), user_id))
+    return pw
 
 
 def seed_accounts(con, password: str | None = None) -> int:

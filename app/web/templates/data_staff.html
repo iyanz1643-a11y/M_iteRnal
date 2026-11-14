@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block body %}
+<h1 class="display">사원현황</h1>
+<p class="lede">사원현황 엑셀을 올려 조직, 설계사, 소속 이동, 퇴사, 조직장을 반영합니다. 먼저 미리보기로 바뀌는 건수를 확인한 뒤 반영하세요. 주민번호, 계좌, 소득 같은 열은 읽자마자 버립니다.</p>
+{% if err %}<div class="alert" style="margin-top:20px">{{ err }}</div>{% endif %}
+
+{% if result and result.staff %}{% set st = result.staff.stats %}
+<div class="okmsg" style="margin-top:20px">{{ result.file }} 을 {{ ym[:4] }}년 {{ ym[4:]|int }}월 기준으로 반영했습니다.</div>
+<div class="grid g4" style="margin-top:16px">{% for k in SHOW %}<div class="card"><div class="k">{{ STAT_KO[k] }}</div><div class="big">{{ st[k] }}<span class="unit">건</span></div></div>{% endfor %}</div>
+<p class="cap">계정이 없는 재직 설계사가 {{ result.no_account }}명입니다. <a href="/org/accounts">계정 화면</a>에서 발급하세요. 퇴사자는 계정 화면의 중지 후보에 나옵니다.</p>
+{% endif %}
+{% if result and result.contract %}<div class="okmsg" style="margin-top:20px">계약현황의 조직 경로 {{ result.contract.nodes }}개를 확인해 새 조직 {{ result.contract.new_orgs }}개를 만들었습니다.</div>{% endif %}
+
+{% if preview %}{% set st = preview.stats %}
+<h2 class="sec">미리보기 · {{ preview.file }}</h2>
+<p class="cap" style="margin:-8px 0 12px">{{ st.rows }}명을 읽었습니다. 반영 월은 {{ preview.ym[:4] }}년 {{ preview.ym[4:]|int }}월이고, 이동과 조직장 지정은 이 달부터 적용합니다. 아직 아무것도 바뀌지 않았습니다.</p>
+<div class="grid g4">{% for k in SHOW %}<div class="card"><div class="k">{{ STAT_KO[k] }}</div><div class="big">{{ st[k] }}<span class="unit">건</span></div></div>{% endfor %}</div>
+<div class="card" style="margin-top:16px"><div class="chips">{% for k in MORE %}<span class="chip {{ 'warn' if k in ('no_org', 'head_without_org') and st[k] else '' }}">{{ STAT_KO[k] }} {{ st[k] }}</span>{% endfor %}
+{% if preview.warnings %}<span class="chip warn">파일 경고 {{ preview.warnings|length }}</span>{% endif %}{% if preview.dropped %}<span class="chip">버린 민감 열 {{ preview.dropped|length }}</span>{% endif %}</div>
+<div class="cap">파일에 없는 재직 설계사는 건드리지 않습니다. 퇴사자의 계정은 자동으로 중지하지 않고 계정 화면의 중지 후보로 보냅니다.</div></div>
+<form method="post" action="/data/staff" style="margin-top:16px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="effective_ym" value="{{ preview.ym }}">
+<button class="primary" name="action" value="apply">이대로 반영하기</button></form>
+{% if preview.changes %}<div class="card tablecard" style="margin-top:16px"><table><tr><th>구분</th><th>이름</th><th class="hide-sm">사번</th><th>전</th><th>후</th></tr>
+{% for c in preview.changes[:300] %}<tr><td><span class="chip">{{ KIND_KO.get(c.kind, c.kind) }}</span></td><td class="strong">{{ c.name }}</td><td class="hide-sm">{{ c.code }}</td>
+<td style="white-space:normal">{{ c.before or '' }}{% if c.kind == 'heads_end' %} {{ c.note }}{% endif %}</td><td style="white-space:normal">{{ c.after or '' }}{% if c.kind == 'heads_new' %} {{ c.note }}{% elif c.kind == 'terminated' %}퇴사일 {{ c.note }}{% elif c.note %} {{ c.note }}{% endif %}</td></tr>{% endfor %}
+</table></div>{% if preview.changes|length > 300 %}<p class="cap">앞의 300건만 보여 줍니다. 모두 {{ preview.changes|length }}건입니다.</p>{% endif %}{% endif %}
+{% if preview.warnings %}<div class="card tablecard" style="margin-top:16px"><table><tr><th>행</th><th>등급</th><th>내용</th></tr>
+{% for w in preview.warnings[:100] %}<tr><td>{{ w.row_no }}</td><td><span class="chip {{ 'bad' if w.severity == 'block' else 'warn' }}">{{ '제외' if w.severity == 'block' else '경고' }}</span></td><td style="white-space:normal">{{ w.message }}</td></tr>{% endfor %}
+</table></div>{% endif %}
+{% endif %}
+
+<h2 class="sec">파일 올리기</h2>
+<form class="card wide" method="post" action="/data/staff" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  <div class="frow">
+    <label class="f">사원현황 엑셀<input type="file" name="file" accept=".xlsx" required style="min-height:48px;font:inherit;font-size:16px"></label>
+    <label class="f">반영 월<input class="sm" type="text" name="effective_ym" value="{{ ym }}" pattern="20[0-9]{4}" required></label>
+  </div>
+  <div><button class="primary" name="action" value="preview">미리보기</button></div>
+</form>
+
+<h2 class="sec">계약현황의 조직 경로</h2>
+<div class="card"><div class="k">계약 원장에만 있고 조직 계층에 없는 조직</div><div class="big">{{ contract.new_orgs }}<span class="unit">개</span></div>
+<div class="cap">계약 원장의 서로 다른 조직 경로 {{ contract.nodes }}개를 확인했습니다. 조직을 만들기만 하고 사람의 소속은 바꾸지 않습니다.</div>
+{% if contract.new_orgs %}<form method="post" action="/data/staff" style="margin-top:12px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="ghost" name="action" value="contract_orgs">조직 만들기</button></form>{% endif %}</div>
+{% endblock %}

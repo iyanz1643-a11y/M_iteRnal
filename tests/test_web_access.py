@@ -196,7 +196,8 @@ def test_post_without_csrf_token_is_refused(env):
     assert raw.post("/login", data={"login_id": "admin", "password": PW, "csrf_token": before}).status_code == 403
     uid = con.execute("SELECT user_id FROM user_account WHERE is_main_admin=0 ORDER BY user_id DESC LIMIT 1").fetchone()[0]
     for path, data in (("/org/accounts", {"user_id": uid, "action": "suspend"}), ("/me", {"old": PW, "new": "x-new-pass-1", "new2": "x-new-pass-1"}),
-                       ("/promo/publish", {"action": "delete", "promo_id": 1}), ("/promo/tiers", {"name": "x"}), ("/promo/org-awards", {"action": "save"})):
+                       ("/promo/publish", {"action": "delete", "promo_id": 1}), ("/promo/tiers", {"name": "x"}), ("/promo/org-awards", {"action": "save"}),
+                       ("/org/heads", {"action": "end", "item_id": 1}), ("/data/staff", {"action": "contract_orgs"})):
         assert raw.post(path, data=data).status_code == 403, path
         assert raw.post(path, data={**data, "csrf_token": "wrong"}).status_code == 403, path
     assert con.execute("SELECT status FROM user_account WHERE user_id=?", (uid,)).fetchone()[0] == "active"
@@ -219,3 +220,139 @@ def test_every_screen_goes_through_guard(env):
     for r in routes:
         if r.path not in ("/login", "/logout"):
             assert guard in set(deps_of(r.dependant)), r.path
+
+
+# ---------------------------------------------------------------- 여섯 단계, 조직장과 대리, 계정 발급, 사원현황
+ISSUED = re.compile(r'<code style="font-size:17px">([^<]+)</code>')
+
+
+def uid_of(con, login):
+    return con.execute("SELECT user_id FROM user_account WHERE login_id=?", (login,)).fetchone()[0]
+
+
+def test_sample_tree_has_six_levels_and_scopes(env):
+    con = env["con"]
+    levels_seen = {r[0] for r in con.execute("SELECT level FROM org_unit")}
+    assert levels_seen == {"ga", "hq", "branch", "center", "team"}
+    html = client_for(env, "admin").get("/org/tree").text
+    assert all(w in html for w in ("샘플GA", "강남센터", "강남1팀", "센터장", "팀장", "아래 인원"))
+    head = lambda role: con.execute("SELECT a.internal_code, m.org_id FROM org_manager m JOIN agent a ON a.agent_id=m.agent_id WHERE m.role=?", (role,)).fetchone()
+    team_head, team = head("team_head")
+    center_head, center = head("center_head")
+    t = auth.context(con, uid_of(con, team_head))
+    c = auth.context(con, uid_of(con, center_head))
+    assert t["role"] == c["role"] == "manager" and t["org_ids"] == {team} and c["org_ids"] == {center, team}
+    assert t["agent_ids"] == {t["agent_id"]} and c["agent_ids"] == {c["agent_id"], t["agent_id"]}
+    tree = client_for(env, team_head).get("/org/tree").text
+    assert "강남1팀" in tree and "강남센터" not in tree and "종로지점" not in tree
+    members = client_for(env, center_head).get("/team/members").text
+    outside = [r[0] for r in con.execute("SELECT internal_code FROM agent WHERE internal_code NOT IN (?,?)", (team_head, center_head))]
+    assert team_head in members and not any(f">{code}<" in members for code in outside)
+    # 지점장은 자기 지점 아래의 센터와 팀까지 본다
+    branch_head = con.execute("""SELECT a.internal_code FROM org_manager m JOIN agent a ON a.agent_id=m.agent_id
+                                 WHERE m.role='branch_head' AND m.org_id=(SELECT parent_id FROM org_unit WHERE org_id=?)""", (center,)).fetchone()[0]
+    b = auth.context(con, uid_of(con, branch_head))
+    assert {center, team} <= b["org_ids"] and {t["agent_id"], c["agent_id"]} <= b["agent_ids"]
+
+
+def test_heads_screen_assigns_and_ends(env):
+    con = env["con"]
+    agent = con.execute("SELECT internal_code FROM agent WHERE agent_id NOT IN (SELECT agent_id FROM org_manager) ORDER BY agent_id LIMIT 1 OFFSET 2").fetchone()[0]
+    team = con.execute("SELECT org_id FROM org_unit WHERE level='team'").fetchone()[0]
+    admin = client_for(env, "admin")
+    ym = auth.context(con, uid_of(con, "admin"))["ym"]
+    assert "조직장과 대리" in admin.get("/org/heads").text
+    for who in (agent, ids(env)[0]):                                                 # 메인 관리자만 지정한다
+        assert client_for(env, who).post("/org/heads", data={"action": "assign", "org_id": team, "code": agent, "from_ym": ym}).status_code == 403
+    assert auth.context(con, uid_of(con, agent))["role"] == "agent"
+    assert admin.post("/org/heads", data={"action": "assign", "org_id": team, "code": agent, "from_ym": ym}).status_code == 303
+    ctx = auth.context(con, uid_of(con, agent))
+    assert ctx["role"] == "manager" and ctx["org_ids"] == {team}
+    mid = con.execute("SELECT id FROM org_manager WHERE org_id=? AND agent_id=?", (team, ctx["agent_id"])).fetchone()[0]
+    assert admin.post("/org/heads", data={"action": "end", "item_id": mid}).status_code == 303
+    assert auth.context(con, uid_of(con, agent))["role"] == "agent"                 # 해제하면 따로 손대지 않아도 설계사로
+    root = con.execute("SELECT org_id FROM org_unit WHERE level='ga'").fetchone()[0]
+    r = admin.post("/org/heads", data={"action": "assign", "org_id": root, "code": agent, "from_ym": ym})
+    assert r.status_code == 400 and "조직장이 없습니다" in r.text
+    # 대리는 날짜로 지정하고 끝낸다
+    from datetime import date, timedelta
+    today = date.today()
+    assert admin.post("/org/heads", data={"action": "deputy", "org_id": team, "code": agent, "date_from": today.isoformat(),
+                                          "date_to": (today + timedelta(days=2)).isoformat(), "reason": "휴가"}).status_code == 303
+    assert auth.context(con, uid_of(con, agent))["role"] == "manager"
+    assert agent in admin.get("/org/heads").text and "대리 중" in admin.get("/org/heads").text
+    did = con.execute("SELECT id FROM org_deputy WHERE ended_at IS NULL").fetchone()[0]
+    assert admin.post("/org/heads", data={"action": "deputy_end", "item_id": did}).status_code == 303
+    assert auth.context(con, uid_of(con, agent))["role"] == "agent"
+    acts = [r[0] for r in con.execute("SELECT action FROM audit_log WHERE action IN ('org_head_assign','org_head_end','org_deputy_assign','org_deputy_end') ORDER BY id")]
+    assert acts == ["org_head_assign", "org_head_end", "org_deputy_assign", "org_deputy_end"]
+    denied = con.execute("SELECT COUNT(*) FROM audit_log WHERE action='access_denied' AND target='/org/heads'").fetchone()[0]
+    assert denied >= 2
+
+
+def test_account_issue_shows_password_once_and_forces_change(env):
+    con = env["con"]
+    branch = con.execute("SELECT org_id FROM org_unit WHERE level='branch'").fetchone()[0]
+    aid = con.execute("INSERT INTO agent(internal_code, name, hire_date, status, job_type) VALUES('N0001','새설계사','2026-11-01','active','fc')").lastrowid
+    con.execute("INSERT INTO agent_org_history(agent_id, org_id, effective_from) VALUES(?,?,'202611')", (aid, branch))
+    con.commit()
+    admin = client_for(env, "admin")
+    page_ = admin.get("/org/accounts").text
+    assert "계정이 없는 재직 설계사 1명" in page_ and "N0001" in page_
+    assert client_for(env, ids(env)[0]).post("/org/accounts", data={"action": "issue", "agent_id": aid}).status_code == 403
+    r = admin.post("/org/accounts", data={"action": "issue", "agent_id": aid})
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
+    pw = ISSUED.findall(r.text)
+    assert len(pw) == 1 and len(pw[0]) == auth.TEMP_PW_LEN
+    pw = pw[0]
+    assert pw not in admin.get("/org/accounts").text                                   # 한 번만 보여 준다
+    assert pw not in str(con.execute("SELECT * FROM audit_log").fetchall()) and con.execute("SELECT password_hash FROM user_account WHERE login_id='N0001'").fetchone()[0] != pw
+    assert admin.post("/org/accounts", data={"action": "issue", "agent_id": aid}).status_code == 400   # 두 번 만들지 않는다
+    # 첫 접속에는 비밀번호부터 바꾼다
+    c = Client(env["app"], follow_redirects=False)
+    r = c.post("/login", data={"login_id": "N0001", "password": pw})
+    assert r.status_code == 303 and r.headers["location"] == "/me"
+    assert c.get("/").headers["location"] == "/me" and c.get("/promo/list").status_code == 303
+    assert c.get("/me").status_code == 200
+    assert "바꿨습니다" in c.post("/me", data={"old": pw, "new": "n0001-new-pass", "new2": "n0001-new-pass"}).text
+    assert c.get("/").status_code == 200
+    # 재설정하면 새 초기 비밀번호가 나오고 앞의 것은 듣지 않는다
+    r = admin.post("/org/accounts", data={"action": "reset", "user_id": uid_of(con, "N0001")})
+    pw2 = ISSUED.findall(r.text)[0]
+    c2 = Client(env["app"], follow_redirects=False)
+    assert c2.post("/login", data={"login_id": "N0001", "password": "n0001-new-pass"}).status_code == 401
+    assert c2.post("/login", data={"login_id": "N0001", "password": pw2}).headers["location"] == "/me"
+    assert [r[0] for r in con.execute("SELECT action FROM audit_log WHERE target='N0001' AND action LIKE 'account_%' ORDER BY id")] == ["account_issue", "account_reset"]
+
+
+def test_staff_upload_preview_then_apply(env, tmp_path, monkeypatch):
+    from app.loader import fake_eternal as fe
+    con = env["con"]
+    monkeypatch.setenv("APP_UPLOAD_DIR", str(tmp_path / "up"))
+    path, rows = fe.make_employee_file(tmp_path / "staff.xlsx")
+    names = [r["사원명"] for r in rows]
+    admin = client_for(env, "admin")
+    assert "파일 올리기" in admin.get("/data/staff").text
+    send = lambda c, **data: c.post("/data/staff", data={"effective_ym": "202611", **data},
+                                    files={"file": ("staff.xlsx", path.read_bytes(), "application/octet-stream")})
+    assert send(client_for(env, ids(env)[0]), action="preview").status_code == 403
+    before = con.execute("SELECT COUNT(*) FROM agent").fetchone()[0]
+    r = send(admin, action="preview")
+    assert r.status_code == 200 and "미리보기" in r.text and "이대로 반영하기" in r.text
+    assert con.execute("SELECT COUNT(*) FROM agent").fetchone()[0] == before                 # 미리보기는 바꾸지 않는다
+    assert len(list((tmp_path / "up").iterdir())) == 1
+    r = admin.post("/data/staff", data={"action": "apply", "effective_ym": "202611"})
+    assert r.status_code == 200 and "반영했습니다" in r.text
+    assert con.execute("SELECT COUNT(*) FROM agent").fetchone()[0] == before + len(rows)
+    assert list((tmp_path / "up").iterdir()) == []                                            # 반영하면 올린 파일을 지운다
+    log = con.execute("SELECT target FROM audit_log WHERE action='staff_sync'").fetchone()[0]
+    assert "새 설계사 40" in log and not any(n in log for n in names)
+    assert admin.post("/data/staff", data={"action": "apply", "effective_ym": "202611"}).status_code == 400   # 같은 파일을 두 번 반영하지 않는다
+    bad = tmp_path / "bad.xlsx"
+    bad.write_bytes(b"not an excel file")
+    r = admin.post("/data/staff", data={"action": "preview", "effective_ym": "202611"}, files={"file": ("bad.xlsx", bad.read_bytes())})
+    assert r.status_code == 400 and "읽지 못했습니다" in r.text
+    # 퇴사자는 계정이 없으면 후보에 없고, 새 설계사는 계정 화면의 발급 목록에 나온다
+    assert "계정이 없는 재직 설계사" in admin.get("/org/accounts").text
+    tree = admin.get("/org/tree").text
+    assert fe.SHARED_CENTER in tree and fe.SHARED_TEAM in tree

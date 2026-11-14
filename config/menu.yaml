@@ -135,8 +135,8 @@ groups:
     items:
       - {id: data-contracts, name: 계약 엑셀, path: /data/contracts, roles: {main: all}, phase: 1, status: legacy,
          desc: "본부 계약현황을 올려 계약 원장에 반영한다"}
-      - {id: data-staff, name: 사원현황, path: /data/staff, roles: {main: all}, phase: 1, status: planned,
-         desc: "조직, 설계사, 조직장, 인사 이동을 반영한다"}
+      - {id: data-staff, name: 사원현황, path: /data/staff, roles: {main: all}, phase: 1, status: built,
+         desc: "조직, 설계사, 조직장, 인사 이동, 퇴사를 미리보기한 뒤 반영한다. 계약현황의 조직 경로로 조직도 만든다"}
       - {id: data-plan, name: 시상안, path: /data/plan, roles: {main: all}, phase: 1, status: legacy,
          desc: "보험사별 시상안을 원장에 쌓고 해석하고 승인한다"}
       - {id: data-courses, name: 수료자 명부, path: /data/courses, roles: {main: all}, phase: 2, status: planned,
@@ -168,11 +168,11 @@ groups:
     icon: "⚙"
     items:
       - {id: org-tree, name: 조직 계층, path: /org/tree, roles: {main: all, manager: org}, phase: 1, status: built,
-         desc: "GA, 지사 또는 본부, 지점, 팀. 조직 추가·이동·폐지는 메인 관리자만"}
-      - {id: org-heads, name: 조직장과 대리, path: /org/heads, roles: {main: all}, phase: 1, status: planned,
+         desc: "GA, 지사 또는 본부, 지점, 센터, 팀의 여섯 단계. 조직마다 조직장, 직속 인원, 아래 인원"}
+      - {id: org-heads, name: 조직장과 대리, path: /org/heads, roles: {main: all}, phase: 1, status: built,
          desc: "조직장 지정과 기간제 대리 지정"}
       - {id: org-accounts, name: 계정, path: /org/accounts, roles: {main: all}, phase: 1, status: built,
-         desc: "계정 발급, 초기 비밀번호, 잠금 해제, 중지"}
+         desc: "계정 발급, 초기 비밀번호, 재설정, 잠금 해제, 중지, 퇴사자 중지 후보"}
       - {id: org-settings, name: 조직별 설정, path: /org/settings, roles: {main: all, manager: org}, phase: 3, status: planned,
          desc: "실적 인정 기준, 시상 부문, 자격 요건, 순위 공유, DB 배정, 알림 기준"}
       - {id: org-masters, name: 마스터, path: /org/masters, roles: {main: all}, phase: 1, status: legacy,

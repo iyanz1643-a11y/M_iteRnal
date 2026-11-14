@@ -12,8 +12,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from app.web.deps import HERE, NeedLogin, csrf_protect, guard, page, templates
-from app.web.routes import auth, home, me, org, promo, team
+from app.web.deps import HERE, PASSWORD_PATH, NeedLogin, NeedPasswordChange, csrf_protect, guard, page, templates
+from app.web.routes import auth, home, me, org, promo, staff, team
 
 app = FastAPI(title="GA 업무 앱", docs_url=None, redoc_url=None, dependencies=[Depends(csrf_protect)])
 app.add_middleware(SessionMiddleware, secret_key=os.environ.get("APP_SECRET") or secrets.token_hex(32),
@@ -26,12 +26,17 @@ async def _need_login(request: Request, exc: NeedLogin):
     return RedirectResponse("/login", status_code=303)
 
 
+@app.exception_handler(NeedPasswordChange)
+async def _need_password(request: Request, exc: NeedPasswordChange):
+    return RedirectResponse(PASSWORD_PATH, status_code=303)
+
+
 @app.exception_handler(HTTPException)
 async def _http_error(request: Request, exc: HTTPException):
     return templates.TemplateResponse(request, "error.html", {"code": exc.status_code, "message": exc.detail}, status_code=exc.status_code)
 
 
-for r in (auth, home, team, org, me, promo):
+for r in (auth, home, team, org, staff, me, promo):
     app.include_router(r.router)
 
 

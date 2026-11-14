@@ -843,3 +843,38 @@ ALTER TABLE contract ADD COLUMN source_row_no INTEGER;     -- 그 배치의 행 
 
 CREATE INDEX idx_contract_org ON contract(org_hq, org_branch, org_center, org_team);
 CREATE INDEX idx_contract_last_batch ON contract(last_batch_id);
+
+-- ---------------------------------------------------------------------------
+-- 조직 계층 여섯 단계 (D-01): GA, 지사·본부, 지점, 센터, 팀, 설계사. 기존 CREATE 문은 그대로 두고 덧붙이기만 한다.
+-- 계층의 수와 이름, 조직장 역할은 config/org_levels.yaml 이 원본이다. 동기화는 app/org/sync.py 다.
+-- org_unit.level 값: ga(GA, 하나뿐인 뿌리) / hq(지사·본부) / branch(지점) / center(센터) / team(팀)
+-- org_manager.role 값: hq_head / branch_head / center_head(센터장) / team_head(팀장)
+-- ---------------------------------------------------------------------------
+-- 조직은 이름이 아니라 위에서부터의 경로로 식별한다. 센터와 팀은 사람 이름으로 붙어 이름이 겹친다.
+-- 뿌리는 'ga', 그 아래는 'hq:이름 > branch:이름 > center:이름' 처럼 계층 코드를 붙여 잇는다. 중간 계층이 비어도 된다.
+ALTER TABLE org_unit ADD COLUMN path_key TEXT;
+CREATE UNIQUE INDEX idx_org_unit_path ON org_unit(path_key);
+
+-- 조직장 지정의 출처. 사원현황 동기화는 자기가 만든 지정(staff)만 닫고, 화면에서 지정한 것(manual)은 건드리지 않는다.
+ALTER TABLE org_manager ADD COLUMN source TEXT NOT NULL DEFAULT 'manual';   -- manual / staff
+ALTER TABLE org_manager ADD COLUMN created_by TEXT;
+ALTER TABLE org_manager ADD COLUMN created_at TEXT;
+
+-- 기간제 대리. 조직장이 자리를 비우면 메인 관리자가 날짜로 기간을 정해 지정한다. 그 조직과 아래를 기간 동안만 본다.
+-- 계산 엔진이 org_manager.role 로 관리자 제도를 따지므로 대리는 그 표에 넣지 않는다.
+CREATE TABLE org_deputy (
+    id          INTEGER PRIMARY KEY,
+    org_id      INTEGER NOT NULL REFERENCES org_unit(org_id),
+    agent_id    INTEGER NOT NULL REFERENCES agent(agent_id),
+    date_from   TEXT NOT NULL,                    -- YYYY-MM-DD
+    date_to     TEXT NOT NULL,                    -- YYYY-MM-DD, 그날까지
+    reason      TEXT,
+    created_by  TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    ended_at    TEXT,                             -- 기간 전에 끝낸 때
+    ended_by    TEXT
+);
+CREATE INDEX idx_org_deputy_agent ON org_deputy(agent_id, date_from, date_to);
+CREATE INDEX idx_org_manager_agent ON org_manager(agent_id, effective_from);
+CREATE INDEX idx_agent_org_history_agent ON agent_org_history(agent_id, effective_to);
+CREATE INDEX idx_agent_org_history_org ON agent_org_history(org_id, effective_from);

@@ -1,8 +1,31 @@
 {% extends "base.html" %}
 {% block body %}
 <h1 class="display">계정</h1>
-<p class="lede">역할은 계정에 적지 않습니다. 조직장으로 지정되면 관리자가 되고, 지정이 끝나면 설계사로 돌아갑니다.</p>
-<div class="card tablecard" style="margin-top:32px"><table><tr><th>이름</th><th>아이디</th><th>역할</th><th>상태</th><th class="hide-sm">마지막 접속</th><th></th></tr>
+<p class="lede">역할은 계정에 적지 않습니다. 조직장으로 지정되면 관리자가 되고, 지정이 끝나면 설계사로 돌아갑니다. 새 계정과 재설정한 계정은 첫 접속 때 비밀번호를 바꿔야 합니다.</p>
+{% if err %}<div class="alert" style="margin-top:20px">{{ err }}</div>{% endif %}
+{% if issued %}<section class="card" style="margin-top:24px"><div class="k">초기 비밀번호 {{ issued|length }}건</div>
+<div class="cap" style="margin:4px 0 12px">이 화면을 떠나면 다시 볼 수 없습니다. 본인에게만 직접 전하세요. 저장하지 않으므로 잃어버리면 다시 재설정합니다.</div>
+<div class="tablecard"><table><tr><th>이름</th><th>아이디</th><th>초기 비밀번호</th></tr>
+{% for x in issued %}<tr><td class="strong">{{ x.name }}</td><td>{{ x.login_id }}</td><td><code style="font-size:17px">{{ x.password }}</code></td></tr>{% endfor %}
+</table></div></section>{% endif %}
+
+{% if leavers %}<h2 class="sec">퇴사자 중지 후보 {{ leavers|length }}명</h2>
+<div class="card tablecard"><table><tr><th>이름</th><th>아이디</th><th>퇴사일</th><th class="hide-sm">마지막 접속</th><th></th></tr>
+{% for r in leavers %}<tr><td class="strong">{{ r.display_name }}</td><td>{{ r.login_id }}</td><td><span class="chip warn">{{ r.termination_date }}</span></td><td class="hide-sm">{{ r.last_login_at or '-' }}</td>
+<td><form method="post" action="/org/accounts" style="display:inline"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="user_id" value="{{ r.user_id }}"><button class="ghost" name="action" value="suspend">중지</button></form></td></tr>{% endfor %}
+</table></div>
+<p class="cap">사원현황에 퇴사일이 있는 사람입니다. 자동으로 중지하지 않습니다. 확인한 뒤 중지하세요.</p>{% endif %}
+
+<h2 class="sec">계정이 없는 재직 설계사 {{ no_account|length }}명</h2>
+{% if no_account %}<div class="card tablecard"><table><tr><th>이름</th><th>사번</th><th class="hide-sm">소속</th><th class="hide-sm">위촉일</th><th></th></tr>
+{% for r in no_account %}<tr><td class="strong">{{ r.name }}</td><td>{{ r.code }}</td><td class="hide-sm" style="white-space:normal">{{ r.org or '-' }}</td><td class="hide-sm">{{ r.hire_date or '-' }}</td>
+<td><form method="post" action="/org/accounts" style="display:inline"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="agent_id" value="{{ r.agent_id }}"><button class="ghost" name="action" value="issue">발급</button></form></td></tr>{% endfor %}
+</table></div>
+<form method="post" action="/org/accounts" style="margin-top:12px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="ghost" name="action" value="issue_all">{{ no_account|length }}명 모두 발급</button></form>
+{% else %}<div class="card"><div class="k">모든 재직 설계사에게 계정이 있습니다</div></div>{% endif %}
+
+<h2 class="sec">계정 {{ rows|length }}개</h2>
+<div class="card tablecard"><table><tr><th>이름</th><th>아이디</th><th>역할</th><th>상태</th><th class="hide-sm">마지막 접속</th><th></th></tr>
 {% for r in rows %}<tr><td class="strong">{{ r.display_name }}</td><td>{{ r.login_id }}</td>
 <td>{% if r.is_main_admin %}<span class="chip blue">메인 관리자</span>{% elif r.heads %}<span class="chip">관리자</span>{% else %}<span class="chip">설계사</span>{% endif %}</td>
 <td>{% if r.status != 'active' %}<span class="chip bad">중지</span>{% elif r.locked_until and r.locked_until > now %}<span class="chip warn">잠김</span>{% else %}<span class="chip good">사용</span>{% endif %}
@@ -10,6 +33,7 @@
 <td class="hide-sm">{{ r.last_login_at or '-' }}</td>
 <td><form method="post" action="/org/accounts" style="display:inline"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="user_id" value="{{ r.user_id }}">
 {% if r.locked_until and r.locked_until > now %}<button class="ghost" name="action" value="unlock">잠금 해제</button>{% endif %}
+{% if not r.is_main_admin %}<button class="ghost" name="action" value="reset">비밀번호 재설정</button>{% endif %}
 {% if r.status == 'active' and r.user_id != ctx.user_id %}<button class="ghost" name="action" value="suspend">중지</button>{% elif r.status != 'active' %}<button class="ghost" name="action" value="activate">다시 사용</button>{% endif %}
 </form></td></tr>{% endfor %}
 </table></div>
