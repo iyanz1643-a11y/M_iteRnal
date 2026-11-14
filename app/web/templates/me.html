@@ -2,9 +2,39 @@
 {% block body %}
 <p class="eyebrow">{{ ctx.login_id }} · {{ ctx.role_ko }}{% if ctx.home_org %} · {{ ctx.home_org.name }}{% endif %}</p>
 <h1 class="display">내 정보</h1>
+{% if card %}
+<h2 class="sec" id="card-request">명함 승인 권한</h2>
+{% if card_msg %}<div class="okmsg" role="status">{{ card_msg }}</div>{% endif %}
+{% if card_err %}<div class="alert bad" role="alert">{{ card_err }}</div>{% endif %}
+<div class="card">
+  {% if card.state == 'on' %}
+  <div class="k"><span class="dot"></span>지금 권한이 있음</div>
+  <div class="mid word soft" style="margin-top:6px">명함 승인을 쓸 수 있습니다</div>
+  <div class="cap">자기 범위 안 설계사의 명함을 승인하거나 반려합니다. 본인의 명함은 메인 관리자가 처리합니다. 조직장이나 대리에서 빠지면 꺼집니다.</div>
+  <p style="margin:12px 0 0"><a href="/sales/card-approve">명함 승인으로 가기</a></p>
+  {% elif card.state == 'pending' %}
+  <div class="k"><span class="dot warn"></span>요청 처리 중</div>
+  <div class="mid word soft" style="margin-top:6px">메인 관리자의 승인을 기다리고 있습니다</div>
+  <div class="cap">{{ card.req.requested_at|md }} {{ card.req.requested_at[11:16] }}에 {{ '본인이 요청했습니다' if card.req.reason == 'self' else ('다시 맡아 요청이 저절로 생겼습니다' if card.req.reason == 'reappointed' else '조직장이나 대리로 지정되어 요청이 저절로 생겼습니다') }}. 승인되면 메뉴에 명함 승인이 보입니다.</div>
+  {% elif card.state == 'rejected' %}
+  <div class="k"><span class="dot bad"></span>반려됨</div>
+  <div class="mid word soft" style="margin-top:6px">지난 요청이 반려되었습니다</div>
+  <div class="cap">{% if card.req.decided_at %}{{ card.req.decided_at|md }}에 반려되었습니다. {% endif %}필요하면 다시 요청할 수 있습니다.</div>
+  {% else %}
+  <div class="k"><span class="dot off"></span>없음</div>
+  <div class="mid word soft" style="margin-top:6px">명함 승인 권한이 없습니다</div>
+  <div class="cap">요청하면 메인 관리자가 승인한 뒤에 자기 범위 안 설계사의 명함을 승인하거나 반려할 수 있습니다.</div>
+  {% endif %}
+  {% if card.state in ('none', 'rejected') %}
+  <form class="grant-form" method="post" action="/me"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="action" value="card_request">
+    <button class="primary" type="submit">{{ '권한 다시 요청하기' if card.state == 'rejected' else '권한 요청하기' }}</button></form>
+  {% endif %}
+</div>
+{% endif %}
 <h2 class="sec">비밀번호 바꾸기</h2>
 {% if message %}<div class="okmsg">{{ message }}</div>{% endif %}{% if error %}<div class="alert">{{ error }}</div>{% endif %}
-<form class="stack" method="post" action="/me"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+<form class="stack" method="post" action="/me"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="action" value="password">
   <input type="password" name="old" placeholder="지금 비밀번호" autocomplete="current-password" required>
   <input type="password" name="new" placeholder="새 비밀번호 (8자 이상)" autocomplete="new-password" required>
   <input type="password" name="new2" placeholder="새 비밀번호 한 번 더" autocomplete="new-password" required>

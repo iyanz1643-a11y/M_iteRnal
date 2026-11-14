@@ -1,5 +1,6 @@
 {% extends "base.html" %}
-{% macro status(g) %}{% if g.granted and g.effective %}<span class="chip good">켜짐</span>{% elif g.granted %}<span class="chip warn">켜짐</span> <span class="chip bad" title="권한 줄은 남아 있지만 지금은 승인할 수 없습니다">효력 없음{% if g.why %} · {{ g.why }}{% endif %}</span>{% else %}<span class="chip">꺼짐</span>{% endif %}{% endmacro %}
+{% macro status(g) %}{% if g.granted and g.effective %}<span class="chip good">켜짐</span>{% elif g.granted %}<span class="chip warn">켜짐</span> <span class="chip bad" title="권한 줄은 남아 있지만 지금은 승인할 수 없습니다">효력 없음{% if g.why %} · {{ g.why }}{% endif %}</span>{% else %}<span class="chip">꺼짐</span>{% if g.asking %} <span class="chip warn">요청 대기</span>{% endif %}{% endif %}{% endmacro %}
+{% macro orgs(list) %}{% for o in list %}<div>{{ o.text }} <span class="chip">{{ HEAD_KO.get(o.role, o.role) }}</span></div>{% else %}<span class="cap" style="margin:0">맡은 조직 없음</span>{% endfor %}{% endmacro %}
 {% block body %}
 <p class="eyebrow">{{ ctx.ym[:4] }}년 {{ ctx.ym[4:]|int }}월 기준</p>
 <h1 class="display">조직장과 대리</h1>
@@ -49,7 +50,46 @@
 </table></div>
 
 <h2 class="sec" id="card-grant">명함 승인 권한 {{ grant_on }}명</h2>
-<p class="cap" style="margin:-6px 0 16px">조직장이 되었다고 권한이 생기지 않습니다. 고른 관리자만 자기 범위 안 설계사의 명함을 승인하거나 반려합니다. 관리자 본인의 명함은 메인 관리자가 처리합니다.</p>
+<p class="cap" style="margin:-6px 0 16px">권한은 승인 요청을 메인 관리자가 승인해야 켜집니다. 조직장이나 대리로 지정되면 요청이 저절로 생기고, 관리자가 내 정보에서 직접 요청할 수도 있습니다. 권한을 받은 관리자는 자기 범위 안 설계사의 명함을 승인하거나 반려하고, 관리자 본인의 명함은 메인 관리자가 처리합니다. 조직장이나 대리에서 빠지면 꺼지고, 다시 맡으면 새 요청을 거칩니다.</p>
+
+<h3 class="subsec" id="card-requests">권한 요청 {{ reqs|length }}건</h3>
+{% if req_msg %}<div class="{{ 'okmsg' if req_msg.ok else 'alert' }}" role="status">{{ req_msg.text }}{% if req_msg.skipped %}<ul class="flash-list">{% for x in req_msg.skipped %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}</div>{% endif %}
+{% if req_err %}<div class="alert bad" role="alert">{{ req_err }}</div>{% endif %}
+{% if req_ask %}
+<section class="card confirm" id="req-confirm" style="margin-bottom:16px">
+  <div class="k">요청 {{ req_ask.do }} 확인</div>
+  <h3 class="confirm-title">{{ req_ask.people|length }}명의 권한 요청을 {{ '승인할까요' if req_ask.action == 'req_approve' else '반려할까요' }}?</h3>
+  <ul class="who-list">{% for r in req_ask.people %}<li><span class="strong">{{ r.name }}</span> <span class="req-code">{{ r.code }}</span> · <span class="cap" style="margin:0">{% for o in r.orgs %}{{ o.text }} {{ HEAD_KO.get(o.role, o.role) }}{% if not loop.last %}, {% endif %}{% endfor %} · {{ r.reason_text }}</span></li>{% endfor %}</ul>
+  <ul class="notes">
+    {% if req_ask.action == 'req_approve' %}<li>승인하면 바로 이분들의 메뉴에 명함 승인이 보이고, 자기 범위 안 설계사의 명함을 승인하거나 반려합니다.</li>
+    {% else %}<li>반려하면 권한이 켜지지 않습니다. 같은 자리에서 요청이 저절로 다시 생기지 않고, 본인이 내 정보에서 다시 요청할 수 있습니다.</li>{% endif %}
+    <li>승인과 반려는 변경 기록에 남습니다.</li>
+  </ul>
+  <form method="post" action="/org/heads" class="actions"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="action" value="{{ req_ask.action }}"><input type="hidden" name="confirm" value="1">
+    {% for r in req_ask.people %}<input type="hidden" name="req_id" value="{{ r.id }}">{% endfor %}
+    <button class="primary" type="submit">{{ req_ask.people|length }}건 요청 {{ req_ask.do }}</button><a class="pill quiet big-pill" href="/org/heads#card-requests">취소</a></form>
+</section>
+{% endif %}
+{% if reqs %}
+<form method="post" action="/org/heads#req-confirm"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+<div class="card tablecard"><table class="grant-table req-table"><tr><th class="pick"><span class="hide-sm">선택</span></th><th>이름</th><th class="hide-sm">사번</th><th>맡은 조직</th><th class="hide-sm">까닭</th><th class="hide-sm">요청 시각</th></tr>
+{% for r in reqs %}<tr>
+<td class="pick"><label class="pickbox"><input type="checkbox" name="req_id" value="{{ r.id }}" aria-label="{{ r.name }} 요청 고르기"{% if req_ask and r in req_ask.people %} checked{% endif %}></label></td>
+<td class="strong">{{ r.name }}<span class="only-sm grant-sub"><span class="req-code">{{ r.code }}</span> <span class="chip">{{ r.reason_text }}</span> <span class="req-code">{{ r.requested_at|md }} {{ r.requested_at[11:16] }}</span></span></td>
+<td class="hide-sm">{{ r.code }}</td>
+<td class="grant-orgs">{{ orgs(r.orgs) }}</td>
+<td class="hide-sm"><span class="chip{{ ' blue' if r.reason == 'self' }}">{{ r.reason_text }}</span></td>
+<td class="hide-sm">{{ r.requested_at|md }} {{ r.requested_at[11:16] }}</td></tr>
+{% endfor %}
+</table></div>
+<div class="grant-acts"><button class="primary" type="submit" name="action" value="req_approve">요청 승인</button>
+  <button class="ghost big" type="submit" name="action" value="req_reject">요청 반려</button></div>
+</form>
+{% else %}<div class="card"><div class="k">처리할 권한 요청이 없습니다</div></div>{% endif %}
+<p class="cap">요청은 오래된 것부터 보입니다. 그사이 조직장이나 대리에서 빠진 분의 요청은 저절로 거두어 목록에서 빠집니다.</p>
+
+<h3 class="subsec">요청 없이 직접 켜기와 끄기</h3>
 {% if grant_msg %}<div class="okmsg" role="status">{{ grant_msg }}</div>{% endif %}
 {% if grant_err %}<div class="alert bad" role="alert">{{ grant_err }}</div>{% endif %}
 {% if grant_ask %}
@@ -73,14 +113,14 @@
 {% for g in grants %}<tr>
 <td class="pick"><label class="pickbox"><input type="checkbox" name="login_id" value="{{ g.login_id }}" aria-label="{{ g.name or g.login_id }} 고르기"{% if grant_ask and g in grant_ask.people %} checked{% endif %}></label></td>
 <td class="strong">{{ g.name or g.login_id }}<span class="only-sm grant-sub"><span class="req-code">{{ g.code or g.login_id }}</span> {{ status(g) }}</span></td><td class="hide-sm">{{ g.code or g.login_id }}</td>
-<td class="grant-orgs">{% for o in g.orgs %}<div>{{ o.text }} <span class="chip">{{ HEAD_KO.get(o.role, o.role) }}</span></div>{% else %}<span class="cap" style="margin:0">맡은 조직 없음</span>{% endfor %}</td>
+<td class="grant-orgs">{{ orgs(g.orgs) }}</td>
 <td class="hide-sm">{{ status(g) }}</td></tr>
 {% else %}<tr><td colspan="5" class="cap">권한을 켤 수 있는 조직장이나 대리 계정이 없습니다.</td></tr>{% endfor %}
 </table></div>
 <div class="grant-acts"><button class="primary" type="submit" name="action" value="card_grant">권한 켜기</button>
   <button class="ghost big" type="submit" name="action" value="card_revoke">권한 끄기</button></div>
 </form>
-<p class="cap">지금 조직장이거나 대리이고 계정이 있는 관리자만 켤 수 있습니다. 효력 없음은 권한이 켜져 있지만 조직장이나 대리에서 빠졌거나 계정이 중지되어 지금은 승인할 수 없다는 뜻입니다. 끄면 줄은 남기고 끈 사람과 시각을 적습니다.</p>
+<p class="cap">요청을 기다리지 않고 바로 켜거나 끌 때 씁니다. 바로 켜면 그분의 대기 중인 요청은 승인으로 닫힙니다. 지금 조직장이거나 대리이고 계정이 있는 관리자만 켤 수 있습니다. 효력 없음은 권한이 켜져 있지만 조직장이나 대리에서 빠졌거나 계정이 중지되어 지금은 승인할 수 없다는 뜻입니다. 끄면 줄은 남기고 끈 사람과 시각을 적습니다.</p>
 
 <h2 class="sec">조직장이 없는 조직 {{ vacant|length }}개</h2>
 {% if vacant %}<div class="card"><div class="chips">{% for c in vacant[:60] %}<span class="chip">{{ c.text }}</span>{% endfor %}{% if vacant|length > 60 %}<span class="chip">외 {{ vacant|length - 60 }}개</span>{% endif %}</div></div>

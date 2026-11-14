@@ -7,7 +7,7 @@
 - 반려 사유는 앱에 저장하지 않는다. 세션, 변경 기록, 화면 되돌림 어디에도 남기지 않는다.
 - 잇기는 메인 관리자만 한다. CardLinkTable 이 계정을 한 번 더 본다.
 - 수료 코드 발급과 내리기는 이 화면에 없다.
-- 관리자는 메인 관리자가 /org/heads 에서 권한을 켜 준 사람만 이 화면을 연다. 메뉴의 requires: card_approver 를 guard 가 본다.
+- 관리자는 승인 요청을 메인 관리자가 /org/heads 에서 승인했거나 바로 켠 사람만 이 화면을 연다. 메뉴의 requires: card_approver 를 guard 가 본다.
 - 관리자 본인의 명함은 메인 관리자가 처리한다. 목록에 본인 줄이 섞여 와도 승인과 반려 단추와 확인 단계를 열지 않는다.
 - 신청본 미리보기는 같은 주소에 ?preview=주소 로 연다. guard 를 같은 규칙으로 거치고 card_decide.preview_card 만 부른다.
   다듬은 HTML 을 sandbox 값이 빈 iframe 의 srcdoc 에 넣고, 그림은 data: 로 넣는다. 가져온 신청본은 저장하지 않는다.

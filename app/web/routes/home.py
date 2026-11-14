@@ -1,12 +1,14 @@
 """홈. 역할마다 다른 카드를 보여 준다."""
+import sqlite3
 from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 
+from app.org import card_grant as cg
 from app.periods import period_key
 from app.web.deps import _cards, _last_load, _perf, _q, get_con, guard, page
-from app.web.routes import card
+from app.web.routes import card, me
 
 router = APIRouter()
 
@@ -87,6 +89,15 @@ def home(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
                         "top": [t for t in team if not t["left"]][:5]}
     if role in ("manager", "main") and ctx.get("card_approver"):
         data["card_pending"] = card.pending_count(con, ctx)      # 권한이 있는 사람만. 키가 없으면 None. 짧은 시간 제한과 잠깐 담아 둔 목록을 쓴다
+    if role == "main":
+        try:                                                     # 조직장과 대리 화면의 권한 요청 표와 같은 목록에서 센다
+            data["grant_requests"] = len(cg.pending_requests(con))
+        except sqlite3.OperationalError:                         # 표가 없는 오래된 DB
+            con.rollback()
+            data["grant_requests"] = 0
+    if role == "manager":
+        st = me.card_state(con, ctx)                             # 권한이 없고 대기 중이거나 반려된 요청도 없을 때만 한 줄 띄운다
+        data["grant_hint"] = bool(st and st["state"] == "none")
     if role == "main":
         one = lambda sql, p=(): con.execute(sql, p).fetchone()[0]
         data["ops"] = {

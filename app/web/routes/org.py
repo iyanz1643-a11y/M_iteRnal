@@ -1,8 +1,10 @@
 """조직과 계정 묶음: 조직 계층, 조직장과 대리, 계정, 변경 기록.
 
-조직장과 대리 화면에는 명함 승인 권한 묶음이 함께 있다. 메인 관리자가 조직장과 대리 가운데 골라 권한을 켜고 끈다.
-켜고 끄기는 app/org/card_grant.py 의 grant, revoke 만 부르고, 그 함수가 메인 관리자인지 한 번 더 보고 스스로 커밋한다.
-보내기 전에 고른 사람 수와 이름을 다시 보여 주는 확인 단계를 거친다.
+조직장과 대리 화면에는 명함 승인 권한 묶음이 함께 있다. D-44 의 11월 14일 추가 결정을 따른다.
+- 맨 위는 권한 요청 표다. 조직장이나 대리로 지정되면 요청이 저절로 생기고, 관리자가 내 정보에서 직접 요청하기도 한다.
+  메인 관리자가 여럿을 골라 한 번에 승인하거나 반려한다. app/org/card_grant.py 의 approve_requests, reject_requests 만 부른다.
+- 아래는 요청 없이 직접 켜고 끄는 표다. grant, revoke 만 부른다.
+어느 함수든 메인 관리자인지 한 번 더 보고 스스로 커밋한다. 보내기 전에 고른 사람을 다시 보여 주는 확인 단계를 거친다.
 """
 from datetime import date
 
@@ -74,6 +76,18 @@ DONE = {"assign": "조직장을 지정했습니다.", "end": "조직장 지정�
 
 GRANT_FLASH = "grant_flash"
 GRANT_DO = {"card_grant": "켜기", "card_revoke": "끄기"}
+REQ_FLASH = "card_req_flash"
+REQ_DO = {"req_approve": "승인", "req_reject": "반려"}
+REQ_REASON = {"new_head": "새로 맡음", "reappointed": "다시 맡음", "self": "본인 요청"}
+
+
+def _req_rows(con) -> list:
+    """승인 대기 중인 권한 요청. pending_requests 가 먼저 빠진 사람의 요청을 거두고 새로 맡은 사람의 요청을 만든다."""
+    out = []
+    for r in cg.pending_requests(con):
+        out.append({**r, "reason_text": REQ_REASON.get(r["reason"], r["reason_ko"]), "name": r["name"] or r["login_id"],
+                    "code": r["code"] or r["login_id"]})
+    return out
 
 
 def _grant_rows(con) -> list:
@@ -84,7 +98,7 @@ def _grant_rows(con) -> list:
     rows = {}
     for c in cg.candidates(con):
         rows[c["login_id"]] = {"login_id": c["login_id"], "agent_id": c["agent_id"], "name": c["display_name"], "heads": c["heads"],
-                               "granted": c["granted"], "effective": c["granted"], "why": ""}
+                               "granted": c["granted"], "effective": c["granted"], "why": "", "asking": c["request_id"] is not None}
     for g in cg.granted(con):
         if g["login_id"] in rows:
             rows[g["login_id"]]["effective"] = g["effective"]
@@ -92,7 +106,7 @@ def _grant_rows(con) -> list:
         u = con.execute("SELECT status FROM user_account WHERE login_id=?", (g["login_id"],)).fetchone()
         why = "계정 없음" if u is None else ("중지된 계정" if u["status"] != "active" else "조직장·대리에서 빠짐")
         rows[g["login_id"]] = {"login_id": g["login_id"], "agent_id": g["agent_id"], "name": g["display_name"], "heads": [],
-                               "granted": True, "effective": g["effective"], "why": "" if g["effective"] else why}
+                               "granted": True, "effective": g["effective"], "why": "" if g["effective"] else why, "asking": False}
     codes = {}
     ids = [r["agent_id"] for r in rows.values() if r["agent_id"] is not None]
     if ids:
@@ -108,7 +122,8 @@ def _grant_rows(con) -> list:
     return out
 
 
-def _heads_page(request, ctx, con, err=None, msg=None, status_code=200, grant_ask=None, grant_msg=None, grant_err=None):
+def _heads_page(request, ctx, con, err=None, msg=None, status_code=200, grant_ask=None, grant_msg=None, grant_err=None,
+                req_ask=None, req_msg=None, req_err=None):
     ym, today = ctx["ym"], date.today().isoformat()
     texts = org_texts(con)
     rows = _q(con, """SELECT m.id, m.org_id, m.role, m.effective_from, m.effective_to, m.source, a.internal_code code, a.name, o.level
@@ -127,17 +142,61 @@ def _heads_page(request, ctx, con, err=None, msg=None, status_code=200, grant_as
                for o in con.execute("SELECT org_id, name, level FROM org_unit WHERE active=1") if levels.head_role(o["level"])]
     choices.sort(key=lambda c: c["text"])
     vacant = [c for c in choices if c["org_id"] not in headed]
+    reqs = _req_rows(con)                         # 먼저 맞춘다. 직접 켜기 표의 요청 대기 표시가 이 결과를 따른다
     grants = _grant_rows(con)
     resp = page(request, ctx, "org_heads.html", rows=rows, deputies=deputies, choices=choices, vacant=vacant, err=err, msg=msg,
                 today=today, status_code=status_code, grants=grants, grant_on=sum(1 for g in grants if g["granted"]),
-                grant_ask=grant_ask, grant_msg=grant_msg, grant_err=grant_err)
+                grant_ask=grant_ask, grant_msg=grant_msg, grant_err=grant_err,
+                reqs=reqs, req_ask=req_ask, req_msg=req_msg, req_err=req_err)
     resp.headers.update(NO_STORE)
     return resp
 
 
 @router.get("/org/heads", response_class=HTMLResponse)
 def org_heads(request: Request, done: str = "", ctx: dict = Depends(guard), con=Depends(get_con)):
-    return _heads_page(request, ctx, con, msg=DONE.get(done), grant_msg=request.session.pop(GRANT_FLASH, None))
+    return _heads_page(request, ctx, con, msg=DONE.get(done), grant_msg=request.session.pop(GRANT_FLASH, None),
+                       req_msg=request.session.pop(REQ_FLASH, None))
+
+
+def _req_action(request, ctx, con, action: str, req_ids: list, confirm: str):
+    """권한 요청 여러 건의 승인과 반려. confirm 이 1 이 아니면 고른 사람을 다시 보여 주는 확인 단계만 그린다.
+
+    확인 단계에서는 지금 대기 중인 요청만 고를 수 있다. 확인한 뒤 그사이 처리되거나 거둔 요청은 함수가 건너뛰고 까닭을 돌려준다."""
+    want = []
+    for x in req_ids:
+        x = (x or "").strip()
+        if x.isdigit() and int(x) not in want:
+            want.append(int(x))
+    do = REQ_DO[action]
+    if not want:
+        return _heads_page(request, ctx, con, req_err=f"{do}할 요청을 한 건 이상 골라 주세요.", status_code=400)
+    known = {r["id"]: r for r in _req_rows(con)}
+    if confirm != "1":
+        if any(x not in known for x in want):
+            return _heads_page(request, ctx, con, req_err="이미 처리되었거나 목록에 없는 요청이 섞여 있습니다. 화면을 새로 고친 뒤 다시 골라 주세요.",
+                               status_code=400)
+        return _heads_page(request, ctx, con, req_ask={"action": action, "do": do, "people": [known[x] for x in want]})
+    try:
+        res = (cg.approve_requests if action == "req_approve" else cg.reject_requests)(con, want, by=ctx["login_id"])
+    except cg.GrantError as e:
+        con.rollback()
+        return _heads_page(request, ctx, con, req_err=str(e), status_code=403 if "메인 관리자만" in str(e) else 400)
+    done = res.get("approved", res.get("rejected", []))
+    skipped = res["skipped"]
+    text = f"요청 {len(done)}건을 {do}했습니다." if done else f"{do}한 요청이 없습니다."
+    if action == "req_approve" and done:
+        text += " 승인한 분의 메뉴에 바로 명함 승인이 보입니다."
+    if skipped:
+        text += f" {len(skipped)}건은 건너뛰었습니다."
+
+    def who(rid):
+        if rid in known:
+            return f"{known[rid]['name']} {known[rid]['code']}"
+        r = con.execute(f"""SELECT u.display_name, a.internal_code FROM {cg.REQ_TABLE} q LEFT JOIN user_account u ON u.login_id=q.login_id
+                            LEFT JOIN agent a ON a.agent_id=q.agent_id WHERE q.id=?""", (rid,)).fetchone()
+        return f"{r[0] or ''} {r[1] or ''}".strip() if r else f"요청 {rid}번"
+    request.session[REQ_FLASH] = {"text": text, "ok": bool(done), "skipped": [f"{who(s['id'])}: {s['why']}" for s in skipped]}
+    return RedirectResponse("/org/heads#card-requests", status_code=303)
 
 
 def _grant_action(request, ctx, con, action: str, login_ids: list, confirm: str):
@@ -168,9 +227,13 @@ def _grant_action(request, ctx, con, action: str, login_ids: list, confirm: str)
 @router.post("/org/heads", response_class=HTMLResponse)
 def org_heads_action(request: Request, action: str = Form(...), org_id: int | None = Form(None), code: str = Form(""), from_ym: str = Form(""),
                      to_ym: str = Form(""), date_from: str = Form(""), date_to: str = Form(""), reason: str = Form(""),
-                     item_id: int | None = Form(None), login_id: list[str] = Form([]), confirm: str = Form(""),
+                     item_id: int | None = Form(None), login_id: list[str] = Form([]), req_id: list[str] = Form([]), confirm: str = Form(""),
                      ctx: dict = Depends(guard), con=Depends(get_con)):
     by = ctx["login_id"]
+    if action in REQ_DO:
+        if ctx["role"] != "main":                    # guard 가 이미 막는다. 메뉴가 바뀌어도 요청 처리는 메인 관리자만 한다
+            raise HTTPException(403, "명함 승인 권한 요청은 메인 관리자만 처리할 수 있습니다.")
+        return _req_action(request, ctx, con, action, req_id, confirm)
     if action in GRANT_DO:
         if ctx["role"] != "main":                    # guard 가 이미 막는다. 메뉴가 바뀌어도 이 일은 메인 관리자만 한다
             raise HTTPException(403, "명함 승인 권한은 메인 관리자만 켜고 끌 수 있습니다.")

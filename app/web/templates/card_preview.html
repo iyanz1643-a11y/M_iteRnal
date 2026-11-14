@@ -10,7 +10,7 @@
 {% if notice %}
 <div class="card" style="margin-top:32px" role="status">
   <div class="k"><span class="dot {{ 'warn' if notice.kind == 'warn' else ('off' if notice.state == 'not_configured' else 'bad') }}"></span>신청본 미리보기</div>
-  <div class="mid word wrap" style="margin-top:10px">{{ '아직 볼 수 없습니다' if notice.state == 'not_configured' else '신청본을 보여 드리지 못했습니다' }}</div>
+  <div class="mid word soft" style="margin-top:10px">{{ '아직 볼 수 없습니다' if notice.state == 'not_configured' else '신청본을 보여 드리지 못했습니다' }}</div>
   <p class="cap">{{ notice.text }}</p>
   {% if notice.detail %}<p class="cap flash-detail">{{ notice.detail }}</p>{% endif %}
   <div class="actions" style="margin-top:16px"><a class="pill quiet big-pill" href="{{ path }}">목록으로</a>

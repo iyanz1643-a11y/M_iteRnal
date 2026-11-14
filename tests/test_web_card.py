@@ -374,7 +374,8 @@ def test_manager_without_grant_has_no_menu_and_gets_403(env):
     site = env["state"]["site"]
     c = login(env, env["manager"])
     home = c.get("/").text
-    assert 'href="/sales/card-approve"' not in home and "명함 승인" not in home
+    assert 'href="/sales/card-approve"' not in home and "명함 승인 대기" not in home
+    assert "명함 승인 권한을 요청할 수 있습니다" in home and 'href="/me#card-request"' in home     # 권한도 요청도 없으면 요청 안내 한 줄만
     assert c.get("/sales/leads").status_code == 200 and "명함 승인" not in c.get("/sales/leads").text   # 같은 묶음의 다른 화면에도 없다
     for url in (PATH, f"{PATH}?preview=card-in", f"{PATH}?do=approve&slug=card-in"):
         assert c.get(url).status_code == 403, url
@@ -434,15 +435,22 @@ def test_grant_error_is_one_polite_line(env):
     assert r.status_code == 400 and "목록에 없는 계정" in r.text
 
 
-def test_granted_but_no_longer_head_shows_no_effect(env):
+def test_granted_but_no_longer_head_is_turned_off_and_suspended_shows_no_effect(env):
+    """권한 요청 표가 pending_requests 로 먼저 맞추므로, 조직장에서 빠진 사람의 줄은 화면을 열 때 꺼진다.
+    계정이 중지된 사람의 줄은 남고 효력 없음으로 보인다."""
     con = env["con"]
     admin = login(env, "admin")                     # 로그인 때 expire_stale 이 빠진 사람의 줄을 끄므로, 빠지는 일은 로그인 뒤에 일어나게 한다
+    other = _other_heads(env, 1)[0]
+    card_grant.grant(con, [other], by="admin")
     mid = con.execute("SELECT id FROM org_manager WHERE agent_id=?", (env["manager_agent"],)).fetchone()[0]
     con.execute("UPDATE org_manager SET effective_to='200001' WHERE id=?", (mid,))
+    con.execute("UPDATE user_account SET status='suspended' WHERE login_id=?", (other,))
     con.commit()
     html = admin.get(HEADS).text
     sec = html[html.index('id="card-grant"'):]
-    assert "효력 없음" in sec and f'value="{env["manager"]}"' in sec
+    assert f'value="{env["manager"]}"' not in sec and not _granted(env, env["manager"])
+    assert con.execute("SELECT revoked_by FROM card_approver WHERE login_id=? ORDER BY id DESC LIMIT 1", (env["manager"],)).fetchone()[0] == "system:left"
+    assert "효력 없음" in sec and "중지된 계정" in sec and f'value="{other}"' in sec
 
 
 def test_manager_cannot_post_grant_on_heads(env):
@@ -524,3 +532,169 @@ def test_own_request_has_no_decision_buttons(env):
     assert c.post(PATH, data={"action": "approve", "slug": "card-self", "confirm": "1"}).status_code == 403
     assert "명함 승인 대기 1건" in c.get("/").text                                       # 홈 건수에도 본인 요청은 없다
     assert not site.posts()
+
+
+# ---------------------------------------------------------------- 명함 승인 권한 요청. 2026-11-14 대표님 추가 결정
+def _pending(env):
+    return card_grant.pending_requests(env["con"])
+
+
+def _req_status(env, rid):
+    return env["con"].execute("SELECT status FROM card_approver_request WHERE id=?", (rid,)).fetchone()[0]
+
+
+def _requests_of(env, login_id):
+    return env["con"].execute("SELECT id, status, reason FROM card_approver_request WHERE login_id=? ORDER BY id", (login_id,)).fetchall()
+
+
+def _me_card(html):
+    """내 정보의 명함 승인 권한 칸. 비밀번호 바꾸기 앞까지."""
+    start = html.index('id="card-request"')
+    return html[start: html.index('<h2 class="sec">비밀번호', start)]
+
+
+def _confirm_box(html, anchor='id="req-confirm"'):
+    box = html[html.index(anchor):]
+    return box[:box.index("</section>")]
+
+
+def test_main_approves_and_rejects_many_requests_with_confirm(env):
+    con = env["con"]
+    admin = login(env, "admin")                                       # 로그인 때 조직장과 대리의 요청이 저절로 생긴다
+    reqs = _pending(env)
+    assert len(reqs) >= 4 and all(r["reason"] == "new_head" for r in reqs)
+    html = admin.get(HEADS).text
+    sec = html[html.index('id="card-grant"'):]
+    assert f"권한 요청 {len(reqs)}건" in sec and "요청 없이 직접 켜기와 끄기" in sec and "새로 맡음" in sec
+    assert sec.index('id="card-requests"') < sec.index("요청 없이 직접 켜기와 끄기")      # 요청 표가 맨 위에 있다
+    assert all(f'name="req_id" value="{r["id"]}"' in sec for r in reqs)
+    assert "메인 관리자가 승인해야 켜집니다" in sec and "고른 관리자만" not in sec
+    a, b, c, d = reqs[:4]
+    # CSRF 없이는 막힌다
+    for action in ("req_approve", "req_reject"):
+        assert admin.post(HEADS, data={"action": action, "req_id": [a["id"]], "confirm": "1"}, csrf=False).status_code == 403
+        assert admin.post(HEADS, data={"action": action, "req_id": [a["id"]], "confirm": "1", "csrf_token": "wrong"}).status_code == 403
+    assert _req_status(env, a["id"]) == "pending"
+    # 확인 단계: 고른 사람을 다시 보여 주고 아직 처리하지 않는다
+    r = admin.post(HEADS, data={"action": "req_approve", "req_id": [a["id"], b["id"]]})
+    assert r.status_code == 200 and "2명의 권한 요청을 승인할까요" in r.text
+    box = _confirm_box(r.text)
+    assert a["name"] in box and b["name"] in box and c["name"] not in box and 'name="confirm" value="1"' in box
+    assert _req_status(env, a["id"]) == _req_status(env, b["id"]) == "pending"
+    # 승인
+    r = admin.post(HEADS, data={"action": "req_approve", "req_id": [a["id"], b["id"]], "confirm": "1"})
+    assert r.status_code == 303 and r.headers["location"] == "/org/heads#card-requests"
+    assert card_grant.is_granted(con, a["login_id"]) and card_grant.is_granted(con, b["login_id"])
+    html = admin.get(HEADS).text
+    assert "요청 2건을 승인했습니다" in html and f"권한 요청 {len(reqs) - 2}건" in html
+    assert f'name="req_id" value="{a["id"]}"' not in html
+    # 반려도 확인 단계를 거친다
+    r = admin.post(HEADS, data={"action": "req_reject", "req_id": [c["id"]]})
+    assert r.status_code == 200 and "1명의 권한 요청을 반려할까요" in r.text and c["name"] in _confirm_box(r.text)
+    assert admin.post(HEADS, data={"action": "req_reject", "req_id": [c["id"]], "confirm": "1"}).status_code == 303
+    assert _req_status(env, c["id"]) == "rejected" and not card_grant.is_granted(con, c["login_id"])
+    assert "요청 1건을 반려했습니다" in admin.get(HEADS).text
+    # 이미 처리된 요청이 섞이면 건너뛰고 이름과 까닭을 존댓말로 알린다
+    assert admin.post(HEADS, data={"action": "req_approve", "req_id": [a["id"], d["id"]], "confirm": "1"}).status_code == 303
+    html = admin.get(HEADS).text
+    assert "요청 1건을 승인했습니다" in html and "1건은 건너뛰었습니다" in html and f"{a['name']} {a['code']}: 이미 승인 처리된 요청입니다" in html
+    # 확인 단계에서 이미 처리된 요청을 고르면 다시 고르게 한다
+    r = admin.post(HEADS, data={"action": "req_reject", "req_id": [a["id"]]})
+    assert r.status_code == 400 and "이미 처리되었거나 목록에 없는 요청" in r.text
+    r = admin.post(HEADS, data={"action": "req_approve"})
+    assert r.status_code == 400 and "한 건 이상 골라 주세요" in r.text
+    acts = [x[0] for x in con.execute("SELECT action FROM audit_log WHERE action IN ('card_grant','card_request_reject') ORDER BY id")]
+    assert acts.count("card_request_reject") == 1 and acts.count("card_grant") >= 4
+    # 직접 켜기 표의 대기 표시는 남은 요청만큼이다
+    assert html.count("요청 대기</span>") == 2 * len(_pending(env))            # 휴대폰용과 PC용 칸에 한 번씩
+
+
+def test_manager_and_agent_cannot_post_request_decisions(env):
+    login(env, "admin")
+    rid = _pending(env)[0]["id"]
+    for who in (env["manager"], env["agent"]):
+        c = login(env, who)
+        for action in ("req_approve", "req_reject"):
+            assert c.post(HEADS, data={"action": action, "req_id": [rid]}).status_code == 403
+            assert c.post(HEADS, data={"action": action, "req_id": [rid], "confirm": "1"}).status_code == 403
+    assert _req_status(env, rid) == "pending"
+
+
+def test_manager_requests_on_me_once_then_rejected_and_asks_again(env):
+    con, mgr = env["con"], env["manager"]
+    card_grant.revoke(con, [mgr], by="admin")
+    before = len(_requests_of(env, mgr))
+    other = _other_heads(env, 1)[0]
+    m = login(env, mgr)
+    html = m.get("/me").text
+    sec = _me_card(html)
+    assert "없음" in sec and "권한 요청하기" in sec and 'name="action" value="card_request"' in sec
+    # CSRF 없이는 막힌다
+    assert m.post("/me", data={"action": "card_request"}, csrf=False).status_code == 403
+    assert m.post("/me", data={"action": "card_request", "csrf_token": "wrong"}).status_code == 403
+    assert len(_requests_of(env, mgr)) == before
+    # 두 번 눌러도 하나만 생긴다. 폼에 다른 계정을 넣어도 본인 것만 요청한다
+    other_before = _requests_of(env, other)
+    r1 = m.post("/me", data={"action": "card_request", "login_id": other})
+    assert r1.status_code == 303 and r1.headers["location"] == "/me#card-request"
+    assert "명함 승인 권한을 요청했습니다" in m.get("/me").text
+    r2 = m.post("/me", data={"action": "card_request"})
+    assert r2.status_code == 303 and "이미 요청이 처리 중입니다" in m.get("/me").text
+    mine = [x for x in _requests_of(env, mgr) if x["status"] == "pending"]
+    assert len(mine) == 1 and mine[0]["reason"] == "self"
+    assert _requests_of(env, other) == other_before
+    sec = _me_card(m.get("/me").text)
+    assert "요청 처리 중" in sec and "본인이 요청했습니다" in sec and 'value="card_request"' not in sec
+    assert "명함 승인 권한을 요청할 수 있습니다" not in m.get("/").text                    # 대기 중이면 홈 안내는 없다
+    # 메인 관리자 화면에는 본인 요청으로 보인다
+    admin = login(env, "admin")
+    row = next(r for r in _pending(env) if r["login_id"] == mgr)
+    assert row["reason"] == "self" and "본인 요청" in admin.get(HEADS).text
+    # 반려되면 반려됨이 보이고 다시 요청할 수 있다
+    assert admin.post(HEADS, data={"action": "req_reject", "req_id": [row["id"]], "confirm": "1"}).status_code == 303
+    sec = _me_card(m.get("/me").text)
+    assert "반려됨" in sec and "권한 다시 요청하기" in sec
+    assert m.post("/me", data={"action": "card_request"}).status_code == 303
+    assert [x["status"] for x in _requests_of(env, mgr)][-2:] == ["rejected", "pending"]
+    # 비밀번호 바꾸기는 그대로 돈다
+    assert "서로 다릅니다" in m.post("/me", data={"action": "password", "old": PW, "new": "new-pass-5678", "new2": "x"}).text
+
+
+def test_agent_has_no_card_grant_on_me_and_post_is_denied(env):
+    for who in (env["agent"], "admin"):
+        html = login(env, who).get("/me").text
+        assert "명함 승인 권한" not in html and "card_request" not in html
+    c = login(env, env["agent"])
+    assert c.post("/me", data={"action": "card_request"}).status_code == 403
+    assert not _requests_of(env, env["agent"])
+    assert login(env, "admin").post("/me", data={"action": "card_request"}).status_code == 403
+    assert not _requests_of(env, "admin")
+
+
+def test_home_shows_request_count_for_main(env):
+    admin = login(env, "admin")
+    n = len(_pending(env))
+    html = admin.get("/").text
+    assert f"명함 승인 권한 요청 {n}건" in html and 'href="/org/heads#card-requests"' in html
+    rid = _pending(env)[0]["id"]
+    admin.post(HEADS, data={"action": "req_approve", "req_id": [rid], "confirm": "1"})
+    assert f"명함 승인 권한 요청 {n - 1}건" in admin.get("/").text
+    m = login(env, env["manager"])
+    home = m.get("/").text
+    assert "명함 승인 권한 요청" not in home and "명함 승인 권한을 요청할 수 있습니다" not in home     # 권한이 있는 관리자에게는 없다
+    ids = [r["id"] for r in _pending(env)]
+    admin.post(HEADS, data={"action": "req_reject", "req_id": ids, "confirm": "1"})
+    assert "명함 승인 권한 요청" not in admin.get("/").text
+
+
+def test_approved_manager_sees_card_menu(env):
+    con, mgr = env["con"], env["manager"]
+    card_grant.revoke(con, [mgr], by="admin")
+    m = login(env, mgr)
+    assert 'href="/sales/card-approve"' not in m.get("/").text and m.get(PATH).status_code == 403
+    assert m.post("/me", data={"action": "card_request"}).status_code == 303
+    admin = login(env, "admin")
+    rid = next(r["id"] for r in _pending(env) if r["login_id"] == mgr)
+    assert admin.post(HEADS, data={"action": "req_approve", "req_id": [rid], "confirm": "1"}).status_code == 303
+    assert 'href="/sales/card-approve"' in m.get("/").text and m.get(PATH).status_code == 200
+    assert "지금 권한이 있음" in _me_card(m.get("/me").text)

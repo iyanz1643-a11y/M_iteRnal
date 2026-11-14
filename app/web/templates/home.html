@@ -56,12 +56,19 @@
 <h1 class="display">{{ ctx.name }}님,<br>{{ {'main': '오늘의 운영입니다.', 'manager': '우리 조직의 이번 달입니다.', 'agent': '이번 달 진척입니다.'}[ctx.role] }}</h1>
 <p class="lede">{% if d.last_load %}{{ d.last_load_label }} 적재 기준입니다. 실적은 계약 자료를 올린 시점까지 반영됩니다.{% else %}아직 적재된 계약 자료가 없습니다.{% endif %}</p>
 
-{% if d.card_pending and d.card_pending.n %}
+{% set has_card = d.card_pending and d.card_pending.n %}
+{% if has_card or d.grant_requests %}
 <h2 class="sec">할 일</h2>
-<a class="card todo" href="/sales/card-approve"><div><div class="k"><span class="dot warn"></span>명함 승인</div>
+<div class="grid{{ ' g2' if has_card and d.grant_requests }}">
+{% if has_card %}<a class="card todo" href="/sales/card-approve"><div><div class="k"><span class="dot warn"></span>명함 승인</div>
   <div class="mid word" style="margin-top:6px">명함 승인 대기 {{ d.card_pending.n }}건</div>
-  <div class="cap">명함 사이트 기준 {{ d.card_pending.at_label }} · 눌러서 확인하고 처리합니다</div></div><span class="todo-go" aria-hidden="true">›</span></a>
+  <div class="cap">명함 사이트 기준 {{ d.card_pending.at_label }} · 눌러서 확인하고 처리합니다</div></div><span class="todo-go" aria-hidden="true">›</span></a>{% endif %}
+{% if d.grant_requests %}<a class="card todo" href="/org/heads#card-requests"><div><div class="k"><span class="dot warn"></span>명함 승인 권한</div>
+  <div class="mid word soft" style="margin-top:6px">명함 승인 권한 요청 {{ d.grant_requests }}건</div>
+  <div class="cap">조직장과 대리 화면에서 골라 한 번에 승인하거나 반려합니다</div></div><span class="todo-go" aria-hidden="true">›</span></a>{% endif %}
+</div>
 {% endif %}
+{% if d.grant_hint %}<p class="cap todo-line"><a href="/me#card-request">명함 승인 권한을 요청할 수 있습니다</a> · 내 정보에서 요청하면 메인 관리자가 승인합니다.</p>{% endif %}
 
 {% if d.ops %}
 <h2 class="sec">운영 상태</h2>
