@@ -3,12 +3,15 @@
 역할은 계정에 적어 두지 않는다. 메인 관리자 표시가 있으면 main, 지금 조직장이나 대리로 지정돼 있으면 manager, 아니면 agent 다.
 조직 범위는 조직장이나 대리로 지정된 조직과 그 아래 전부다. 계층은 여섯 단계이고 이름은 config/org_levels.yaml 을 따른다.
 조직장은 자료 기준 달로, 대리는 오늘 날짜로 따진다.
-명함 승인과 반려 권한 card_approver 는 조직장이 되었다고 생기지 않는다. 메인 관리자가 켠다. app/org/card_grant.py 를 본다.
+명함 승인과 반려 권한 card_approver 는 조직장이 되었다고 생기지 않는다. 승인 요청을 메인 관리자가 승인해야 켜진다. app/org/card_grant.py 를 본다.
+끝 달이 지나는 일처럼 따로 일이 없는 경우를 맞추려고, 로그인 때 card_grant.expire_stale 로 모든 계정을,
+화면을 열 때마다 context 에서 card_grant.settle_login 으로 본인 계정을 맞춘다.
 """
 import hashlib
 import hmac
 import os
 import secrets
+import sqlite3
 from datetime import date, datetime, timedelta
 
 from app import db
@@ -62,7 +65,18 @@ def login(con, login_id: str, pw: str):
         return None, "아이디 또는 비밀번호가 맞지 않습니다."
     con.execute("UPDATE user_account SET failed_count=0, locked_until=NULL, last_login_at=? WHERE user_id=?", (db.now(), u["user_id"]))
     log(con, login_id, "login")
+    _card_sweep(con, card_grant.expire_stale)
     return u, None
+
+
+def _card_sweep(con, fn, *args):
+    """명함 승인 권한 맞추기. 표나 열이 없는 오래된 DB 에서 깨지면 되돌리고 넘어간다. 효력은 is_granted 가 따로 막는다."""
+    try:
+        out = fn(con, *args)
+        if any(out.values()):
+            con.commit()
+    except sqlite3.OperationalError:
+        con.rollback()
 
 
 def current_ym(con) -> str:
@@ -114,7 +128,10 @@ def context(con, user_id: int) -> dict | None:
         agent_ids = set()
     if u["agent_id"]:
         agent_ids.add(u["agent_id"])                       # 본인 것은 언제나 본다
-    # 명함 승인과 반려 권한. 메인 관리자는 늘, 관리자는 메인 관리자가 켜 주고 지금도 조직장이거나 대리일 때만, 설계사는 없다
+    # 명함 승인과 반려 권한. 메인 관리자는 늘, 관리자는 요청이 승인되어 지금 맡은 자리에서 켜졌을 때만, 설계사는 없다.
+    # 본인 계정을 먼저 맞춘다. 자리에서 빠졌으면 켜진 줄을 끄고, 새로 맡았으면 승인 요청을 만든다
+    if not u["is_main_admin"] and u["agent_id"]:
+        _card_sweep(con, card_grant.settle_login, u["login_id"])
     card_approver = role == "main" or (role == "manager" and card_grant.is_granted(con, u["login_id"]))
     return {"user_id": u["user_id"], "login_id": u["login_id"], "name": u["display_name"], "agent_id": u["agent_id"],
             "role": role, "role_ko": ROLE_KO[role], "ym": ym, "must_change_password": bool(u["must_change_password"]),

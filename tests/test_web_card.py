@@ -436,10 +436,11 @@ def test_grant_error_is_one_polite_line(env):
 
 def test_granted_but_no_longer_head_shows_no_effect(env):
     con = env["con"]
+    admin = login(env, "admin")                     # 로그인 때 expire_stale 이 빠진 사람의 줄을 끄므로, 빠지는 일은 로그인 뒤에 일어나게 한다
     mid = con.execute("SELECT id FROM org_manager WHERE agent_id=?", (env["manager_agent"],)).fetchone()[0]
     con.execute("UPDATE org_manager SET effective_to='200001' WHERE id=?", (mid,))
     con.commit()
-    html = login(env, "admin").get(HEADS).text
+    html = admin.get(HEADS).text
     sec = html[html.index('id="card-grant"'):]
     assert "효력 없음" in sec and f'value="{env["manager"]}"' in sec
 

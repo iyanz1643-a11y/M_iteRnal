@@ -10,13 +10,15 @@
 두 함수 모두 dry_run=True 면 같은 일을 한 뒤 되돌린다. 미리보기와 반영의 건수가 같게 하려고 그렇게 한다.
 
 퇴사일이 있으면 설계사를 퇴사로 바꾸고 소속과 조직장 지정을 닫지만 계정은 중지하지 않는다. 계정 화면의 중지 후보 목록에 나온다.
+반영 끝에 card_grant.expire_stale 로 명함 승인 권한을 맞춘다. 새로 조직장이 되면 승인 요청이 생기고, 빠지면 켜진 권한이 꺼진다.
+돌려주는 값의 card 에 그 건수가 있다. 미리보기는 이것까지 되돌린다.
 파일에 없는 설계사는 건드리지 않는다. 사람 이름은 돌려주는 changes 에만 담는다. 화면에는 보여도 되지만 로그와 시험 출력에 쓰지 않는다.
 """
 from collections import Counter
 
 from app import db
 from app.loader import org_path
-from app.org import levels
+from app.org import card_grant, levels
 from app.periods import ym_add
 
 SEP = " > "
@@ -195,7 +197,7 @@ def _staff_heads(con, agent_id, position, steps, ym, stats, change):
 def sync_staff(con, rows, effective_ym, dry_run=False) -> dict:
     """사원현황 rows 로 조직과 설계사를 맞춘다. effective_ym 은 이동과 조직장 지정이 시작되는 달이다.
 
-    돌려주는 것: {stats: {STAT_KEYS: 건수}, changes: [{kind, code, name, before, after, note}]}.
+    돌려주는 것: {stats: {STAT_KEYS: 건수}, changes: [{kind, code, name, before, after, note}], card: {revoked, cancelled, requested}}.
     changes 의 before 와 after 는 조직 경로의 글이다. name 은 화면에만 쓴다."""
     stats, changes = Counter(), []
     prev = ym_add(effective_ym, -1)
@@ -276,11 +278,12 @@ def sync_staff(con, rows, effective_ym, dry_run=False) -> dict:
 
     active = {x[0] for x in con.execute("SELECT internal_code FROM agent WHERE status='active'")}
     stats["missing"] = len(active - seen)
+    card = card_grant.expire_stale(con, commit=False)      # 명함 승인 권한을 새 조직장 지정에 맞춘다
     texts = org_texts(con)                                 # 미리보기에서 새로 만든 조직은 되돌리면 사라지므로 그 전에 글로 바꾼다
     for c in changes:
         c["before"], c["after"] = texts.get(c["before"], ""), texts.get(c["after"], "")
     _finish(con, dry_run)
-    return {"stats": {k: stats[k] for k in STAT_KEYS}, "changes": changes}
+    return {"stats": {k: stats[k] for k in STAT_KEYS}, "changes": changes, "card": card}
 
 
 def termination_candidates(con) -> list:

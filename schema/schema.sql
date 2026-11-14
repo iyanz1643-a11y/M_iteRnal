@@ -995,3 +995,25 @@ CREATE TABLE IF NOT EXISTS card_approver (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_card_approver_active ON card_approver(login_id) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_card_approver_login ON card_approver(login_id, granted_at);
 -- [card_grant:end]
+
+-- 명함 승인 권한 요청. 11월 14일 대표님 결정: 승인 요청을 만들어 메인 관리자가 승인해야 권한이 켜진다.
+-- 조직장이나 대리가 되었는데 효력 있는 권한이 없으면 요청이 저절로 생긴다. 관리자 본인도 요청한다.
+-- 예전에 켜 둔 줄은 되살아나지 않는다. 조직장이나 대리에서 빠지면 켜진 줄을 revoked_by='system:left' 로 끈다.
+-- 지우지 않고 상태만 바꾼다. 같은 사람의 pending 은 하나다. app/org/card_grant.py 가 이 묶음을 읽는다.
+-- [card_request:begin]
+CREATE TABLE IF NOT EXISTS card_approver_request (
+    id            INTEGER PRIMARY KEY,
+    login_id      TEXT NOT NULL,                      -- 대상 계정. 관리자는 사번
+    agent_id      INTEGER REFERENCES agent(agent_id), -- 요청 때의 계정에 이어진 설계사
+    reason        TEXT NOT NULL CHECK (reason IN ('new_head', 'reappointed', 'self')),
+    status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'cancelled')),
+    requested_at  TEXT NOT NULL,
+    requested_by  TEXT NOT NULL,                      -- 본인 login_id, 저절로 생기면 system:appointed
+    decided_by    TEXT,                               -- 처리한 메인 관리자의 login_id, 빠져서 거두면 system:left
+    decided_at    TEXT,
+    grant_id      INTEGER REFERENCES card_approver(id) -- 승인으로 켜진 줄
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_card_request_pending ON card_approver_request(login_id) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_card_request_login ON card_approver_request(login_id, requested_at);
+CREATE INDEX IF NOT EXISTS idx_card_request_status ON card_approver_request(status, requested_at);
+-- [card_request:end]
