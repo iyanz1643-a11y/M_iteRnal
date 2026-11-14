@@ -314,9 +314,12 @@ def test_card_link_has_no_contact_column(env):
 
 
 # ------------------------------------------------------------------ 재현: 찾은 문제
-@pytest.mark.xfail(strict=True, reason="그 달 중간에 퇴사한 설계사는 조직 집계(v_org_performance_rollup, org_rollup)에는 들고 "
-                                       "팀원 현황, 홈, 랭킹, 조직 부문 시상에서는 빠진다. 본부 합계가 화면의 설계사 합계와 달라진다")
 def test_mid_month_leaver_counts_the_same_on_screen_and_rollup(tmp_path, monkeypatch):
+    """그 달 중간에 퇴사한 설계사 (대표님 결정 2026-11-14).
+
+    조직 합계와 팀원 현황에는 퇴사 전 실적을 넣고 팀원 현황 줄에 퇴사 표시를 붙인다.
+    랭킹, 조직 부문 순위, 프로모션 달성 대상에서는 뺀다. 다른 조직의 관리자에게는 보이지 않는다.
+    """
     monkeypatch.setenv("APP_DB", str(tmp_path / "real.db"))
     e = _build(tmp_path)
     con = e["con"]
@@ -332,19 +335,70 @@ def test_mid_month_leaver_counts_the_same_on_screen_and_rollup(tmp_path, monkeyp
     assert e["pipe"].run(UploadSource.from_path(path, kind="employee", period_ym=YM)).ok
     performance.run(con, YM)
     ranking.run(con, YM)
-    hq = next(o for o in orgs.ancestors(con, performance.org_at(con, leaver, YM))
+    assert con.execute("SELECT status FROM agent WHERE agent_id=?", (leaver,)).fetchone()[0] == "terminated"
+    org = performance.org_at(con, leaver, YM)
+    hq = next(o for o in orgs.ancestors(con, org)
               if con.execute("SELECT level FROM org_unit WHERE org_id=?", (o,)).fetchone()[0] == "hq")
     from app.web.main import app
-    c = Client(app, follow_redirects=False)
-    assert c.post("/login", data={"login_id": "admin", "password": PW}).status_code == 303
-    screen = _team_rows(c.get("/team/members").text)
+
+    def client(login_id):
+        c = Client(app, follow_redirects=False)
+        assert c.post("/login", data={"login_id": login_id, "password": PW}).status_code == 303
+        return c
+
+    # 메인 관리자: 화면의 본부 합계와 GA 합계가 조직 집계와 같다
+    c = client("admin")
+    page = c.get("/team/members").text
+    screen = _team_rows(page)
+    assert codes[leaver] in screen
+    assert screen[codes[leaver]] == (perf[leaver]["net_count"], perf[leaver]["converted_premium"])
     under = {r["internal_code"] for r in con.execute(
         f"""SELECT DISTINCT a.internal_code FROM agent_org_history h JOIN agent a ON a.agent_id=h.agent_id
             WHERE h.org_id IN ({','.join('?' * len(orgs.descendants(con, hq)))}) AND h.effective_from<=? AND (h.effective_to IS NULL OR h.effective_to>=?)""",
         [*orgs.descendants(con, hq), YM, YM])}
+    assert codes[leaver] in under
     on_screen = sum(v[1] for code, v in screen.items() if code in under)
+    assert _rollup(con, hq)["converted_premium"] == on_screen == performance.org_rollup(con, hq, YM)["converted_premium"]
+    ga = _rollup(con, sync.root_id(con))
+    m = re.search(r'<div class="k">인정보험료</div><div class="big">([^<]*)<span class="unit">원</span></div><div class="cap">순건수 ([^건]*)건', c.get("/").text)
+    assert (_num(m.group(1)), _num(m.group(2))) == (ga["converted_premium"], ga["net_count"])
+
+    # 퇴사자 줄에는 퇴사 표시와 퇴사일이 붙는다. 다른 사람 줄에는 없다
+    tr = next(t for t in page.split("<tr>") if f'<td class="hide-sm">{codes[leaver]}</td>' in t)
+    assert '<span class="chip bad">퇴사</span>' in tr and "2월 15일 퇴사" in tr
+    assert page.count('<span class="chip bad">퇴사</span>') == 1
+
+    # 경쟁과 보상 대상에서는 빠진다
+    for metric in ("recognized_premium", "net_count"):
+        assert leaver not in _ranking(con, metric), metric
+    divisions = [oa.load(con, r[0]) for r in con.execute("SELECT division_id FROM org_award_division")]
+    assert len(divisions) == 2
+    for d in divisions:
+        assert leaver not in {r["agent_id"] for r in oa.standing(con, d, YM)}, d["metric"]
+    from app.web.routes import promo as promo_routes
+    assert leaver not in {a["agent_id"] for a in promo_routes._scope_agents(con, {"role": "main", "agent_ids": set(), "ym": YM})}
+    name = con.execute("SELECT name FROM agent WHERE agent_id=?", (leaver,)).fetchone()[0]
+    if con.execute("SELECT COUNT(*) FROM agent WHERE name=?", (name,)).fetchone()[0] == 1:     # 이름이 하나뿐일 때만 화면 글자로 본다
+        for path in ("/promo/org-awards", "/promo/progress"):
+            assert name not in c.get(path).text, path
+
+    # 퇴사자가 속했던 조직의 관리자는 보고, 다른 본부의 관리자는 보지 못한다
+    up = orgs.ancestors(con, org)
+    managers = con.execute("""SELECT m.agent_id, m.org_id FROM org_manager m JOIN agent a ON a.agent_id=m.agent_id
+                              WHERE a.status='active' AND m.effective_from<=? AND (m.effective_to IS NULL OR m.effective_to>=?)
+                              ORDER BY m.agent_id""", (YM, YM)).fetchall()
+    own = next((m for m in managers if m["org_id"] in up), None)
+    other = next((m for m in managers if m["org_id"] not in up), None)
+    assert own and other
+    mine = client(codes[own["agent_id"]])
+    rows_own = _team_rows(mine.get("/team/members").text)
+    assert codes[leaver] in rows_own
+    inside = {codes[a] for a in orgs.members(con, own["org_id"], YM, active_only=False)}
+    assert _rollup(con, own["org_id"])["converted_premium"] == sum(v[1] for code, v in rows_own.items() if code in inside)
+    theirs = client(codes[other["agent_id"]])
+    for path in ("/team/members", "/", "/promo/org-awards", "/promo/progress", "/org/tree"):
+        assert f">{codes[leaver]}<" not in theirs.get(path).text, path
     con.close()
-    assert _rollup_of(tmp_path, hq) == on_screen
 
 
 def _rollup_of(tmp_path, org_id):

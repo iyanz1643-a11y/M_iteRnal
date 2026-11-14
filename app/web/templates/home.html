@@ -24,7 +24,7 @@
 <div class="grid g2">
   <div class="card"><div class="ringbox">{{ ui.ring(d.team.active / d.team.n * 100 if d.team.n else 0, '가동률', color='var(--fill-green)') }}
     <div><div class="k">가동률</div><div class="mid">{{ d.team.active }}<span class="unit">/ {{ d.team.n }}명</span></div><div class="cap">이번 달 순건수 1건 이상</div></div></div></div>
-  <div class="card"><div class="k">인정보험료</div><div class="big">{{ d.team.premium|won }}<span class="unit">원</span></div><div class="cap">순건수 {{ d.team.count|n }}건</div></div>
+  <div class="card"><div class="k">인정보험료</div><div class="big">{{ d.team.premium|won }}<span class="unit">원</span></div><div class="cap">순건수 {{ d.team.count|n }}건</div>{% if d.team.left %}<div class="cap">이번 달 퇴사 {{ d.team.left }}명의 퇴사 전 실적을 포함합니다.</div>{% endif %}</div>
 </div>
 <div class="card" style="margin-top:16px"><div class="k" style="margin-bottom:18px">인정보험료 상위</div>{{ ui.bars(d.team.top, 'name', 'org', 'converted_premium') }}</div>
 {% endmacro %}

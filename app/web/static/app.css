@@ -93,6 +93,7 @@ tr:last-child td{border-bottom:none}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;padding-right:24px;padding-left:8px}
 td.num:last-child,th.num:last-child{padding-right:0}
 td.strong{font-weight:600}
+td .left-date{margin-top:2px;font-size:13px;font-weight:400}
 td.cell-wrap{white-space:normal;min-width:200px}
 .indent{display:inline-block}
 

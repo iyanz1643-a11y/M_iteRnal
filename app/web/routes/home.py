@@ -80,8 +80,10 @@ def home(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
         data["goal"] = _goal(con, ym, ctx["agent_id"])
     if role in ("manager", "main"):
         team = _perf(con, ym, ctx["agent_ids"] if role == "manager" else [r["agent_id"] for r in con.execute("SELECT agent_id FROM agent")])
-        data["team"] = {"n": len(team), "active": sum(1 for t in team if (t["net_count"] or 0) > 0),
-                        "premium": sum(t["converted_premium"] or 0 for t in team), "count": sum(t["net_count"] or 0 for t in team), "top": team[:5]}
+        # 합계와 가동에는 그 달 중간에 퇴사한 사람의 퇴사 전 실적도 넣는다. 상위 목록은 경쟁 표시라 퇴사자를 뺀다
+        data["team"] = {"n": len(team), "active": sum(1 for t in team if (t["net_count"] or 0) > 0), "left": sum(1 for t in team if t["left"]),
+                        "premium": sum(t["converted_premium"] or 0 for t in team), "count": sum(t["net_count"] or 0 for t in team),
+                        "top": [t for t in team if not t["left"]][:5]}
     if role == "main":
         one = lambda sql, p=(): con.execute(sql, p).fetchone()[0]
         data["ops"] = {

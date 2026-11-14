@@ -127,15 +127,22 @@ def _in(ids):
 
 
 def _perf(con, ym, agent_ids):
+    """범위 안 설계사의 그 달 실적. agent_ids 는 guard 가 준 범위 목록이고, 그 밖의 사람은 넣지 않는다.
+
+    재직자와, 퇴사했어도 그 달에 소속 이력이 있는 사람을 센다. 조직 집계(v_org_performance_rollup, org_rollup)와 같은 기준이다.
+    그 달 중간에 퇴사한 사람의 퇴사 전 실적은 조직 합계와 팀원 현황에 넣는다. 랭킹, 조직 부문 시상, 프로모션 달성 대상에서는 뺀다.
+    퇴사자 줄은 left 가 참이고 termination_date 에 퇴사일이 있다.
+    """
     q, ids = _in(agent_ids)
-    return _q(con, f"""SELECT a.agent_id, a.internal_code code, a.name, a.hire_date, o.name org, s.applied_count, s.new_count, s.withdrawn_count,
+    return _q(con, f"""SELECT a.agent_id, a.internal_code code, a.name, a.hire_date, a.termination_date, a.status='terminated' AS "left",
+                              o.name org, s.applied_count, s.new_count, s.withdrawn_count,
                               s.net_count, s.converted_premium
                        FROM agent a
                        LEFT JOIN agent_org_history h ON h.agent_id=a.agent_id AND h.effective_from<=? AND (h.effective_to IS NULL OR h.effective_to>=?)
                        LEFT JOIN org_unit o ON o.org_id=h.org_id
                        LEFT JOIN (SELECT s.* FROM agent_performance_summary s JOIN calc_run r ON r.run_id=s.run_id AND r.status='done' AND r.period_ym=?
                                   WHERE s.period_type='month' AND s.period_key=?) s ON s.agent_id=a.agent_id
-                       WHERE a.agent_id IN ({q}) AND a.status='active' ORDER BY COALESCE(s.converted_premium,0) DESC, a.internal_code""",
+                       WHERE a.agent_id IN ({q}) AND (a.status='active' OR h.org_id IS NOT NULL) ORDER BY COALESCE(s.converted_premium,0) DESC, a.internal_code""",
               (ym, ym, ym, ym, *ids))
 
 

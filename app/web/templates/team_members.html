@@ -3,7 +3,8 @@
 {% set active = rows|selectattr('net_count')|list|length %}{% set top = (rows|map(attribute='converted_premium')|map('default', 0, true)|max) or 1 %}
 <p class="eyebrow">{{ ctx.ym[:4] }}년 {{ ctx.ym[4:]|int }}월 · {{ SCOPES[ctx.scope] }}</p>
 <h1 class="display">팀원 현황</h1>
-<p class="lede">{{ rows|length }}명 가운데 {{ active }}명이 이번 달 가동했습니다. 수수료와 시상 금액은 보이지 않습니다.</p>
+{% set left = rows|selectattr('left')|list|length %}
+<p class="lede">{{ rows|length }}명 가운데 {{ active }}명이 이번 달 가동했습니다.{% if left %} 이번 달 퇴사한 {{ left }}명의 퇴사 전 실적도 함께 셉니다.{% endif %} 수수료와 시상 금액은 보이지 않습니다.</p>
 <div class="grid g2" style="margin-top:32px">
   <div class="card"><div class="ringbox">{{ ui.ring(active / rows|length * 100 if rows else 0, '가동률', color='var(--fill-green)') }}
     <div><div class="k">가동률</div><div class="mid">{{ active }}<span class="unit">/ {{ rows|length }}명</span></div></div></div></div>
@@ -11,10 +12,10 @@
 </div>
 <div class="card tablecard" style="margin-top:16px"><table>
 <tr><th>성명</th><th class="hide-sm">사번</th><th>소속</th><th class="hide-sm">위촉일</th><th class="num hide-sm">청약</th><th class="num hide-sm">성립</th><th class="num hide-sm">철회</th><th class="num">순건수</th><th class="num">인정보험료</th><th>상태</th></tr>
-{% for r in rows %}<tr><td class="strong">{{ r.name }}</td><td class="hide-sm">{{ r.code }}</td><td>{{ r.org or '-' }}</td><td class="hide-sm">{{ r.hire_date or '-' }}</td>
+{% for r in rows %}<tr><td class="strong">{{ r.name }}{% if r.left %} <span class="chip bad">퇴사</span><div class="cap left-date">{{ r.termination_date|md }} 퇴사</div>{% endif %}</td><td class="hide-sm">{{ r.code }}</td><td>{{ r.org or '-' }}</td><td class="hide-sm">{{ r.hire_date or '-' }}</td>
 <td class="num hide-sm">{{ r.applied_count|n }}</td><td class="num hide-sm">{{ r.new_count|n }}</td><td class="num hide-sm">{{ r.withdrawn_count|n }}</td><td class="num">{{ r.net_count|n }}</td>
 <td class="num"><span class="minibar hide-sm"><i style="width:{{ ((r.converted_premium or 0) / top * 100)|round(1) }}%"></i></span>{{ r.converted_premium|won }}</td>
 <td>{% if (r.net_count or 0) > 0 %}<span class="chip good">가동</span>{% else %}<span class="chip warn">미가동</span>{% endif %}</td></tr>{% endfor %}
 </table></div>
-<p class="cap">{{ last_load or '적재 없음' }} 적재 기준. 프로모션 달성, 교육, 정착 단계는 해당 파트를 만들 때 붙입니다.</p>
+<p class="cap">{{ last_load or '적재 없음' }} 적재 기준. 퇴사 표시가 있는 사람은 퇴사 전 실적만 셉니다. 랭킹, 조직 부문 시상, 프로모션 달성 대상에서는 빠집니다. 프로모션 달성, 교육, 정착 단계는 해당 파트를 만들 때 붙입니다.</p>
 {% endblock %}
