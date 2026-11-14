@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% macro status(g) %}{% if g.granted and g.effective %}<span class="chip good">켜짐</span>{% elif g.granted %}<span class="chip warn">켜짐</span> <span class="chip bad" title="권한 줄은 남아 있지만 지금은 승인할 수 없습니다">효력 없음{% if g.why %} · {{ g.why }}{% endif %}</span>{% else %}<span class="chip">꺼짐</span>{% endif %}{% endmacro %}
 {% block body %}
 <p class="eyebrow">{{ ctx.ym[:4] }}년 {{ ctx.ym[4:]|int }}월 기준</p>
 <h1 class="display">조직장과 대리</h1>
@@ -46,6 +47,40 @@
 <td><form method="post" action="/org/heads" style="display:inline"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="item_id" value="{{ d.id }}"><button class="ghost" name="action" value="deputy_end">끝내기</button></form></td></tr>
 {% else %}<tr><td colspan="6" class="cap">지정된 대리가 없습니다.</td></tr>{% endfor %}
 </table></div>
+
+<h2 class="sec" id="card-grant">명함 승인 권한 {{ grant_on }}명</h2>
+<p class="cap" style="margin:-6px 0 16px">조직장이 되었다고 권한이 생기지 않습니다. 고른 관리자만 자기 범위 안 설계사의 명함을 승인하거나 반려합니다. 관리자 본인의 명함은 메인 관리자가 처리합니다.</p>
+{% if grant_msg %}<div class="okmsg" role="status">{{ grant_msg }}</div>{% endif %}
+{% if grant_err %}<div class="alert bad" role="alert">{{ grant_err }}</div>{% endif %}
+{% if grant_ask %}
+<section class="card confirm" id="grant-confirm" style="margin-bottom:16px">
+  <div class="k">권한 {{ grant_ask.do }} 확인</div>
+  <h3 class="confirm-title">{{ grant_ask.people|length }}명의 명함 승인 권한을 {{ '켤까요' if grant_ask.action == 'card_grant' else '끌까요' }}?</h3>
+  <ul class="who-list">{% for g in grant_ask.people %}<li><span class="strong">{{ g.name or g.login_id }}</span> <span class="req-code">{{ g.code or g.login_id }}</span>{% if g.orgs %} · <span class="cap" style="margin:0">{% for o in g.orgs %}{{ o.text }} {{ HEAD_KO.get(o.role, o.role) }}{% if not loop.last %}, {% endif %}{% endfor %}</span>{% endif %}</li>{% endfor %}</ul>
+  <ul class="notes">
+    {% if grant_ask.action == 'card_grant' %}<li>켜면 바로 이분들의 메뉴에 명함 승인이 보이고, 자기 범위 안 요청을 승인하거나 반려합니다.</li>
+    {% else %}<li>끄면 바로 이분들의 메뉴에서 명함 승인이 사라지고 이 화면을 열 수 없습니다.</li>{% endif %}
+    <li>켜고 끈 일은 변경 기록에 남습니다.</li>
+  </ul>
+  <form method="post" action="/org/heads" class="actions"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="action" value="{{ grant_ask.action }}"><input type="hidden" name="confirm" value="1">
+    {% for g in grant_ask.people %}<input type="hidden" name="login_id" value="{{ g.login_id }}">{% endfor %}
+    <button class="primary" type="submit">{{ grant_ask.people|length }}명 권한 {{ grant_ask.do }}</button><a class="pill quiet big-pill" href="/org/heads#card-grant">취소</a></form>
+</section>
+{% endif %}
+<form method="post" action="/org/heads#grant-confirm"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+<div class="card tablecard"><table class="grant-table"><tr><th class="pick"><span class="hide-sm">선택</span></th><th>이름</th><th class="hide-sm">사번</th><th>맡은 조직</th><th class="hide-sm">지금 권한</th></tr>
+{% for g in grants %}<tr>
+<td class="pick"><label class="pickbox"><input type="checkbox" name="login_id" value="{{ g.login_id }}" aria-label="{{ g.name or g.login_id }} 고르기"{% if grant_ask and g in grant_ask.people %} checked{% endif %}></label></td>
+<td class="strong">{{ g.name or g.login_id }}<span class="only-sm grant-sub"><span class="req-code">{{ g.code or g.login_id }}</span> {{ status(g) }}</span></td><td class="hide-sm">{{ g.code or g.login_id }}</td>
+<td class="grant-orgs">{% for o in g.orgs %}<div>{{ o.text }} <span class="chip">{{ HEAD_KO.get(o.role, o.role) }}</span></div>{% else %}<span class="cap" style="margin:0">맡은 조직 없음</span>{% endfor %}</td>
+<td class="hide-sm">{{ status(g) }}</td></tr>
+{% else %}<tr><td colspan="5" class="cap">권한을 켤 수 있는 조직장이나 대리 계정이 없습니다.</td></tr>{% endfor %}
+</table></div>
+<div class="grant-acts"><button class="primary" type="submit" name="action" value="card_grant">권한 켜기</button>
+  <button class="ghost big" type="submit" name="action" value="card_revoke">권한 끄기</button></div>
+</form>
+<p class="cap">지금 조직장이거나 대리이고 계정이 있는 관리자만 켤 수 있습니다. 효력 없음은 권한이 켜져 있지만 조직장이나 대리에서 빠졌거나 계정이 중지되어 지금은 승인할 수 없다는 뜻입니다. 끄면 줄은 남기고 끈 사람과 시각을 적습니다.</p>
 
 <h2 class="sec">조직장이 없는 조직 {{ vacant|length }}개</h2>
 {% if vacant %}<div class="card"><div class="chips">{% for c in vacant[:60] %}<span class="chip">{{ c.text }}</span>{% endfor %}{% if vacant|length > 60 %}<span class="chip">외 {{ vacant|length - 60 }}개</span>{% endif %}</div></div>

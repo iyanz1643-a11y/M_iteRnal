@@ -1,0 +1,9 @@
+{# 명함 승인과 미리보기 화면이 함께 쓰는 조각. 이름과 소속은 앱의 사원 정보다 #}
+{% macro who(r) %}{% if r.agent_id %}<div class="req-who"><span class="strong">{{ r.name or '이름 없음' }}</span> <span class="req-code">{{ r.code or '' }}</span>{% if r.left %} <span class="chip warn">퇴사</span>{% endif %}</div>
+<div class="req-org">{{ r.org or '소속 없음' }}</div>{% else %}<div class="req-who"><span class="strong">이어진 설계사 없음</span></div><div class="req-org">명함 주소 {{ r.slug }}</div>{% endif %}{% endmacro %}
+{% macro meta(r) %}<div class="req-meta">
+  <span>요청 {{ r.requested }}</span>
+  {% if r.replaces %}<span class="chip warn">공개 중인 명함을 바꿈</span>{% else %}<span class="chip">새 명함</span>{% endif %}
+  {% if r.conflict %}<span class="chip bad">공개본과 신청 정보가 다름</span>{% endif %}
+  {% if r.live_url %}<a href="{{ r.live_url }}" target="_blank" rel="noopener noreferrer">지금 공개본 보기</a>{% else %}<span class="cap" style="margin:0">공개본 없음</span>{% endif %}
+</div>{% endmacro %}

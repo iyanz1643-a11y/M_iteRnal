@@ -17,7 +17,8 @@ from app import db, masters
 from app.connect import card_decide, card_site
 from app.connect.card_link import CardLinkTable
 from app.connect.state import StateStore
-from app.web import auth
+from app.org import card_grant
+from app.web import auth, menu
 from app.web.routes import card as card_route
 
 PW = "card-pass-1234"
@@ -28,6 +29,13 @@ FAKE_NAME = "가짜신청자"                                    # 명함 사이
 FAKE_MOBILE = "-".join(("010", "0" * 4, "0" * 4))          # 컨텍스트 점검이 원문을 찾지 않도록 조각을 이어 만든다
 FAKE_TAIL = "4321"
 _AT = itertools.count(10)
+JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 32               # 신청본 그림. 머리만 JPEG 이면 된다
+# 신청본 index.html. 다듬기에서 빠져야 하는 것을 일부러 넣었다
+CARD_HTML = ("<!doctype html><html><head><script>alert(1)</script><link rel=stylesheet href='https://evil.test/x.css'>"
+             "<meta http-equiv='refresh' content='0;url=https://evil.test'></head>"
+             "<body onload='steal()'><h1>미리보기 명함 본문</h1><img src='card.jpg' onerror='steal()'>"
+             "<img src='https://evil.test/track.png'><a href='https://evil.test/'>바로가기</a>"
+             "<iframe src='https://evil.test/'></iframe><form action='https://evil.test/'><input name=q></form></body></html>")
 
 
 class FakeSite:
@@ -41,6 +49,7 @@ class FakeSite:
         self.decided = {}
         self.requests = []
         self.bodies = []
+        self.no_files = set()
 
     def posts(self):
         return [r for r in self.requests if r.method == "POST"]
@@ -63,6 +72,15 @@ class FakeSite:
                                                  "at": self.pending[slug], "decidedAt": None})
             st = self.decided.get(slug, "none")
             return httpx.Response(200, json={"slug": slug, "live": st == "approved", "status": st, "reason": "", "at": None, "decidedAt": None})
+        if request.method == "GET" and path == "/api/admin/file":
+            slug, fpath = request.url.params.get("slug"), request.url.params.get("path")
+            if slug not in self.pending or slug in self.no_files:
+                return httpx.Response(404, json={"error": "not_found"})
+            if fpath == "index.html":
+                return httpx.Response(200, content=CARD_HTML.encode(), headers={"content-type": "text/html; charset=utf-8"})
+            if fpath == "card.jpg":
+                return httpx.Response(200, content=JPEG, headers={"content-type": "image/jpeg"})
+            return httpx.Response(404, json={"error": "not_found"})
         if request.method == "POST" and path in ("/api/admin/approve", "/api/admin/reject"):
             body = json.loads(request.content or b"{}")
             self.bodies.append(body)
@@ -130,6 +148,7 @@ def env(tmp_path, monkeypatch):
     links.link(inside, "card-in", by="admin")
     links.link(outside, "card-out", by="admin")
     con.commit()
+    card_grant.grant(con, [manager], by="admin")                       # 메인 관리자가 이 지점장에게 명함 승인 권한을 켜 둔다
     code = lambda a: con.execute("SELECT internal_code FROM agent WHERE agent_id=?", (a,)).fetchone()[0]
     key = secrets.token_hex(8)
     state = {"site": FakeSite(key), "write": True, "key": key}
@@ -139,7 +158,8 @@ def env(tmp_path, monkeypatch):
                                         attempts=1, write=state["write"], sleep=lambda s: None)
     monkeypatch.setattr(card_route, "card_client", fake_client)
     from app.web.main import app
-    yield {"con": con, "path": path, "app": app, "state": state, "manager": manager, "inside": inside, "outside": outside, "free": free,
+    yield {"con": con, "path": path, "app": app, "state": state, "manager": manager, "manager_agent": mctx["agent_id"],
+           "inside": inside, "outside": outside, "free": free,
            "code_in": code(inside), "code_out": code(outside), "code_free": code(free),
            "agent": con.execute("SELECT internal_code FROM agent WHERE agent_id NOT IN (SELECT agent_id FROM org_manager) AND status='active' "
                                 "ORDER BY agent_id DESC LIMIT 1").fetchone()[0]}
@@ -332,3 +352,174 @@ def test_home_hides_notice_when_site_fails(env, monkeypatch):
         assert r.status_code == 200 and "명함 승인 대기" not in r.text
     r = login(env, "admin").get(PATH)
     assert r.status_code == 200 and "목록을 읽지 못했습니다" in r.text
+
+
+# ---------------------------------------------------------------- 명함 승인 권한. 2026-11-14 대표님 결정
+HEADS = "/org/heads"
+
+
+def _granted(env, login_id):
+    return card_grant.is_granted(env["con"], login_id)
+
+
+def _other_heads(env, n):
+    """권한을 켤 수 있는 다른 관리자 계정 n 개. 이 시험의 지점장은 뺀다."""
+    out = [c["login_id"] for c in card_grant.candidates(env["con"]) if c["login_id"] != env["manager"]]
+    assert len(out) >= n
+    return out[:n]
+
+
+def test_manager_without_grant_has_no_menu_and_gets_403(env):
+    card_grant.revoke(env["con"], [env["manager"]], by="admin")
+    site = env["state"]["site"]
+    c = login(env, env["manager"])
+    home = c.get("/").text
+    assert 'href="/sales/card-approve"' not in home and "명함 승인" not in home
+    assert c.get("/sales/leads").status_code == 200 and "명함 승인" not in c.get("/sales/leads").text   # 같은 묶음의 다른 화면에도 없다
+    for url in (PATH, f"{PATH}?preview=card-in", f"{PATH}?do=approve&slug=card-in"):
+        assert c.get(url).status_code == 403, url
+    assert c.post(PATH, data={"action": "approve", "slug": "card-in", "confirm": "1"}).status_code == 403
+    assert not site.requests
+    denied = env["con"].execute("SELECT COUNT(*) FROM audit_log WHERE action='access_denied' AND actor=? AND target=?",
+                                (env["manager"], PATH)).fetchone()[0]
+    assert denied >= 1
+    assert menu.find(PATH)["requires"] == "card_approver"
+
+
+def test_main_grants_and_revokes_many_on_heads_with_confirm(env):
+    con = env["con"]
+    card_grant.revoke(con, [env["manager"]], by="admin")
+    others = _other_heads(env, 1)
+    pick = [env["manager"], *others]
+    admin = login(env, "admin")
+    html = admin.get(HEADS).text
+    assert "명함 승인 권한" in html and all(f'name="login_id" value="{x}"' in html for x in pick)
+    # CSRF 없이는 막힌다
+    for action in ("card_grant", "card_revoke"):
+        assert admin.post(HEADS, data={"action": action, "login_id": pick, "confirm": "1"}, csrf=False).status_code == 403
+        assert admin.post(HEADS, data={"action": action, "login_id": pick, "confirm": "1", "csrf_token": "wrong"}).status_code == 403
+    assert not any(_granted(env, x) for x in pick)
+    # 확인 단계: 고른 사람 수와 이름을 보여 주고 아직 켜지 않는다
+    r = admin.post(HEADS, data={"action": "card_grant", "login_id": pick})
+    assert r.status_code == 200 and f"{len(pick)}명의 명함 승인 권한을 켤까요" in r.text
+    names = {x: con.execute("SELECT display_name FROM user_account WHERE login_id=?", (x,)).fetchone()[0] for x in pick}
+    confirm = r.text[r.text.index('id="grant-confirm"'):]
+    confirm = confirm[:confirm.index("</section>")]
+    assert all(n in confirm for n in names.values()) and 'name="confirm" value="1"' in confirm
+    assert not any(_granted(env, x) for x in pick)
+    # 보낸다
+    r = admin.post(HEADS, data={"action": "card_grant", "login_id": pick, "confirm": "1"})
+    assert r.status_code == 303 and r.headers["location"].startswith(HEADS)
+    assert all(_granted(env, x) for x in pick)
+    assert f"{len(pick)}명의 명함 승인 권한을 켰습니다" in admin.get(HEADS).text
+    m = login(env, env["manager"])
+    assert 'href="/sales/card-approve"' in m.get("/").text and m.get(PATH).status_code == 200
+    # 끈다. 확인 단계를 거친다
+    r = admin.post(HEADS, data={"action": "card_revoke", "login_id": pick})
+    assert r.status_code == 200 and f"{len(pick)}명의 명함 승인 권한을 끌까요" in r.text and all(_granted(env, x) for x in pick)
+    assert admin.post(HEADS, data={"action": "card_revoke", "login_id": pick, "confirm": "1"}).status_code == 303
+    assert not any(_granted(env, x) for x in pick)
+    assert "명함 승인 권한을 껐습니다" in admin.get(HEADS).text
+    assert m.get(PATH).status_code == 403 and 'href="/sales/card-approve"' not in m.get("/").text
+    acts = [r[0] for r in con.execute("SELECT action FROM audit_log WHERE action IN ('card_grant','card_revoke') ORDER BY id")]
+    assert acts.count("card_revoke") >= len(pick) and acts.count("card_grant") >= len(pick)
+    # 고르지 않으면 존댓말 한 줄
+    r = admin.post(HEADS, data={"action": "card_grant"})
+    assert r.status_code == 400 and "한 명 이상 골라 주세요" in r.text
+
+
+def test_grant_error_is_one_polite_line(env):
+    admin = login(env, "admin")
+    r = admin.post(HEADS, data={"action": "card_grant", "login_id": ["admin"], "confirm": "1"})
+    assert r.status_code == 400 and "목록에 없는 계정" in r.text
+
+
+def test_granted_but_no_longer_head_shows_no_effect(env):
+    con = env["con"]
+    mid = con.execute("SELECT id FROM org_manager WHERE agent_id=?", (env["manager_agent"],)).fetchone()[0]
+    con.execute("UPDATE org_manager SET effective_to='200001' WHERE id=?", (mid,))
+    con.commit()
+    html = login(env, "admin").get(HEADS).text
+    sec = html[html.index('id="card-grant"'):]
+    assert "효력 없음" in sec and f'value="{env["manager"]}"' in sec
+
+
+def test_manager_cannot_post_grant_on_heads(env):
+    other = _other_heads(env, 1)
+    m = login(env, env["manager"])
+    for action in ("card_grant", "card_revoke"):
+        assert m.post(HEADS, data={"action": action, "login_id": other}).status_code == 403
+        assert m.post(HEADS, data={"action": action, "login_id": other, "confirm": "1"}).status_code == 403
+    assert not _granted(env, other[0]) and _granted(env, env["manager"])
+    assert login(env, env["agent"]).post(HEADS, data={"action": "card_grant", "login_id": other, "confirm": "1"}).status_code == 403
+
+
+# ---------------------------------------------------------------- 신청본 미리보기
+SRCDOC = re.compile(r'<iframe ([^>]*)></iframe>')
+
+
+def _frame(html):
+    m = SRCDOC.search(html)
+    assert m, "iframe 이 없습니다"
+    attrs = dict(re.findall(r'([a-z-]+)="([^"]*)"', m.group(1)))
+    import html as h
+    return attrs, h.unescape(attrs.get("srcdoc", ""))
+
+
+def test_preview_is_sandboxed_without_script(env):
+    con = env["con"]
+    for who in (env["manager"], "admin"):
+        c = login(env, who)
+        assert 'href="?preview=card-in"' in c.get(PATH).text                                 # 목록에 신청본 보기가 있다
+        r = c.get(f"{PATH}?preview=card-in")
+        assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
+        attrs, doc = _frame(r.text)
+        assert 'sandbox=""' in r.text and attrs["sandbox"] == "" and attrs["referrerpolicy"] == "no-referrer"
+        assert "미리보기 명함 본문" in doc and "data:image/jpeg;base64," in doc
+        low = doc.lower()
+        for bad in ("<script", "onload", "onerror", "<iframe", "<form", "evil.test/x.css", "refresh", 'href="https://evil'):
+            assert bad not in low, bad
+        assert "https://evil.test/track.png" not in doc and "content-security-policy" in low     # 다듬기가 넣은 CSP 만 있다
+        assert "?do=approve&amp;slug=card-in" in r.text and "?do=reject&amp;slug=card-in" in r.text
+        assert env["code_in"] in r.text
+    assert [json.loads(j)["slug"] for (j,) in con.execute("SELECT after_json FROM audit_log WHERE action='card_preview'")] == ["card-in", "card-in"]
+
+
+def test_preview_out_of_scope_is_denied(env):
+    site = env["state"]["site"]
+    c = login(env, env["manager"])
+    for slug in ("card-out", "card-free"):
+        r = c.get(f"{PATH}?preview={slug}")
+        assert r.status_code == 403 and "<iframe" not in r.text and "보여 드릴 수 없습니다" in r.text, slug
+        assert env["code_out"] not in r.text
+    assert not [q for q in site.requests if q.url.path == "/api/admin/file"]
+    assert login(env, env["agent"]).get(f"{PATH}?preview=card-in").status_code == 403
+    assert c.get(f"{PATH}?preview=Bad_Slug!").status_code == 400
+
+
+def test_preview_failure_states_have_polite_notice(env):
+    site = env["state"]["site"]
+    c = login(env, "admin")
+    r = c.get(f"{PATH}?preview=card-gone")                                              # 대기 중이 아니다
+    assert r.status_code == 200 and "승인 대기 중인 신청이 아니라" in r.text and "<iframe" not in r.text
+    site.no_files.add("card-out")
+    r = c.get(f"{PATH}?preview=card-out")
+    assert r.status_code == 200 and "신청본 파일이 없습니다" in r.text and "<iframe" not in r.text
+    env["state"]["key"] = ""
+    r = c.get(f"{PATH}?preview=card-in")
+    assert r.status_code == 200 and "연동 키가 아직 없어" in r.text and r.headers["cache-control"] == "no-store"
+
+
+def test_own_request_has_no_decision_buttons(env):
+    con, site = env["con"], env["state"]["site"]
+    CardLinkTable(con).link(env["manager_agent"], "card-self", by="admin")
+    con.commit()
+    site.pending["card-self"] = "2026-11-14T01:00:00Z"
+    c = login(env, env["manager"])
+    html = c.get(PATH).text
+    assert "slug=card-self" not in html                                                # 본인 요청은 목록에 없거나 단추가 없다
+    ask = c.get(f"{PATH}?do=approve&slug=card-self").text
+    assert "누구에게나 공개됩니다" not in ask
+    assert c.post(PATH, data={"action": "approve", "slug": "card-self", "confirm": "1"}).status_code == 403
+    assert "명함 승인 대기 1건" in c.get("/").text                                       # 홈 건수에도 본인 요청은 없다
+    assert not site.posts()

@@ -66,6 +66,16 @@ def _set_password(path):
     con.close()
 
 
+def _grant_card_approvers(path):
+    """관리자 모두에게 명함 승인 권한을 켜 둔다. 권한이 있어야 열리는 명함 승인 화면도 D-05, D-17 의 화면 훑기에 들어간다."""
+    from app.org import card_grant
+    con = db.connect(path)
+    ids = [c["login_id"] for c in card_grant.candidates(con)]
+    if ids:
+        card_grant.grant(con, ids, by="admin")
+    con.close()
+
+
 def _build_sample(tmp: pathlib.Path) -> pathlib.Path:
     import run_demo
     path = tmp / "sample.db"
@@ -89,6 +99,7 @@ def env(request):
     os.environ.update(CONNECT_DATA_DIR=str(tmp / "data"), CONNECT_STATE_DIR=str(tmp / "state"), APP_UPLOAD_DIR=str(tmp / "up"))
     path = BUILDERS[request.param](tmp)
     _set_password(path)
+    _grant_card_approvers(path)
     from app.web.main import app
     yield {"kind": request.param, "tmp": tmp, "db": path, "app": app}
     for k, v in old.items():
@@ -140,7 +151,7 @@ def _ctx(con, login_id):
 def _screens(con, ctx):
     """이 역할로 여는 GET 주소. 메뉴 전부와 같은 주소의 다른 보기."""
     role = ctx["role"]
-    paths = [it["path"] for it in _from_menu(role)]
+    paths = [it["path"] for it in _from_menu(role) if menu.allowed(it, ctx)]        # requires 권한 플래그까지 본다
     promos = [r[0] for r in con.execute("SELECT promo_id FROM promotion ORDER BY promo_id")]
     divisions = [r[0] for r in con.execute("SELECT division_id FROM org_award_division ORDER BY division_id")]
     if role in ("main", "manager"):

@@ -815,6 +815,8 @@ def decide_env(tmp_path):
         con.execute("INSERT INTO user_account(login_id, password_hash, agent_id, display_name, is_main_admin, created_at) VALUES(?,?,?,?,?,?)",
                     (login, "x", agent_id, "시험 계정", main, db.now()))
     con.commit()
+    from app.org import card_grant
+    card_grant.grant(con, [MGR, DEP], by=MAIN)                                       # 메인 관리자가 골라 켠 승인 권한
     links = CardLinkTable(con)
     links.link(a1, "card-a", by=MAIN)
     links.link(a2, "card-c", by=MAIN)                                               # card-x 는 이어지지 않았다
@@ -822,7 +824,7 @@ def decide_env(tmp_path):
     client = _client(site, tmp_path, write=True)
     scope = [a_mgr, a1, a_dep]                                                       # guard 가 관리자에게 주는 목록
     yield {"con": con, "links": links, "site": site, "client": client, "a1": a1, "a2": a2, "scope": scope,
-           "path": tmp_path / "d.db", "tmp": tmp_path}
+           "a_mgr": a_mgr, "a_dep": a_dep, "o1": o1, "path": tmp_path / "d.db", "tmp": tmp_path}
     con.close()
 
 
@@ -1027,6 +1029,129 @@ def test_pending_for_scope_filters_and_hides_phone(decide_env):
     assert none.status == NOT_CONFIGURED and none.value == {"linked": [], "unlinked": []}
 
 
+# ------------------------------------------------------------------ 승인 권한과 본인 명함 (2026-11-14 대표님 결정)
+def _revoke(env, *logins):
+    from app.org import card_grant
+    card_grant.revoke(env["con"], list(logins), by=MAIN)
+
+
+def test_card_decide_manager_without_grant_is_denied(decide_env):
+    from app.connect.card_decide import NO_GRANT
+    env = decide_env
+    _revoke(env, MGR, DEP)
+    for actor in (MGR, DEP):
+        for action in ("approve", "reject"):
+            out = _decide(env, "card-a", action, actor, reason="사진 확인")
+            assert out.status == "denied" and out.reason == NO_GRANT and "메인 관리자에게 요청해 주세요" in out.reason
+    assert env["site"].requests == []
+    audit = _card_audit(env["con"])
+    assert len(audit) == 4 and all(a[3]["result"] == "denied" for a in audit)
+
+
+def test_card_decide_manager_with_grant_is_allowed(decide_env):
+    from app.org import card_grant
+    env = decide_env
+    _revoke(env, MGR)
+    assert _decide(env, "card-a", "approve", MGR).status == "denied"
+    card_grant.grant(env["con"], [MGR], by=MAIN)                                       # 다시 켜면 된다
+    out = _decide(env, "card-a", "approve", MGR)
+    assert out.status == OK and [r.url.path for r in env["site"].posts()] == ["/api/admin/approve"]
+
+
+def test_card_decide_denied_after_leaving_head(decide_env):
+    from app.org import card_grant
+    env = decide_env
+    con = env["con"]
+    con.execute("UPDATE org_manager SET effective_to='202402' WHERE agent_id=?", (env["a_mgr"],))   # 조직장에서 빠짐
+    con.execute("UPDATE org_deputy SET ended_at=? WHERE agent_id=?", (db.now(), env["a_dep"]))      # 대리도 끝남
+    con.commit()
+    assert {g["login_id"]: g["effective"] for g in card_grant.granted(con)} == {MGR: False, DEP: False}   # 줄은 남아 있다
+    for actor in (MGR, DEP):
+        out = _decide(env, "card-a", "approve", actor)
+        assert out.status == "denied"
+        assert _preview(env, "card-a", "index.html", actor).status == "denied"
+    assert env["site"].requests == []
+
+
+def _own_card(env):
+    """관리자 본인의 설계사 번호에 card-m 을 잇고 승인 대기로 둔다."""
+    env["links"].link(env["a_mgr"], "card-m", by=MAIN)
+    env["site"].pending["card-m"] = "2026-11-13T09:00:00Z"
+
+
+def test_card_decide_own_card_is_denied_for_manager(decide_env):
+    from app.connect.card_decide import OWN_CARD
+    env = decide_env
+    _own_card(env)
+    assert env["a_mgr"] in env["scope"]                                                # guard 는 본인을 범위에 넣는다
+    for action in ("approve", "reject"):
+        out = _decide(env, "card-m", action, MGR, reason="사진 확인")
+        assert out.status == "denied" and out.reason == OWN_CARD
+    assert env["site"].requests == []
+    # 같은 범위의 다른 관리자(대리)는 처리할 수 있고, 메인 관리자도 처리할 수 있다
+    assert _decide(env, "card-m", "reject", DEP, reason="다시 올려 주세요").status == OK
+
+
+def test_card_decide_own_card_found_by_login_code(decide_env):
+    """계정에 설계사 번호가 비어 있어도 사번(login_id)이 같은 설계사면 본인으로 본다."""
+    from app.connect.card_decide import own_agent_ids
+    env = decide_env
+    con = env["con"]
+    code = con.execute("SELECT internal_code FROM agent WHERE agent_id=?", (env["a1"],)).fetchone()[0]
+    assert own_agent_ids(con, MGR) == {env["a_mgr"]}
+    assert own_agent_ids(con, MAIN) == set() and own_agent_ids(con, "") == set()
+    con.execute("UPDATE user_account SET login_id=? WHERE login_id=?", (code, MGR))
+    con.execute("UPDATE card_approver SET login_id=? WHERE login_id=?", (code, MGR))
+    con.commit()
+    assert own_agent_ids(con, code) == {env["a_mgr"], env["a1"]}
+    out = _decide(env, "card-a", "approve", code)
+    assert out.status == "denied" and "본인" in out.reason and env["site"].requests == []
+
+
+def test_card_main_admin_handles_manager_own_card(decide_env):
+    env = decide_env
+    _own_card(env)
+    assert _decide(env, "card-m", "approve", MAIN, is_main=True).status == OK
+    assert [json.loads(r.content)["slug"] for r in env["site"].posts()] == ["card-m"]
+
+
+def test_pending_for_scope_hides_own_request_from_manager(decide_env):
+    from app.connect.card_decide import pending_for_scope
+    env = decide_env
+    _own_card(env)
+    plain = pending_for_scope(env["client"], env["links"], env["scope"], is_main=False)
+    assert sorted(p.slug for p in plain.value["linked"]) == ["card-a", "card-m"]     # 본인을 알려 주지 않으면 빼지 않는다
+    mgr = pending_for_scope(env["client"], env["links"], env["scope"], is_main=False, actor=MGR)
+    assert [p.slug for p in mgr.value["linked"]] == ["card-a"]
+    by_ids = pending_for_scope(env["client"], env["links"], env["scope"], is_main=False, self_agent_ids=[env["a_mgr"]])
+    assert [p.slug for p in by_ids.value["linked"]] == ["card-a"]
+    dep = pending_for_scope(env["client"], env["links"], env["scope"], is_main=False, actor=DEP)
+    assert sorted(p.slug for p in dep.value["linked"]) == ["card-a", "card-m"]       # 다른 관리자에게는 보인다
+    main = pending_for_scope(env["client"], env["links"], [], is_main=True, actor=MAIN)
+    assert sorted(p.slug for p in main.value["linked"]) == ["card-a", "card-c", "card-m"]
+    main_self = pending_for_scope(env["client"], env["links"], [], is_main=True, self_agent_ids=[env["a_mgr"]])
+    assert "card-m" in {p.slug for p in main_self.value["linked"]}                    # 메인 관리자에게는 그대로 보인다
+
+
+def test_card_decide_main_admin_needs_no_grant_row(decide_env):
+    env = decide_env
+    assert env["con"].execute("SELECT COUNT(*) FROM card_approver WHERE login_id=?", (MAIN,)).fetchone()[0] == 0
+    assert _decide(env, "card-a", "approve", MAIN, is_main=True).status == OK
+    assert _decide(env, "card-c", "approve", MAIN).status == "denied"                  # 화면이 메인이라 하지 않으면 범위로 막는다
+
+
+def test_card_decide_old_db_without_grant_table(decide_env):
+    from app.connect.card_decide import NO_GRANT
+    env = decide_env
+    env["con"].execute("DROP TABLE card_approver")
+    env["con"].commit()
+    out = _decide(env, "card-a", "approve", MGR)
+    assert out.status == "denied" and out.reason == NO_GRANT
+    assert _preview(env, "card-a", "index.html", MGR).status == "denied"
+    assert env["site"].requests == []
+    assert _decide(env, "card-a", "approve", MAIN, is_main=True).status == OK
+
+
 # ------------------------------------------------------------------ 신청본 미리보기
 PREVIEW_MARK = "preview-marker-7f3a"                 # 신청본 안의 표시. 저장소, DB, 로그에 남으면 안 된다
 JPEG = b"\xff\xd8\xff\xe0" + PREVIEW_MARK.encode() + b"\x00" * 16
@@ -1214,6 +1339,21 @@ def test_card_preview_denied_without_calling(preview_env, slug, actor, is_main, 
     out = _preview(env, slug, "index.html", actor, is_main=is_main)
     assert out.status == DENIED and why in out.reason and out.value is None
     assert env["site"].requests == [] and _preview_audit(env["con"]) == []
+
+
+def test_card_preview_needs_grant_and_hides_own_card(preview_env):
+    from app.connect.card_decide import NO_GRANT
+    env = preview_env
+    _revoke(env, DEP)
+    out = _preview(env, "card-a", "index.html", DEP)
+    assert out.status == "denied" and out.reason == NO_GRANT and out.value is None
+    env["links"].link(env["a_mgr"], "card-m", by=MAIN)
+    env["site"].pending["card-m"] = "2026-11-13T09:00:00Z"
+    env["site"].files[("card-m", "index.html")] = PAGE
+    own = _preview(env, "card-m", "index.html", MGR)
+    assert own.status == "denied" and "본인" in own.reason
+    assert env["site"].requests == [] and _preview_audit(env["con"]) == []
+    assert _preview(env, "card-m", "index.html", MAIN, is_main=True).status == OK
 
 
 def test_card_preview_main_admin_sees_unlinked_and_out_of_scope(preview_env):

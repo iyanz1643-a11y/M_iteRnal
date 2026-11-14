@@ -1,5 +1,6 @@
 # 메뉴 구성의 원본. 화면의 메뉴, 권한 검사, 문서의 메뉴 표가 모두 이 파일을 따른다.
 # roles 값: all(전체) / org(자기 조직과 그 아래) / self(본인). 적지 않은 역할에게는 메뉴가 보이지 않는다.
+# requires: 역할에 더해 로그인 문맥의 권한 플래그가 있어야 보이고 열린다. 지금은 card_approver(메인 관리자가 켜 준 명함 승인 권한) 하나다.
 # phase: 1 운영 기반 / 2 사람별 화면 / 3 제도와 제안.  status: built(새 화면에 있음) / legacy(기존 운영 도구에 있음) / planned(기획)
 roles:
   main: 메인 관리자
@@ -128,8 +129,8 @@ groups:
          desc: "리포트를 카드뉴스로 만들어 심사 뒤 게시한다"}
       - {id: sales-card, name: 모바일 명함, path: /sales/card, roles: {manager: self, agent: self}, phase: 3, status: planned,
          desc: "내 명함, 인증과 수상 배지, 공유"}
-      - {id: sales-card-approve, name: 명함 승인, path: /sales/card-approve, roles: {main: all, manager: org}, phase: 2, status: built,
-         desc: "범위 안 설계사의 명함 링크 승인 대기를 보고 승인하거나 반려한다. 메인 관리자는 설계사와 이어지지 않은 요청도 잇고 처리한다. D-44"}
+      - {id: sales-card-approve, name: 명함 승인, path: /sales/card-approve, roles: {main: all, manager: org}, requires: card_approver, phase: 2, status: built,
+         desc: "명함 신청본을 앱에서 미리 보고 승인하거나 반려한다. 메인 관리자가 권한을 켜 준 관리자만 범위 안 설계사의 요청을 처리하고, 관리자 본인의 명함은 메인 관리자가 처리한다. 메인 관리자는 설계사와 이어지지 않은 요청도 잇고 처리한다. D-44"}
 
   - id: data
     name: 데이터

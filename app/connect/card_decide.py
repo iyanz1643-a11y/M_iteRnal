@@ -3,6 +3,9 @@
 - 관리자는 본부장, 지점장, 센터장, 팀장과 그 대리다. 자기 범위 안 설계사에 이어진 명함만 다룬다.
 - 범위는 화면의 guard 가 준 설계사 목록(scope_agent_ids)으로만 판단한다. 이 파일은 조직 트리를 다시 읽지 않는다.
 - 두 번째 잠금으로 actor 계정이 활성이고, 메인 관리자이거나 지금 조직장 또는 대리인지 DB 에서 한 번 더 본다.
+- 2026-11-14 대표님 결정: 관리자는 메인 관리자가 골라 켜 준 경우에만 승인과 반려를 한다. app/org/card_grant.is_granted 로 본다.
+  조직장에서 빠지거나 대리 기간이 끝나면 켜진 줄이 남아 있어도 거부한다. card_approver 표가 없는 오래된 DB 에서는 관리자를 거부한다.
+- 같은 결정: 관리자 본인의 명함 요청은 본인이 처리하지 못하고 메인 관리자가 처리한다. 본인 설계사 번호는 own_agent_ids 로 찾는다.
 - card_link 로 이어지지 않은 주소는 메인 관리자만 다룬다.
 - 내리기와 수료 코드 발급은 여기 없다. 메인 관리자만 하는 일이고 이번에 만들지 않았다.
 
@@ -18,6 +21,7 @@
 
 신청본 미리보기 preview_card (2026-11-14 대표님 결정)
 - 범위 판단은 decide_card 와 같다. 이어진 설계사가 범위 안이거나 메인 관리자여야 하고, 이어지지 않은 주소는 메인 관리자만 본다.
+- 승인 권한과 본인 명함 막기도 decide_card 와 같다. 미리보기는 승인 판단을 위한 것이라 권한을 받은 관리자만 본다.
 - 공개 상태가 승인 대기일 때만 가져온다. 쓰기 스위치와 상관없이 읽기 GET 만 쓴다.
 - 볼 수 있는 파일은 HTML 과 JPEG 다. contact.vcf 는 연락처뿐이라 미리보기에서 뺐다. 가정이다.
 - HTML 은 card_html.clean_card_html 로 다듬은 것만 돌려준다. 그림은 기본으로 data: 로 넣는다.
@@ -28,6 +32,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import threading
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
@@ -50,6 +55,7 @@ from app.connect.card_site import (
     CardStatus,
     valid_file_path,
 )
+from app.org import card_grant
 
 # 판단 결과 상태. card_site 의 OK, NO_PENDING, WRITE_OFF, NOT_CONFIGURED, FAILED 와 함께 쓴다
 DENIED = "denied"                 # 권한이나 범위 밖, 사유에 개인정보 꼴
@@ -155,6 +161,54 @@ def actor_allowed(con, actor: str, is_main: bool, today: date | None = None) -> 
     return True, ""
 
 
+NO_GRANT = "명함 승인 권한이 없습니다. 메인 관리자에게 요청해 주세요"
+OWN_CARD = "본인의 명함 요청은 본인이 처리하지 못합니다. 메인 관리자가 처리합니다"
+
+
+def own_agent_ids(con, actor: str) -> set:
+    """actor 계정 본인의 설계사 번호들. 계정 상태와 상관없이 찾는다.
+
+    1. user_account.login_id 가 actor 인 줄의 agent_id
+    2. agent.internal_code 가 actor 인 설계사. 계정은 사번을 login_id 로 발급하므로 계정에 agent_id 가 비어 있어도 잡는다
+    둘을 합친다. 메인 관리자 전용 계정처럼 둘 다 없으면 빈 집합이다."""
+    login = str(actor or "").strip()
+    if not login:
+        return set()
+    out = {r[0] for r in con.execute("SELECT agent_id FROM user_account WHERE login_id=? AND agent_id IS NOT NULL", (login,))}
+    out |= {r[0] for r in con.execute("SELECT agent_id FROM agent WHERE internal_code=?", (login,))}
+    return out
+
+
+def _db_main(con, actor: str) -> bool:
+    r = con.execute("SELECT 1 FROM user_account WHERE login_id=? AND status='active' AND is_main_admin=1", (str(actor or ""),)).fetchone()
+    return r is not None
+
+
+def _granted(con, actor: str, today: date | None) -> bool:
+    """card_grant.is_granted 를 부른다. 표나 열이 없는 오래된 DB 에서 읽기가 깨지면 권한 없음으로 본다."""
+    try:
+        return card_grant.is_granted(con, actor, today)
+    except sqlite3.Error:
+        return False
+
+
+def _second_lock(con, actor: str, is_main: bool, agent_id, scope_agent_ids, today: date | None) -> tuple[bool, str]:
+    """decide_card 와 preview_card 가 함께 쓰는 두 번째 잠금. 돌려주는 값은 (허용, 거부 사유)."""
+    ok, why = actor_allowed(con, actor, is_main, today=today)
+    if not ok:
+        return False, why
+    main = _db_main(con, actor)
+    if not main and not _granted(con, actor, today):
+        return False, NO_GRANT
+    if agent_id is None and not is_main:
+        return False, "설계사와 이어지지 않은 명함은 메인 관리자만 처리합니다"
+    if not main and agent_id is not None and agent_id in own_agent_ids(con, actor):
+        return False, OWN_CARD
+    if not is_main and agent_id not in set(scope_agent_ids or ()):
+        return False, "범위 밖 설계사의 명함입니다"
+    return True, ""
+
+
 # ------------------------------------------------------------------ 변경 기록
 def _audit(con, actor, action, slug, agent_id, result, *, requested_at=None, scope=None, reason_len=None) -> None:
     after = {"slug": slug, "result": result}
@@ -220,14 +274,10 @@ def decide_card(con, client: CardSiteClient, *, slug: str, action: str, actor: s
             return done(DENIED, bad, reason_len=len(str(reason or "").strip()))
     rlen = len(text) if action == "reject" else None
 
-    # 두 번째 잠금과 범위
-    ok, why = actor_allowed(con, actor, is_main, today=today)
+    # 두 번째 잠금: 계정, 승인 권한, 이어짐, 본인 명함, 범위
+    ok, why = _second_lock(con, actor, is_main, agent_id, scope_agent_ids, today)
     if not ok:
         return done(DENIED, why, reason_len=rlen)
-    if agent_id is None and not is_main:
-        return done(DENIED, "설계사와 이어지지 않은 명함은 메인 관리자만 처리합니다", reason_len=rlen)
-    if not is_main and agent_id not in set(scope_agent_ids or ()):
-        return done(DENIED, "범위 밖 설계사의 명함입니다", reason_len=rlen)
 
     # 쓰기 스위치와 설정. 네트워크에 나가기 전에 본다
     if not client.write_enabled:
@@ -284,16 +334,26 @@ def _record_check(links, slug, card) -> None:
 
 
 # ------------------------------------------------------------------ 범위 안 대기 목록
-def pending_for_scope(client: CardSiteClient, link_table, scope_agent_ids: Iterable, is_main: bool) -> Outcome:
+def pending_for_scope(client: CardSiteClient, link_table, scope_agent_ids: Iterable, is_main: bool, *,
+                      actor: str | None = None, self_agent_ids: Iterable | None = None) -> Outcome:
     """승인 대기 목록을 범위로 거른다. 돌려주는 값은 Outcome(value={"linked": [PendingCard], "unlinked": [PendingCard]}).
 
     - 관리자: 범위 안 설계사에 이어진 대기만 linked 에 둔다. unlinked 는 늘 빈 목록이다.
+      본인의 요청은 빼고 돌려준다. 본인은 actor(login_id) 를 주면 link_table.con 에서 own_agent_ids 로 찾고,
+      self_agent_ids 를 주면 그것도 더한다. 둘 다 없으면 빼지 않는다. 처리 자체는 decide_card 가 막는다.
     - 메인 관리자: 이어진 대기는 범위 목록과 상관없이 모두 linked 에, 이어지지 않은 대기는 unlinked 에 둔다.
     - 이름, 연락처, 끝 네 자리, 사유는 담지 않는다. 사이트 응답에 있어도 넘기지 않는다."""
     out = client.admin_list()
     if out.status != OK:
         return Outcome(out.status, value={"linked": [], "unlinked": []}, reason=out.reason, attempts=out.attempts)
     keep = set(scope_agent_ids or ())
+    own = set()
+    if not is_main:
+        own = set(self_agent_ids or ())
+        con = getattr(link_table, "con", None)
+        if actor and con is not None:
+            own |= own_agent_ids(con, actor)
+        keep -= own
     linked, unlinked = [], []
     for e in out.value or []:
         if not isinstance(e, CardEntry) or e.request_status != "pending":
@@ -337,14 +397,13 @@ def preview_card(con, client: CardSiteClient, *, slug: str, path: str, actor: st
     links = _links(con, link_table)
     agent_id = links.agent_for(slug)
 
-    # 두 번째 잠금과 범위. decide_card 와 같다
-    ok, why = actor_allowed(con, actor, is_main, today=today)
+    # 두 번째 잠금. decide_card 와 같다
+    ok, why = _second_lock(con, actor, is_main, agent_id, scope_agent_ids, today)
     if not ok:
-        return Outcome(DENIED, reason=why.replace("처리하지 않았습니다", "보여 드리지 않습니다"))
-    if agent_id is None and not is_main:
-        return Outcome(DENIED, reason="설계사와 이어지지 않은 명함은 메인 관리자만 봅니다")
-    if not is_main and agent_id not in set(scope_agent_ids or ()):
-        return Outcome(DENIED, reason="범위 밖 설계사의 명함입니다")
+        why = why.replace("처리하지 않았습니다", "보여 드리지 않습니다").replace("메인 관리자만 처리합니다", "메인 관리자만 봅니다")
+        if why == OWN_CARD:
+            why = "본인의 명함 요청은 승인 화면에서 볼 수 없습니다. 메인 관리자가 처리합니다"
+        return Outcome(DENIED, reason=why)
     if not client.admin_configured:
         return client.pending_file(slug, path)                         # 보내지 않고 설정 안 됨과 상태 기록만 남긴다
 

@@ -73,7 +73,8 @@ def test_each_role_sees_only_its_menus(env):
         for g in menu.load()["groups"]:
             for it in g["items"]:
                 r = c.get(it["path"])
-                want = 200 if role in it["roles"] else 403
+                # requires 가 걸린 항목은 그 권한 플래그도 있어야 열린다. 이 시험의 관리자에게는 명함 승인 권한을 켜지 않았다
+                want = 200 if role in it["roles"] and (role == "main" or not it.get("requires")) else 403
                 assert r.status_code == want, (login_id, role, it["path"], r.status_code)
         html = c.get("/").text
         assert ("계약 엑셀" in html) == (role == "main")

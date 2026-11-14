@@ -1,10 +1,16 @@
-"""조직과 계정 묶음: 조직 계층, 조직장과 대리, 계정, 변경 기록."""
+"""조직과 계정 묶음: 조직 계층, 조직장과 대리, 계정, 변경 기록.
+
+조직장과 대리 화면에는 명함 승인 권한 묶음이 함께 있다. 메인 관리자가 조직장과 대리 가운데 골라 권한을 켜고 끈다.
+켜고 끄기는 app/org/card_grant.py 의 grant, revoke 만 부르고, 그 함수가 메인 관리자인지 한 번 더 보고 스스로 커밋한다.
+보내기 전에 고른 사람 수와 이름을 다시 보여 주는 확인 단계를 거친다.
+"""
 from datetime import date
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app import db
+from app.org import card_grant as cg
 from app.org import heads as hd
 from app.org import levels
 from app.org.sync import org_texts, termination_candidates
@@ -66,7 +72,43 @@ DONE = {"assign": "조직장을 지정했습니다.", "end": "조직장 지정�
         "deputy": "대리를 지정했습니다.", "deputy_end": "대리 지정을 끝냈습니다."}
 
 
-def _heads_page(request, ctx, con, err=None, msg=None, status_code=200):
+GRANT_FLASH = "grant_flash"
+GRANT_DO = {"card_grant": "켜기", "card_revoke": "끄기"}
+
+
+def _grant_rows(con) -> list:
+    """명함 승인 권한 표의 줄. 지금 조직장이거나 대리인 관리자 계정에, 켜져 있지만 효력이 없는 줄을 더한다.
+
+    효력 없음은 조직장이나 대리에서 빠졌거나 계정이 중지된 경우다. 그런 줄도 골라서 끌 수 있게 둔다."""
+    texts = org_texts(con)
+    rows = {}
+    for c in cg.candidates(con):
+        rows[c["login_id"]] = {"login_id": c["login_id"], "agent_id": c["agent_id"], "name": c["display_name"], "heads": c["heads"],
+                               "granted": c["granted"], "effective": c["granted"], "why": ""}
+    for g in cg.granted(con):
+        if g["login_id"] in rows:
+            rows[g["login_id"]]["effective"] = g["effective"]
+            continue
+        u = con.execute("SELECT status FROM user_account WHERE login_id=?", (g["login_id"],)).fetchone()
+        why = "계정 없음" if u is None else ("중지된 계정" if u["status"] != "active" else "조직장·대리에서 빠짐")
+        rows[g["login_id"]] = {"login_id": g["login_id"], "agent_id": g["agent_id"], "name": g["display_name"], "heads": [],
+                               "granted": True, "effective": g["effective"], "why": "" if g["effective"] else why}
+    codes = {}
+    ids = [r["agent_id"] for r in rows.values() if r["agent_id"] is not None]
+    if ids:
+        q, ids = _in(ids)
+        codes = {r["agent_id"]: r["internal_code"] for r in con.execute(f"SELECT agent_id, internal_code FROM agent WHERE agent_id IN ({q})", ids)}
+    out = []
+    for r in rows.values():
+        r["code"] = codes.get(r["agent_id"], "")
+        r["orgs"] = [{"text": texts.get(h["org_id"], h["org_name"]), "role": h["role"]} for h in r["heads"]]
+        r["depth"] = min((levels.depth(h["level"]) for h in r["heads"]), default=99)
+        out.append(r)
+    out.sort(key=lambda r: (not r["granted"], r["depth"], r["orgs"][0]["text"] if r["orgs"] else "", r["login_id"]))
+    return out
+
+
+def _heads_page(request, ctx, con, err=None, msg=None, status_code=200, grant_ask=None, grant_msg=None, grant_err=None):
     ym, today = ctx["ym"], date.today().isoformat()
     texts = org_texts(con)
     rows = _q(con, """SELECT m.id, m.org_id, m.role, m.effective_from, m.effective_to, m.source, a.internal_code code, a.name, o.level
@@ -85,20 +127,54 @@ def _heads_page(request, ctx, con, err=None, msg=None, status_code=200):
                for o in con.execute("SELECT org_id, name, level FROM org_unit WHERE active=1") if levels.head_role(o["level"])]
     choices.sort(key=lambda c: c["text"])
     vacant = [c for c in choices if c["org_id"] not in headed]
-    return page(request, ctx, "org_heads.html", rows=rows, deputies=deputies, choices=choices, vacant=vacant, err=err, msg=msg,
-                today=today, status_code=status_code)
+    grants = _grant_rows(con)
+    resp = page(request, ctx, "org_heads.html", rows=rows, deputies=deputies, choices=choices, vacant=vacant, err=err, msg=msg,
+                today=today, status_code=status_code, grants=grants, grant_on=sum(1 for g in grants if g["granted"]),
+                grant_ask=grant_ask, grant_msg=grant_msg, grant_err=grant_err)
+    resp.headers.update(NO_STORE)
+    return resp
 
 
 @router.get("/org/heads", response_class=HTMLResponse)
 def org_heads(request: Request, done: str = "", ctx: dict = Depends(guard), con=Depends(get_con)):
-    return _heads_page(request, ctx, con, msg=DONE.get(done))
+    return _heads_page(request, ctx, con, msg=DONE.get(done), grant_msg=request.session.pop(GRANT_FLASH, None))
+
+
+def _grant_action(request, ctx, con, action: str, login_ids: list, confirm: str):
+    """명함 승인 권한 켜기와 끄기. confirm 이 1 이 아니면 고른 사람을 다시 보여 주는 확인 단계만 그린다."""
+    want = list(dict.fromkeys(x.strip() for x in login_ids if x and x.strip()))
+    if not want:
+        return _heads_page(request, ctx, con, grant_err=f"권한을 {'켤' if action == 'card_grant' else '끌'} 관리자를 한 명 이상 골라 주세요.",
+                           status_code=400)
+    known = {r["login_id"]: r for r in _grant_rows(con)}
+    if any(x not in known for x in want):
+        return _heads_page(request, ctx, con, grant_err="목록에 없는 계정이 섞여 있습니다. 화면을 새로 고친 뒤 다시 골라 주세요.", status_code=400)
+    picked = [known[x] for x in want]
+    if confirm != "1":
+        return _heads_page(request, ctx, con, grant_ask={"action": action, "do": GRANT_DO[action], "people": picked})
+    try:
+        res = (cg.grant if action == "card_grant" else cg.revoke)(con, want, by=ctx["login_id"])
+    except cg.GrantError as e:
+        con.rollback()
+        return _heads_page(request, ctx, con, grant_err=str(e), status_code=403 if "메인 관리자만" in str(e) else 400)
+    n, same = len(res["changed"]), len(res["unchanged"])
+    text = f"{n}명의 명함 승인 권한을 {'켰' if action == 'card_grant' else '껐'}습니다."
+    if same:
+        text += f" 이미 {'켜져' if action == 'card_grant' else '꺼져'} 있던 {same}명은 그대로 두었습니다."
+    request.session[GRANT_FLASH] = text
+    return RedirectResponse("/org/heads#card-grant", status_code=303)
 
 
 @router.post("/org/heads", response_class=HTMLResponse)
 def org_heads_action(request: Request, action: str = Form(...), org_id: int | None = Form(None), code: str = Form(""), from_ym: str = Form(""),
                      to_ym: str = Form(""), date_from: str = Form(""), date_to: str = Form(""), reason: str = Form(""),
-                     item_id: int | None = Form(None), ctx: dict = Depends(guard), con=Depends(get_con)):
+                     item_id: int | None = Form(None), login_id: list[str] = Form([]), confirm: str = Form(""),
+                     ctx: dict = Depends(guard), con=Depends(get_con)):
     by = ctx["login_id"]
+    if action in GRANT_DO:
+        if ctx["role"] != "main":                    # guard 가 이미 막는다. 메뉴가 바뀌어도 이 일은 메인 관리자만 한다
+            raise HTTPException(403, "명함 승인 권한은 메인 관리자만 켜고 끌 수 있습니다.")
+        return _grant_action(request, ctx, con, action, login_id, confirm)
     try:
         if action in ("assign", "deputy"):
             a = con.execute("SELECT agent_id FROM agent WHERE internal_code=?", (code.strip().upper(),)).fetchone()

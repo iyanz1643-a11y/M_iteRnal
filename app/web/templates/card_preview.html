@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% from "_card.html" import who %}
+{% block title %}명함 신청본 보기{% endblock %}
+{% block body %}
+<p class="eyebrow">영업·제안 · 명함 승인</p>
+<h1 class="display">신청본 보기</h1>
+<p class="lede">설계사가 신청한 명함을 공개 전에 앱에서 봅니다. 링크와 스크립트는 막혀 있고, 가져온 신청본은 앱에 저장하지 않습니다.</p>
+<p style="margin:16px 0 0"><a href="{{ path }}">‹ 명함 승인 목록으로</a></p>
+
+{% if notice %}
+<div class="card" style="margin-top:32px" role="status">
+  <div class="k"><span class="dot {{ 'warn' if notice.kind == 'warn' else ('off' if notice.state == 'not_configured' else 'bad') }}"></span>신청본 미리보기</div>
+  <div class="mid word wrap" style="margin-top:10px">{{ '아직 볼 수 없습니다' if notice.state == 'not_configured' else '신청본을 보여 드리지 못했습니다' }}</div>
+  <p class="cap">{{ notice.text }}</p>
+  {% if notice.detail %}<p class="cap flash-detail">{{ notice.detail }}</p>{% endif %}
+  <div class="actions" style="margin-top:16px"><a class="pill quiet big-pill" href="{{ path }}">목록으로</a>
+    {% if notice.state in ('failed', 'not_found') %}<a class="pill big-pill" href="?preview={{ slug }}">다시 불러오기</a>{% endif %}</div>
+</div>
+{% else %}
+<div class="preview-grid" style="margin-top:32px">
+  <section class="card preview-side">
+    <div class="k"><span class="dot warn"></span>승인 대기</div>
+    <div style="margin-top:10px">{{ who(row) }}</div>
+    <div class="req-meta"><span>명함 주소 {{ row.slug }}</span><span>{{ at_label }} 명함 사이트에서 가져옴</span></div>
+    <ul class="notes">
+      <li>지금 보이는 것은 아직 공개되지 않은 신청본입니다.</li>
+      <li>미리보기 안의 링크는 눌리지 않습니다. 링크에 마우스를 올리면 주소가 보입니다.</li>
+      <li>본 일은 변경 기록에 남습니다. 신청본 내용은 남기지 않습니다.</li>
+      {% if not write_on %}<li>명함 사이트 쓰기가 꺼져 있어 승인과 반려는 명함 사이트에 보내지 않습니다.</li>{% endif %}
+    </ul>
+    {% if row.mine %}
+    <div class="alert" style="margin:8px 0 0">본인의 명함은 메인 관리자가 처리합니다.</div>
+    <div class="actions" style="margin-top:16px"><a class="pill quiet big-pill" href="{{ path }}">목록으로</a></div>
+    {% else %}
+    <div class="actions preview-acts">
+      <a class="pill big-pill" href="{{ path }}?do=approve&amp;slug={{ row.slug }}#confirm">승인하기</a>
+      <a class="pill quiet big-pill" href="{{ path }}?do=reject&amp;slug={{ row.slug }}#confirm">반려하기</a>
+    </div>
+    <p class="cap">승인과 반려는 다음 화면에서 한 번 더 확인한 뒤 보냅니다.</p>
+    {% endif %}
+  </section>
+  <section class="card-frame-wrap" aria-label="명함 신청본">{{ frame }}</section>
+</div>
+{% endif %}
+{% endblock %}

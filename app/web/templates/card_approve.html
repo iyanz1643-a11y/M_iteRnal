@@ -1,18 +1,11 @@
 {% extends "base.html" %}
-{% macro who(r) %}{% if r.agent_id %}<div class="req-who"><span class="strong">{{ r.name or '이름 없음' }}</span> <span class="req-code">{{ r.code or '' }}</span>{% if r.left %} <span class="chip warn">퇴사</span>{% endif %}</div>
-<div class="req-org">{{ r.org or '소속 없음' }}</div>{% else %}<div class="req-who"><span class="strong">이어진 설계사 없음</span></div><div class="req-org">명함 주소 {{ r.slug }}</div>{% endif %}{% endmacro %}
-{% macro meta(r) %}<div class="req-meta">
-  <span>요청 {{ r.requested }}</span>
-  {% if r.replaces %}<span class="chip warn">공개 중인 명함을 바꿈</span>{% else %}<span class="chip">새 명함</span>{% endif %}
-  {% if r.conflict %}<span class="chip bad">공개본과 신청 정보가 다름</span>{% endif %}
-  {% if r.live_url %}<a href="{{ r.live_url }}" target="_blank" rel="noopener noreferrer">지금 공개본 보기</a>{% else %}<span class="cap" style="margin:0">공개본 없음</span>{% endif %}
-</div>{% endmacro %}
-{% macro acts(r) %}<div class="req-acts"><a class="pill" href="?do=approve&amp;slug={{ r.slug }}">승인</a><a class="pill quiet" href="?do=reject&amp;slug={{ r.slug }}">반려</a></div>{% endmacro %}
+{% from "_card.html" import who, meta %}
+{% macro acts(r) %}<div class="req-acts"><a class="pill quiet" href="?preview={{ r.slug }}">신청본 보기</a>{% if r.mine %}<span class="chip" title="본인 명함은 메인 관리자가 처리합니다">본인 명함 · 메인 관리자 처리</span>{% else %}<a class="pill" href="?do=approve&amp;slug={{ r.slug }}#confirm">승인</a><a class="pill quiet" href="?do=reject&amp;slug={{ r.slug }}#confirm">반려</a>{% endif %}</div>{% endmacro %}
 
 {% block body %}
 <p class="eyebrow">영업·제안 · {{ '전체' if is_main else '내 범위' }}</p>
 <h1 class="display">명함 승인</h1>
-<p class="lede">설계사가 신청한 모바일 명함 링크를 보고 승인하거나 반려합니다. {{ '설계사와 이어지지 않은 요청도 이 화면에서 잇고 처리합니다.' if is_main else '범위 안 설계사의 요청만 보입니다.' }}</p>
+<p class="lede">설계사가 신청한 모바일 명함 링크를 보고 승인하거나 반려합니다. {{ '설계사와 이어지지 않은 요청도 이 화면에서 잇고 처리합니다.' if is_main else '범위 안 설계사의 요청만 보입니다. 본인의 명함은 메인 관리자가 처리합니다.' }}</p>
 
 {% if flash %}<div class="{{ 'okmsg' if flash.kind == 'ok' else 'alert' }}{{ ' bad' if flash.kind == 'bad' }}" role="status" style="margin-top:24px">{{ flash.text }}{% if flash.detail %}<div class="flash-detail">{{ flash.detail }}</div>{% endif %}</div>{% endif %}
 
@@ -46,7 +39,7 @@
     <li>승인하면 이 명함 링크가 누구에게나 공개됩니다.</li>
     {% if confirm.replaces %}<li>지금 공개 중인 명함은 새 신청본으로 바뀝니다.</li>{% endif %}
     {% if confirm.conflict %}<li>명함 사이트가 공개본과 신청 정보가 다르다고 표시했습니다. 같은 분의 신청인지 먼저 확인해 주세요.</li>{% endif %}
-    <li>신청본은 명함 사이트 관리 화면에서 미리 볼 수 있습니다.</li>
+    <li>승인하기 전에 <a href="?preview={{ confirm.slug }}">신청본 보기</a>로 내용을 확인해 주세요.</li>
     {% if not write_on %}<li>지금은 쓰기가 꺼져 있어 눌러도 명함 사이트에 보내지 않습니다.</li>{% endif %}
   </ul>
   <form method="post" action="{{ path }}" class="actions"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
@@ -56,6 +49,7 @@
   <div class="k">반려</div>
   <h2 class="confirm-title">이 명함 신청을 반려할까요?</h2>
   {{ who(confirm) }}{{ meta(confirm) }}
+  <p class="cap" style="margin:12px 0 0"><a href="?preview={{ confirm.slug }}">신청본 보기</a>로 무엇을 고쳐야 하는지 먼저 확인할 수 있습니다.</p>
   <form method="post" action="{{ path }}" class="wide" style="margin-top:16px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
     <input type="hidden" name="action" value="reject"><input type="hidden" name="slug" value="{{ confirm.slug }}">
     <label class="f">반려 사유 · {{ reason_max }}자까지<textarea name="reason" maxlength="{{ reason_max }}" rows="3" placeholder="예: 사진이 흐립니다. 다시 올려 주세요."></textarea></label>
