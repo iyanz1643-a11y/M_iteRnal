@@ -93,7 +93,7 @@ tr:last-child td{border-bottom:none}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;padding-right:24px;padding-left:8px}
 td.num:last-child,th.num:last-child{padding-right:0}
 td.strong{font-weight:600}
-td.wrap{white-space:normal;min-width:200px}
+td.cell-wrap{white-space:normal;min-width:200px}
 .indent{display:inline-block}
 
 /* ---------- 폼 */

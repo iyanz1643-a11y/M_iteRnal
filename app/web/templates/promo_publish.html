@@ -10,8 +10,8 @@
 <p class="cap" style="margin:-8px 0 12px">{{ doc.file_name }} · 설계사 몫 {{ lines|length }}줄 가운데 {{ waiting }}줄이 남았습니다</p>
 <div class="card tablecard"><table>
 <tr><th>보험사</th><th>분류</th><th class="hide-sm">기간</th><th class="hide-sm">시상내용</th><th>상태</th><th></th></tr>
-{% for ln in lines %}<tr><td class="strong">{{ ln.insurer_name }}</td><td class="wrap">{{ ln.category_raw }}</td><td class="hide-sm">{{ ln.period_raw }}</td>
-<td class="wrap hide-sm">{{ ln.reward_raw or '원문 확인 필요' }}</td>
+{% for ln in lines %}<tr><td class="strong">{{ ln.insurer_name }}</td><td class="cell-wrap">{{ ln.category_raw }}</td><td class="hide-sm">{{ ln.period_raw }}</td>
+<td class="cell-wrap hide-sm">{{ ln.reward_raw or '원문 확인 필요' }}</td>
 <td>{% if ln.promo_id %}<span class="chip good">게시됨</span>{% elif ln.direct %}<span class="chip blue">바로 게시 가능</span>{% else %}<span class="chip warn">입력 필요</span>{% endif %}</td>
 <td>{% if ln.promo_id %}{% elif ln.direct %}
   <form method="post" action="/promo/publish" style="display:flex;gap:8px;align-items:center"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="action" value="publish_line"><input type="hidden" name="line_id" value="{{ ln.line_id }}">

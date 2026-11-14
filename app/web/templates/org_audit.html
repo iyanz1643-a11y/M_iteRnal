@@ -3,6 +3,6 @@
 <h1 class="display">변경 기록</h1>
 <p class="lede">최근 200건입니다. 로그인, 로그인 실패, 권한 밖 접근 시도, 계정 처리가 남습니다.</p>
 <div class="card tablecard" style="margin-top:32px"><table><tr><th>시각</th><th>누가</th><th>무엇을</th><th>대상</th></tr>
-{% for r in rows %}<tr><td>{{ r.at }}</td><td class="strong">{{ r.actor }}</td><td>{{ r.action }}</td><td class="wrap">{{ r.target or '' }}</td></tr>{% endfor %}
+{% for r in rows %}<tr><td>{{ r.at }}</td><td class="strong">{{ r.actor }}</td><td>{{ r.action }}</td><td class="cell-wrap">{{ r.target or '' }}</td></tr>{% endfor %}
 </table></div>
 {% endblock %}
