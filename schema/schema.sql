@@ -785,3 +785,61 @@ CREATE TABLE org_award_result (
     confirmed_at    TEXT NOT NULL,
     UNIQUE (division_id, period_ym, agent_id)
 );
+
+-- ---------------------------------------------------------------------------
+-- 실제 계약현황(이터널, 56열) 적재에 필요한 칸. 기존 CREATE 문은 그대로 두고 덧붙이기만 한다.
+-- 매핑은 config/mapping/eternal_contract.yaml, 적재기는 app/loader/eternal_contract.py 다.
+-- ---------------------------------------------------------------------------
+-- 원수사: 적재기가 마스터에 없는 이름을 만나 임시로 만든 줄은 origin='loader' 로 표시한다. 확인 뒤 'master' 로 바꾼다.
+ALTER TABLE insurer ADD COLUMN origin TEXT NOT NULL DEFAULT 'master';
+
+-- 조직 경로. 센터와 팀은 이름이 겹치므로 이름 하나가 아니라 위에서부터의 경로로 식별한다.
+ALTER TABLE contract ADD COLUMN org_head_office TEXT;      -- 본사
+ALTER TABLE contract ADD COLUMN org_hq TEXT;               -- 본부
+ALTER TABLE contract ADD COLUMN org_branch TEXT;           -- 지점
+ALTER TABLE contract ADD COLUMN org_center TEXT;           -- 센터. 빈 행이 있다
+ALTER TABLE contract ADD COLUMN org_team TEXT;             -- 팀. 센터가 있을 때만 있다
+ALTER TABLE contract ADD COLUMN org_path TEXT;             -- 빈 칸을 뺀 경로를 ' > ' 로 이은 글. 묶기와 표시용
+-- 계약의 분류
+ALTER TABLE contract ADD COLUMN sector TEXT;               -- 계약종류. 생보 life / 손보 nonlife
+ALTER TABLE contract ADD COLUMN product_type_raw TEXT;     -- 상품종류 원문
+ALTER TABLE contract ADD COLUMN product_category TEXT;     -- 분류표로 옮긴 일곱 구분 코드. 표에 없으면 NULL
+ALTER TABLE contract ADD COLUMN insurer_product_code TEXT; -- 상품코드
+ALTER TABLE contract ADD COLUMN ca_code TEXT;              -- CA코드
+ALTER TABLE contract ADD COLUMN payment_term_name TEXT;    -- 납입기간명 원문
+ALTER TABLE contract ADD COLUMN coverage_start TEXT;       -- 시작일자
+ALTER TABLE contract ADD COLUMN coverage_end TEXT;         -- 종료일자
+-- 상태와 수금
+ALTER TABLE contract ADD COLUMN status_raw TEXT;           -- 계약상태 원문
+ALTER TABLE contract ADD COLUMN status_changed_date TEXT;  -- 최종상태변경일 원값. 다음 파일과 비교해 이력을 쌓는다
+ALTER TABLE contract ADD COLUMN paid_installments INTEGER; -- 납입회차
+ALTER TABLE contract ADD COLUMN last_paid_ym TEXT;         -- 최종납입년월 YYYYMM
+ALTER TABLE contract ADD COLUMN last_collected_date TEXT;  -- 최종수금일
+ALTER TABLE contract ADD COLUMN receipt_date TEXT;         -- 영수일자
+ALTER TABLE contract ADD COLUMN auto_debit_day TEXT;       -- 자동이체일 원문
+ALTER TABLE contract ADD COLUMN collected_premium NUMERIC; -- 수금보험료
+-- 사람. 모집과 수금이 다를 수 있다. 계약자와 피보험자 이름은 D-05 제안대로 저장하고 화면 목록에서 가린다
+ALTER TABLE contract ADD COLUMN collector_code TEXT;       -- 수금사원번호
+ALTER TABLE contract ADD COLUMN collector_agent_id INTEGER REFERENCES agent(agent_id);
+ALTER TABLE contract ADD COLUMN insured_name TEXT;         -- 피보험자
+-- 성적. 1차년에서 4차년 성적은 뜻이 확인될 때까지 보관만 하고 계산에 쓰지 않는다 (D-03)
+ALTER TABLE contract ADD COLUMN perf_y1 NUMERIC;
+ALTER TABLE contract ADD COLUMN perf_y2 NUMERIC;
+ALTER TABLE contract ADD COLUMN perf_y3 NUMERIC;
+ALTER TABLE contract ADD COLUMN perf_y4 NUMERIC;
+ALTER TABLE contract ADD COLUMN manual_perf NUMERIC;       -- 수기성적. 보관만 한다
+-- 준수. Y 는 1, N 은 0, 빈 칸은 NULL
+ALTER TABLE contract ADD COLUMN self_family INTEGER;       -- 본인·가족계약
+ALTER TABLE contract ADD COLUMN external_transfer INTEGER; -- 외부이관여부
+ALTER TABLE contract ADD COLUMN excel_registered INTEGER;  -- 엑셀등록여부
+ALTER TABLE contract ADD COLUMN confirm_personal INTEGER;  -- 확인서징구(개인)
+ALTER TABLE contract ADD COLUMN confirm_compare INTEGER;   -- 확인서징구(비교)
+ALTER TABLE contract ADD COLUMN confirm_fcpa INTEGER;      -- 확인서징구(금소법)
+ALTER TABLE contract ADD COLUMN confirm_whole_life INTEGER; -- 확인서징구(종신)
+ALTER TABLE contract ADD COLUMN mobile_application TEXT;   -- 모바일청약 원문
+-- 적재 추적
+ALTER TABLE contract ADD COLUMN last_batch_id INTEGER REFERENCES import_batch(batch_id); -- 마지막으로 이 줄을 실어 온 배치
+ALTER TABLE contract ADD COLUMN source_row_no INTEGER;     -- 그 배치의 행 번호
+
+CREATE INDEX idx_contract_org ON contract(org_hq, org_branch, org_center, org_team);
+CREATE INDEX idx_contract_last_batch ON contract(last_batch_id);

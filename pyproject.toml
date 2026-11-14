@@ -1,0 +1,20 @@
+# 코드 점검 설정. 실행: ruff check .
+# 처음에는 실제 오류를 잡는 규칙만 켠다. 줄 길이와 lambda 대입은 지금 코드 모양이라 끈다.
+
+[tool.ruff]
+target-version = "py311"
+line-length = 200
+extend-exclude = ["data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = [
+    "E501",   # 줄 길이. 표 같은 SQL 과 한 줄 조건이 많다
+    "E731",   # lambda 대입. 화면 함수 안의 짧은 도우미에 쓴다
+    "E741",   # l, O 같은 변수 이름
+    "B008",   # 기본값 안의 함수 호출. FastAPI 의 Depends, Form 이 이 꼴이다
+    "B905",   # zip 의 strict
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]

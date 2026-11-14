@@ -1,0 +1,38 @@
+# 올릴 때마다 자동 시험, 코드 점검, 컨텍스트 점검을 돌린다. docs/10 6.4.
+# 배포 단계는 없다. 운영 배포는 대표님 승인 뒤에 따로 한다.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: 설치
+        run: pip install -r requirements.txt
+
+      - name: 코드 점검
+        run: ruff check .
+
+      - name: 자동 시험
+        run: python -m pytest tests -q
+
+      - name: 컨텍스트 점검
+        run: python scripts/check_context.py

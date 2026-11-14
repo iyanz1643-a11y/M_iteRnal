@@ -8,7 +8,7 @@
 
 {% if form is not none %}
 <h2 class="sec">{{ '부문 고치기' if form.division_id else '부문 만들기' }}</h2>
-<form class="wide" method="post" action="/promo/org-awards">
+<form class="wide" method="post" action="/promo/org-awards"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
 <input type="hidden" name="action" value="save"><input type="hidden" name="division_id" value="{{ form.division_id }}">
 <section class="card"><div class="frow">
   <label class="f">부문 이름<input class="sm" type="text" name="name" value="{{ form.name }}" placeholder="예: 인정업적 부문" required></label>
@@ -42,7 +42,7 @@
       <span class="chip">상위 {{ d.top_n }}명</span>{% if d.confirmed %}<span class="chip good">확정</span>{% else %}<span class="chip warn">집계 중</span>{% endif %}
       {% if d.status != 'active' %}<span class="chip bad">닫힘</span>{% endif %}</div>
       {% if d.note %}<div class="cap">{{ d.note }}</div>{% endif %}</div>
-    {% if d.can_manage %}<form method="post" action="/promo/org-awards" class="actions"><input type="hidden" name="division_id" value="{{ d.division_id }}">
+    {% if d.can_manage %}<form method="post" action="/promo/org-awards" class="actions"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="division_id" value="{{ d.division_id }}">
       <a class="ghost" href="/promo/org-awards?edit={{ d.division_id }}" style="display:inline-block;border-radius:999px;background:var(--bg);color:var(--ink);font-size:14px;font-weight:600;padding:7px 14px">고치기</a>
       {% if d.status == 'active' %}<button class="ghost" name="action" value="inactive">닫기</button>{% else %}<button class="ghost" name="action" value="active">다시 열기</button>{% endif %}
       {% if ctx.role == 'main' and d.status == 'active' and d.total %}<button class="ghost" name="action" value="confirm">{{ '다시 확정' if d.confirmed else '수상자 확정' }}</button>{% endif %}</form>{% endif %}

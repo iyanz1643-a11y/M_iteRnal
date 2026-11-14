@@ -75,6 +75,61 @@ def to_float(v):
     return None if _blank(v) else float(str(v).replace(",", ""))
 
 
+def none_if_blank(v):
+    """빈 글자와 '-' 는 None. 글자는 앞뒤 공백을 지운다."""
+    if _blank(v):
+        return None
+    return v.strip() if isinstance(v, str) else v
+
+
+def yes_no(v):
+    """Y/N → 1/0. 빈 값은 None. 다른 값은 오류."""
+    if _blank(v):
+        return None
+    t = as_text(v).strip().upper()
+    if t in ("Y", "YES", "예", "O"):
+        return 1
+    if t in ("N", "NO", "아니오", "X"):
+        return 0
+    raise ValueError(f"Y 또는 N 이 아님 (글자 {len(t)}자)")
+
+
+def parse_ym(v):
+    """'202602' / 202602 / '2026-02' / '2026.02' / 날짜 → 'YYYYMM'. 빈 값은 None."""
+    if _blank(v):
+        return None
+    if isinstance(v, (datetime, date)):
+        return v.strftime("%Y%m")
+    t = re.sub(r"[\s\-./]", "", as_text(v))
+    if len(t) == 8 and t.isdigit():
+        t = t[:6]
+    if len(t) != 6 or not t.isdigit() or not 1 <= int(t[4:]) <= 12:
+        raise ValueError("년월 형식 인식 불가 (YYYYMM 이 아님)")
+    return t
+
+
+def digits_int(v):
+    """'20' / '20년' / '20년납' → 20. 숫자가 없으면 None ('전기납' 같은 값)."""
+    if _blank(v):
+        return None
+    if isinstance(v, (int, float)):
+        return int(v)
+    m = re.search(r"\d+", str(v).replace(",", ""))
+    return int(m.group()) if m else None
+
+
+MIDDLE_DOTS = "\u00b7\u30fb\u318d\u2022\u2027\u22c5\uff65"
+
+
+def normalize_header(v) -> str:
+    """머리글 비교용: 유니코드 NFC, 가운뎃점 변형을 '·' 하나로, 공백 정리."""
+    import unicodedata
+    t = unicodedata.normalize("NFC", as_text(v)).strip()
+    for ch in MIDDLE_DOTS:
+        t = t.replace(ch, "\u00b7")
+    return re.sub(r"\s+", " ", t)
+
+
 SIMPLE = {
     "strip": lambda v: v.strip() if isinstance(v, str) else v,
     "upper": lambda v: v.upper() if isinstance(v, str) else v,
@@ -84,6 +139,10 @@ SIMPLE = {
     "parse_money": parse_money,
     "parse_percent": parse_percent,
     "parse_date": parse_date,
+    "none_if_blank": none_if_blank,
+    "yes_no": yes_no,
+    "parse_ym": parse_ym,
+    "digits_int": digits_int,
 }
 
 

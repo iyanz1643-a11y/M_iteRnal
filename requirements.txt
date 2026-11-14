@@ -11,3 +11,4 @@ itsdangerous
 python-multipart
 httpx
 pytest
+ruff>=0.6

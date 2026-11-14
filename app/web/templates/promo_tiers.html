@@ -7,7 +7,7 @@
 {% else %}주차, 연계, 여행 시상처럼 금액이 원문의 표나 그림에만 있는 프로모션을 등록합니다.{% endif %}</p>
 {% if err %}<div class="alert" style="margin-top:20px">{{ err }}</div>{% endif %}
 {% if d.origin %}<div class="origin" style="margin-top:20px"><b>원문</b> · {{ d.insurer_name }} · {{ d.origin }}</div>{% endif %}
-<form class="wide" method="post" action="/promo/tiers" style="margin-top:24px">
+<form class="wide" method="post" action="/promo/tiers" style="margin-top:24px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
 <input type="hidden" name="source_line_id" value="{{ d.source_line_id }}"><input type="hidden" name="promo_id" value="{{ d.promo_id }}">
 <section class="card"><div class="k" style="margin-bottom:14px">무엇을</div>
   <div class="frow">

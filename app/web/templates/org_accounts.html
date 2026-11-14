@@ -8,7 +8,7 @@
 <td>{% if r.status != 'active' %}<span class="chip bad">중지</span>{% elif r.locked_until and r.locked_until > now %}<span class="chip warn">잠김</span>{% else %}<span class="chip good">사용</span>{% endif %}
 {% if r.must_change_password %}<span class="chip">초기 비밀번호</span>{% endif %}</td>
 <td class="hide-sm">{{ r.last_login_at or '-' }}</td>
-<td><form method="post" action="/org/accounts" style="display:inline"><input type="hidden" name="user_id" value="{{ r.user_id }}">
+<td><form method="post" action="/org/accounts" style="display:inline"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="user_id" value="{{ r.user_id }}">
 {% if r.locked_until and r.locked_until > now %}<button class="ghost" name="action" value="unlock">잠금 해제</button>{% endif %}
 {% if r.status == 'active' and r.user_id != ctx.user_id %}<button class="ghost" name="action" value="suspend">중지</button>{% elif r.status != 'active' %}<button class="ghost" name="action" value="activate">다시 사용</button>{% endif %}
 </form></td></tr>{% endfor %}

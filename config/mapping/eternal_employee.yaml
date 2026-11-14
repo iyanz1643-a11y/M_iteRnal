@@ -1,0 +1,58 @@
+# 이터널 사원현황 엑셀 → 사람 행 (파서만. DB 적재는 auth-org 가 한다)
+# 열의 묶음과 처리는 docs/09_기능기획서.md 8.3 을 따른다.
+#
+# - 이 양식은 열이 더 있을 수 있어 순서까지 맞추지 않는다. required 의 열이 모두 있어야 읽는다.
+# - drop_keywords 가 들어간 머리글은 읽자마자 버린다. 값은 꺼내지도 않는다.
+# - columns 에 없는 열은 돌려주지 않고, 이름만 unknown_columns 로 알려 준다.
+source: eternal
+data_type: employee
+versions:
+  - version: 1
+    effective_from: "202601"
+    file:
+      sheet: null          # 사원번호와 사원명이 있는 첫 시트
+      header_row: null     # 앞 10행에서 찾는다
+    drop_keywords: ["주민", "생년월일", "음양", "4대보험", "보험업계고유번호", "계좌", "소득", "이행보증", "예치금"]
+    # 읽기는 하지만 돌려주지 않는 열. 사람 정보가 아니고 이번 범위가 아니라서다.
+    ignore: ["NO", "메뉴그룹", "업무구분", "수당직급", "위촉서류"]
+    columns:
+      "사원번호":     employee_no
+      "사원명":       name
+      "총괄":         org_general
+      "본부":         org_hq
+      "지점":         org_branch
+      "직할지점":     org_direct_branch
+      "팀":           org_team
+      "직위구분":     position
+      "입사일자":     hire_date
+      "퇴사일자":     termination_date
+      "생보자격구분": life_status
+      "생보등록사":   life_insurer
+      "생보등록일":   life_registered
+      "생보말소일":   life_deregistered
+      "손보자격구분": nonlife_status
+      "손보등록사":   nonlife_insurer
+      "손보등록일":   nonlife_registered
+      "손보말소일":   nonlife_deregistered
+    transforms:
+      employee_no: [as_text, strip, upper, none_if_blank]
+      name: [as_text, none_if_blank]
+      org_general: [as_text, none_if_blank]
+      org_hq: [as_text, none_if_blank]
+      org_branch: [as_text, none_if_blank]
+      org_direct_branch: [as_text, none_if_blank]
+      org_team: [as_text, none_if_blank]
+      position: [as_text, none_if_blank]
+      hire_date: [parse_date]
+      termination_date: [parse_date]
+      life_status: [as_text, none_if_blank]
+      life_insurer: [as_text, none_if_blank]
+      life_registered: [parse_date]
+      life_deregistered: [parse_date]
+      nonlife_status: [as_text, none_if_blank]
+      nonlife_insurer: [as_text, none_if_blank]
+      nonlife_registered: [parse_date]
+      nonlife_deregistered: [parse_date]
+    required: [employee_no, name]
+    # 조직 경로의 순서. 직할지점이 지점 아래 계층인지 지점을 대신하는지는 D-01 에서 정한다. 지금은 원문 그대로 순서만 둔다.
+    org_levels: [org_general, org_hq, org_branch, org_direct_branch, org_team]

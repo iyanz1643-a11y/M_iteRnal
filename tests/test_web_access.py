@@ -1,6 +1,7 @@
 """역할별 메뉴와 조직 범위가 서버에서 강제되는지 확인한다."""
 import os
 import pathlib
+import re
 import tempfile
 
 import pytest
@@ -10,6 +11,15 @@ from app import db, masters
 from app.web import auth, menu
 
 PW = "test-pass-1234"
+TOKEN = re.compile(r'name="csrf_token" value="([^"]+)"')
+
+
+class Client(TestClient):
+    """폼을 보낼 때 화면의 숨은 CSRF 토큰을 받아 함께 보낸다."""
+    def post(self, url, data=None, **kw):
+        if data is not None and "csrf_token" not in data:
+            data = {**data, "csrf_token": TOKEN.search(self.get("/login").text).group(1)}
+        return super().post(url, data=data, **kw)
 
 
 @pytest.fixture(scope="module")
@@ -25,7 +35,7 @@ def env():
 
 
 def client_for(env, login_id):
-    c = TestClient(env["app"], follow_redirects=False)
+    c = Client(env["app"], follow_redirects=False)
     r = c.post("/login", data={"login_id": login_id, "password": PW})
     assert r.status_code == 303, r.text
     return c
@@ -50,7 +60,7 @@ def test_menu_file_is_consistent():
 
 
 def test_login_required_and_wrong_password(env):
-    c = TestClient(env["app"], follow_redirects=False)
+    c = Client(env["app"], follow_redirects=False)
     assert c.get("/").status_code == 303 and c.get("/").headers["location"] == "/login"
     assert c.post("/login", data={"login_id": "admin", "password": "nope"}).status_code == 401
     assert c.post("/login", data={"login_id": "nobody", "password": PW}).status_code == 401
@@ -102,7 +112,7 @@ def test_manager_scope_is_own_org_and_below(env):
 def test_lockout_and_suspend(env):
     con = env["con"]
     _, agent = ids(env)
-    c = TestClient(env["app"], follow_redirects=False)
+    c = Client(env["app"], follow_redirects=False)
     for _ in range(auth.MAX_FAIL):
         assert c.post("/login", data={"login_id": agent, "password": "wrong"}).status_code == 401
     r = c.post("/login", data={"login_id": agent, "password": PW})
@@ -124,7 +134,7 @@ def test_password_change(env):
     c = client_for(env, agent)
     assert "서로 다릅니다" in c.post("/me", data={"old": PW, "new": "new-pass-5678", "new2": "x"}).text
     assert "바꿨습니다" in c.post("/me", data={"old": PW, "new": "new-pass-5678", "new2": "new-pass-5678"}).text
-    c2 = TestClient(env["app"], follow_redirects=False)
+    c2 = Client(env["app"], follow_redirects=False)
     assert c2.post("/login", data={"login_id": agent, "password": PW}).status_code == 401
     assert c2.post("/login", data={"login_id": agent, "password": "new-pass-5678"}).status_code == 303
 
@@ -171,3 +181,41 @@ def test_promotion_edit_screen(env):
     assert p["name"] == "고친 것" and p["status"] == "published" and p["tiers"][0]["min_value"] == 70000 and p["tiers"][0]["reward_kind"] == "fixed"
     assert client_for(env, manager).get(f"/promo/tiers?edit={pid}").status_code == 403
     assert admin.get("/promo/tiers?edit=99999").status_code == 404
+
+
+def test_post_without_csrf_token_is_refused(env):
+    """토큰이 없거나 틀린 POST 는 403 이고 아무것도 바꾸지 않는다. 로그인 폼도 같다."""
+    con = env["con"]
+    raw = TestClient(env["app"], follow_redirects=False)
+    assert raw.post("/login", data={"login_id": "admin", "password": PW}).status_code == 403          # 폼을 받지 않은 세션
+    assert raw.post("/login", data={"login_id": "admin", "password": PW, "csrf_token": "x"}).status_code == 403
+    before = TOKEN.search(raw.get("/login").text).group(1)
+    assert raw.post("/login", data={"login_id": "admin", "password": PW, "csrf_token": before}).status_code == 303
+    after = TOKEN.search(raw.get("/login").text).group(1)
+    assert after != before                                                                           # 로그인하면 토큰을 새로 만든다
+    assert raw.post("/login", data={"login_id": "admin", "password": PW, "csrf_token": before}).status_code == 403
+    uid = con.execute("SELECT user_id FROM user_account WHERE is_main_admin=0 ORDER BY user_id DESC LIMIT 1").fetchone()[0]
+    for path, data in (("/org/accounts", {"user_id": uid, "action": "suspend"}), ("/me", {"old": PW, "new": "x-new-pass-1", "new2": "x-new-pass-1"}),
+                       ("/promo/publish", {"action": "delete", "promo_id": 1}), ("/promo/tiers", {"name": "x"}), ("/promo/org-awards", {"action": "save"})):
+        assert raw.post(path, data=data).status_code == 403, path
+        assert raw.post(path, data={**data, "csrf_token": "wrong"}).status_code == 403, path
+    assert con.execute("SELECT status FROM user_account WHERE user_id=?", (uid,)).fetchone()[0] == "active"
+    assert raw.post("/org/accounts", data={"user_id": uid, "action": "unlock", "csrf_token": after}).status_code == 303
+    assert raw.post("/org/accounts", data={"user_id": uid, "action": "unlock"}, headers={"X-CSRF-Token": after}).status_code == 303
+
+
+def test_every_screen_goes_through_guard(env):
+    """로그인과 나가기를 뺀 모든 주소가 guard 를 거친다. 라우터를 나눠도 빠지는 화면이 없어야 한다."""
+    from fastapi.routing import APIRoute
+
+    from app.web.deps import guard
+
+    def deps_of(dep):
+        for d in dep.dependencies:
+            yield d.call
+            yield from deps_of(d)
+    routes = [r for r in env["app"].routes if isinstance(r, APIRoute)]
+    assert routes[-1].path == "/{rest:path}"                                                         # 기획 화면 처리는 마지막
+    for r in routes:
+        if r.path not in ("/login", "/logout"):
+            assert guard in set(deps_of(r.dependant)), r.path

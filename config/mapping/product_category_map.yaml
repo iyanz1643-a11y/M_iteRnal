@@ -1,0 +1,36 @@
+# 초안. 대표님 확인 전
+#
+# D-04 상품종류 분류표. 계약현황의 상품종류 19개를 앱의 일곱 구분으로 옮긴다.
+# 구분 코드: whole_life 종신, health 건강, savings 저축, annuity 연금, property 재물, auto 자동차, general 일반
+#
+# - 총괄의 제안을 그대로 옮겼다. 확정은 대표님 확인 뒤다.
+# - confidence: low 인 줄은 확신이 낮다. 확인 받을 때 이 줄부터 여쭙는다.
+# - sector 는 그 상품종류가 나오는 계약종류다. 파일의 계약종류와 다르면 적재는 하고 경고를 남긴다.
+# - 표에 없는 상품종류가 오면 적재는 하고 구분을 비워 두며 경고를 남긴다.
+# - 이 표를 바꾸면 version 을 올린다. 적재한 계약에는 그때의 구분 코드가 남으므로, 바꾼 뒤에는 다시 적재해야 반영된다.
+status: draft
+version: 1
+decision: D-04
+categories: [whole_life, health, savings, annuity, property, auto, general]
+map:
+  # ---------- 생보 ----------
+  - {product_type: "종신",         sector: 생보, category: whole_life}
+  - {product_type: "생보정기",     sector: 생보, category: whole_life, confidence: low, note: "정기보험을 종신에 넣을지 건강이나 일반으로 둘지 확인"}
+  - {product_type: "경영인정기",   sector: 생보, category: whole_life, confidence: low, note: "법인 경영인정기. 시책과 시상 대상 여부가 종신과 다를 수 있음"}
+  - {product_type: "생보보장",     sector: 생보, category: health}
+  - {product_type: "생보치매",     sector: 생보, category: health}
+  - {product_type: "생보치아",     sector: 생보, category: health}
+  - {product_type: "생보암",       sector: 생보, category: health}
+  - {product_type: "생보변액연금", sector: 생보, category: annuity}
+  - {product_type: "생보연금",     sector: 생보, category: annuity}
+  - {product_type: "생보저축",     sector: 생보, category: savings}
+  - {product_type: "생보단체",     sector: 생보, category: general, confidence: low, note: "단체보험의 보장 내용에 따라 건강일 수 있음"}
+  # ---------- 손보 ----------
+  - {product_type: "손보보장",     sector: 손보, category: health}
+  - {product_type: "손보어린이",   sector: 손보, category: health}
+  - {product_type: "손보암",       sector: 손보, category: health}
+  - {product_type: "손보치매",     sector: 손보, category: health}
+  - {product_type: "손보상해",     sector: 손보, category: health}
+  - {product_type: "손보간병",     sector: 손보, category: health}
+  - {product_type: "손보치아",     sector: 손보, category: health}
+  - {product_type: "손보운전자",   sector: 손보, category: general, confidence: low, note: "운전자보험. 자동차 구분으로 볼지 확인"}

@@ -14,7 +14,7 @@
 <td class="wrap hide-sm">{{ ln.reward_raw or '원문 확인 필요' }}</td>
 <td>{% if ln.promo_id %}<span class="chip good">게시됨</span>{% elif ln.direct %}<span class="chip blue">바로 게시 가능</span>{% else %}<span class="chip warn">입력 필요</span>{% endif %}</td>
 <td>{% if ln.promo_id %}{% elif ln.direct %}
-  <form method="post" action="/promo/publish" style="display:flex;gap:8px;align-items:center"><input type="hidden" name="action" value="publish_line"><input type="hidden" name="line_id" value="{{ ln.line_id }}">
+  <form method="post" action="/promo/publish" style="display:flex;gap:8px;align-items:center"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="action" value="publish_line"><input type="hidden" name="line_id" value="{{ ln.line_id }}">
   <select name="category" aria-label="대상 구분" style="min-height:36px;width:auto;font-size:14px;padding:0 8px"><option value="">전 구분</option>{% for c in cats %}<option value="{{ c.code }}">{{ c.name }}</option>{% endfor %}</select>
   <button class="ghost" type="submit">승인하고 게시</button></form>
   {% else %}<a href="/promo/tiers?line={{ ln.line_id }}">구간과 조건 입력</a>{% endif %}</td></tr>{% endfor %}
@@ -23,7 +23,7 @@
 <h2 class="sec">프로모션 {{ cards|length }}건</h2>
 {% if not cards %}<div class="card"><div class="k">아직 만든 프로모션이 없습니다</div></div>{% endif %}
 <div class="pgrid">{% for p in cards %}<div>{{ pr.card(p) }}
-  <form method="post" action="/promo/publish" class="actions" style="margin:8px 0 0 8px"><input type="hidden" name="promo_id" value="{{ p.promo_id }}">
+  <form method="post" action="/promo/publish" class="actions" style="margin:8px 0 0 8px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="promo_id" value="{{ p.promo_id }}">
   <a href="/promo/tiers?edit={{ p.promo_id }}" style="display:inline-block;border-radius:999px;background:var(--card);color:var(--ink);font-size:14px;font-weight:600;padding:7px 14px">고치기</a>
   {% if p.status == 'published' %}<button class="ghost" name="action" value="withdrawn">회수</button>
   {% else %}<button class="ghost" name="action" value="published">게시</button><button class="ghost" name="action" value="delete">지우기</button>{% endif %}</form></div>{% endfor %}</div>
