@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% import "_promo.html" as pr %}
+{% block body %}
+{% set active = cards|selectattr('phase', 'equalto', 'active')|list %}{% set upcoming = cards|selectattr('phase', 'equalto', 'upcoming')|list %}{% set ended = cards|selectattr('phase', 'equalto', 'ended')|list %}
+<p class="eyebrow">{{ ctx.ym[:4] }}년 {{ ctx.ym[4:]|int }}월 · 기준일 {{ ref|md }}</p>
+<h1 class="display">진행 중 프로모션 {{ active|length }}건</h1>
+<p class="lede">게시된 프로모션입니다. 금액과 조건이 원안과 다르면 원안을 따릅니다.</p>
+{% if not cards %}<div class="card" style="margin-top:32px"><div class="k">게시된 프로모션이 없습니다</div>
+  <div class="cap">{% if ctx.role == 'main' %}게시 관리에서 시상안을 승인하고 게시하세요.{% else %}게시되면 여기에 보입니다.{% endif %}</div></div>{% endif %}
+{% if active %}<h2 class="sec">진행 중</h2><div class="pgrid">{% for p in active %}{{ pr.card(p) }}{% endfor %}</div>{% endif %}
+{% if upcoming %}<h2 class="sec">곧 시작</h2><div class="pgrid">{% for p in upcoming %}{{ pr.card(p) }}{% endfor %}</div>{% endif %}
+{% if ended %}<h2 class="sec">종료</h2><div class="pgrid">{% for p in ended %}{{ pr.card(p) }}{% endfor %}</div>{% endif %}
+{% endblock %}

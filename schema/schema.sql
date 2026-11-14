@@ -681,3 +681,63 @@ CREATE TABLE user_account (
     last_login_at   TEXT,
     created_at      TEXT NOT NULL
 );
+
+-- ---------------------------------------------------------------------------
+-- 프로모션: 설계사에게 게시하는 시상. 유형이 달라도 기간 창, 구간표, 결합 규칙, 보상, 조건의 조합으로 담는다.
+-- 달성 현황은 계약 원장에서 그때그때 계산한다(예상). 확정은 보험사 정산을 따른다.
+-- ---------------------------------------------------------------------------
+CREATE TABLE promotion (
+    promo_id        INTEGER PRIMARY KEY,
+    period_ym       TEXT NOT NULL,                -- 귀속 월 (목록과 보관의 기준)
+    name            TEXT NOT NULL,
+    kind            TEXT NOT NULL,                -- rate(정률 시책) / weekly(주차) / linked(연계) / monthly(월 구간) / travel(여행) / activity(가동) / membership
+    recipient_level TEXT NOT NULL DEFAULT 'fc',   -- fc 만 설계사에게 보인다. ga / hq / branch 는 메인 관리자만
+    insurer_id      INTEGER REFERENCES insurer(insurer_id),   -- NULL 이면 전 보험사 또는 마스터에 없는 보험사
+    insurer_name    TEXT,                         -- 표시용
+    sector          TEXT,                         -- life / nonlife / NULL(전체): 대상 계약의 업권
+    categories      TEXT,                         -- 대상 구분 코드를 쉼표로. NULL 이면 전 구분
+    target_note     TEXT,                         -- 대상 상품의 원문
+    metric          TEXT NOT NULL DEFAULT 'premium_monthly', -- premium_monthly / converted_premium / policy_count
+    date_basis      TEXT NOT NULL DEFAULT 'contract_date',   -- contract_date / application_date
+    per_contract_cap NUMERIC,                     -- 건당 인정 한도
+    combine_rule    TEXT NOT NULL DEFAULT 'single', -- single(창 하나) / all(창마다 달성, 낮은 구간 적용) / sum(창을 합산)
+    pay_timing      TEXT,                         -- next_month / inst13 / next_month+inst13 / ...
+    caution         TEXT,                         -- 유의사항, 지급 조건의 원문
+    source_line_id  INTEGER REFERENCES incentive_plan_line(line_id),
+    status          TEXT NOT NULL DEFAULT 'draft', -- draft / published / withdrawn
+    created_by      TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    published_by    TEXT,
+    published_at    TEXT
+);
+CREATE INDEX idx_promotion_ym ON promotion(period_ym, status);
+
+CREATE TABLE promotion_window (
+    window_id       INTEGER PRIMARY KEY,
+    promo_id        INTEGER NOT NULL REFERENCES promotion(promo_id),
+    seq             INTEGER NOT NULL,
+    label           TEXT NOT NULL,                -- 1주차, 7월 4주 ...
+    date_from       TEXT NOT NULL,                -- YYYY-MM-DD
+    date_to         TEXT NOT NULL
+);
+
+CREATE TABLE promotion_tier (
+    tier_id         INTEGER PRIMARY KEY,
+    promo_id        INTEGER NOT NULL REFERENCES promotion(promo_id),
+    tier_no         INTEGER NOT NULL,             -- 1 이 가장 낮은 구간
+    min_value       NUMERIC NOT NULL,             -- 이 값 이상이면 이 구간
+    reward_kind     TEXT NOT NULL,                -- fixed(정액) / rate(실적의 비율) / travel(여행) / goods(물품)
+    reward_value    NUMERIC,                      -- 정액이면 원, 비율이면 0.5 = 50%
+    reward_label    TEXT                          -- 여행지, 물품 이름, 현금 대체 조건
+);
+
+-- 정률 시책의 지급 조각. option_label 이 있으면 조건별 지급률이라 예상액을 내지 않는다.
+CREATE TABLE promotion_rate (
+    rate_id         INTEGER PRIMARY KEY,
+    promo_id        INTEGER NOT NULL REFERENCES promotion(promo_id),
+    seq             INTEGER NOT NULL,
+    option_label    TEXT,
+    basis           TEXT NOT NULL,
+    rate            NUMERIC NOT NULL,
+    pay_timing      TEXT NOT NULL
+);

@@ -1,7 +1,10 @@
-{% extends "base.html" %}
+{% extends "base.html" %}{% import "_promo.html" as pr %}
 {% macro promos() %}
-<h2 class="sec">마감이 가까운 프로모션</h2>
-{% if d.promos %}
+<h2 class="sec">{{ '마감이 가까운 프로모션' }}</h2>
+{% if d.cards %}
+<div class="rail">{% for p in d.cards %}<a href="/promo/progress{{ '?p=' ~ p.promo_id if ctx.role != 'agent' }}" style="color:inherit;display:block">{{ pr.card(p) }}</a>{% endfor %}</div>
+<p class="cap"><a href="/promo/list">프로모션 전체 보기</a> · 금액과 조건이 원안과 다르면 원안을 따릅니다.</p>
+{% elif d.promos %}
 <div class="rail">{% for p in d.promos %}
   <article class="card promo">
     <div class="promo-top"><span class="eyebrow" style="margin:0">{{ p.insurer_name }}</span><span class="chip {{ p.due_class }}">{{ p.due }}</span></div>
@@ -12,8 +15,8 @@
     <div class="promo-meta">{{ p.period_raw }}{% if p.timing %} · {{ p.timing }} 지급{% endif %}</div>
   </article>{% endfor %}
 </div>
-<p class="cap">설계사 몫 {{ d.promo_total }}건 가운데 {{ d.promos|length }}건. 시상안 원장의 미리보기이며 원안과 다르면 원안을 따릅니다.</p>
-{% else %}<div class="card"><div class="k">적재된 시상안이 없습니다</div></div>{% endif %}
+<p class="cap">아직 게시한 프로모션이 없어 시상안 원장의 설계사 몫 {{ d.promo_total }}건 가운데 {{ d.promos|length }}건을 미리 보여 줍니다.</p>
+{% else %}<div class="card"><div class="k">게시된 프로모션이 없습니다</div></div>{% endif %}
 {% endmacro %}
 
 {% macro org(title) %}

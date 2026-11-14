@@ -37,9 +37,9 @@ groups:
     name: 프로모션
     icon: "★"
     items:
-      - {id: promo-list, name: 진행 중 프로모션, path: /promo/list, roles: {main: all, manager: org, agent: self}, phase: 2, status: planned,
+      - {id: promo-list, name: 진행 중 프로모션, path: /promo/list, roles: {main: all, manager: org, agent: self}, phase: 2, status: built,
          desc: "승인한 시상안을 보험사·상품군·마감 임박으로 걸러 본다. 원문 보기 포함"}
-      - {id: promo-progress, name: 달성 현황, path: /promo/progress, roles: {main: all, manager: org, agent: self}, phase: 2, status: planned,
+      - {id: promo-progress, name: 달성 현황, path: /promo/progress, roles: {main: all, manager: org, agent: self}, phase: 2, status: built,
          desc: "정률 시책의 예상액, 주차 시상의 이번 주 구간, 연계 시상의 창별 달성, 여행 시상의 누적 달성. 관리자는 팀원의 구간 근접 현황"}
       - {id: promo-org-awards, name: 조직 부문 시상, path: /promo/org-awards, roles: {main: all, manager: org, agent: self}, phase: 2, status: planned,
          desc: "조직이 등록한 월간 부문과 현재 순위. 이터널은 인정업적 부문과 손해보험 건수 부문"}
@@ -47,9 +47,9 @@ groups:
          desc: "같은 상품군의 보험사별 지급률과 지급 시점. 내부 참고용"}
       - {id: promo-archive, name: 지난 프로모션, path: /promo/archive, roles: {main: all, manager: org, agent: self}, phase: 2, status: planned,
          desc: "월별 보관과 결과"}
-      - {id: promo-publish, name: 게시 관리, path: /promo/publish, roles: {main: all}, phase: 2, status: planned,
+      - {id: promo-publish, name: 게시 관리, path: /promo/publish, roles: {main: all}, phase: 2, status: built,
          desc: "승인한 시상안 줄을 프로모션으로 게시하고 회수한다"}
-      - {id: promo-tiers, name: 구간과 조건 입력, path: /promo/tiers, roles: {main: all}, phase: 2, status: planned,
+      - {id: promo-tiers, name: 구간과 조건 입력, path: /promo/tiers, roles: {main: all}, phase: 2, status: built,
          desc: "주차·연계·여행 시상의 기간 창, 구간표, 결합 규칙, 보상을 입력한다. 금액이 원문의 그림에만 있는 줄이 대상이다"}
 
   - id: perf

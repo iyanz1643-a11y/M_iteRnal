@@ -1,0 +1,56 @@
+{% extends "base.html" %}{% import "_promo.html" as pr %}
+{% block body %}
+{% set hit = items|selectattr('r.tier')|list|length + (items|selectattr('kind', 'equalto', 'rate')|selectattr('r.value')|list|length) %}
+<p class="eyebrow">{{ ctx.ym[:4] }}년 {{ ctx.ym[4:]|int }}월 · 기준일 {{ ref|md }}</p>
+<h1 class="display">내 달성 현황</h1>
+<p class="lede">프로모션 {{ items|length }}건 가운데 {{ hit }}건에 실적이 잡혔습니다. 금액과 구간은 예상이며 확정은 보험사 정산을 따릅니다.</p>
+{% if ctx.role == 'manager' %}<div class="seg"><a href="/promo/progress">팀원 현황</a><a class="on" href="/promo/progress?view=me">내 현황</a></div>{% endif %}
+{% if not items %}<div class="card" style="margin-top:32px"><div class="k">게시된 프로모션이 없습니다</div></div>{% endif %}
+<div class="grid" style="margin-top:28px">
+{% for p in items %}{% set r = p.r %}
+<section class="card {{ 'ended' if p.phase == 'ended' }}">
+  <div class="pcard-head"><div><div class="eyebrow" style="margin:0">{{ p.insurer_name or '전 보험사' }} · {{ p.kind_ko }}</div><div class="pcard-title">{{ p.name }}</div>
+    <div class="cap" style="margin-top:4px">{{ p.period_text }}{% if p.timing_ko %} · {{ p.timing_ko }} 지급{% endif %}</div></div>
+    <span class="chip {{ p.due_class }}">{{ p.due }}</span></div>
+
+  {% if p.kind == 'rate' %}
+  <div class="pcard">
+    <div><div class="k">예상 시상</div>
+      {% if r.amount is not none %}<div class="big">{{ r.amount|won }}<span class="unit">원</span></div>
+      {% else %}<div class="mid" style="color:var(--faint)">원문 확인</div><div class="cap">조건별 지급률이라 금액을 내지 않습니다</div>{% endif %}
+      <div class="cap">대상 실적 {{ pr.val(r.value, p) }}</div></div>
+    <div class="ladder">{% for x in r.parts or [] %}<div class="rung {{ 'hit' if x.amount }}"><span>{{ x.timing }}</span><b>{{ x.amount|won }}원</b></div>{% endfor %}
+      {% if p.target_note %}<div class="cap">대상: {{ p.target_note }}</div>{% endif %}</div>
+  </div>
+
+  {% elif p.combine_rule == 'all' %}
+  <div class="chain">{% for w in r.windows %}
+    <div class="link {{ 'ok' if w.tier else ('fail' if w.state == 'ended' else ('now' if w.state == 'active' else '')) }}">
+      <div class="node">{{ '✓' if w.tier else ('×' if w.state == 'ended' else loop.index) }}</div><div class="l">{{ w.label }}</div>
+      <div class="v">{{ pr.val(w.value, p) }}</div><div class="v">{{ w.date_from|md }}~{{ w.date_to|md }}</div></div>{% endfor %}</div>
+  <div class="pcard" style="margin-top:20px">
+    <div>{% if r.broken %}<div class="k">무효</div><div class="mid" style="color:var(--red)">앞 구간 미달</div><div class="cap">끝난 구간을 채우지 못해 이 시상은 받을 수 없습니다</div>
+      {% elif r.tier %}<div class="k">지금 구간</div><div class="big">{{ r.reward }}</div><div class="cap">구간마다 달성해야 하고 낮은 쪽 구간이 적용됩니다</div>
+      {% else %}<div class="k">지금 구간</div><div class="mid" style="color:var(--faint)">아직 없음</div><div class="cap">구간마다 달성해야 합니다</div>{% endif %}
+      {% if r.next %}<div class="cap" style="color:var(--blue);font-weight:600">이번 구간에서 {{ pr.val(r.next.gap, p) }} 더 하면 {{ r.next.reward }}</div>{% endif %}</div>
+    <div class="ladder">{% for t in p.tiers|reverse %}<div class="rung {{ 'hit' if r.tier and t.tier_no <= r.tier.tier_no }} {{ 'next' if r.next and r.next.tier_no == t.tier_no }}">
+      <span>{{ pr.val(t.min_value, p) }} 이상</span><b>{{ pm.reward_text(t) }}</b></div>{% endfor %}</div>
+  </div>
+
+  {% else %}
+  <div class="pcard">
+    <div class="ringbox">{{ ui.ring(r.pct or 0, '최고 구간 대비', color=('var(--fill-green)' if r.tier else 'var(--blue)')) }}
+      <div><div class="k">{{ '달성한 구간' if r.tier else '지금 실적' }}</div>
+        {% if r.tier %}<div class="mid">{{ r.reward }}</div>{% else %}<div class="mid">{{ pr.val(r.value, p) }}</div>{% endif %}
+        {% if r.tier %}<div class="cap">{{ p.metric_ko }} {{ pr.val(r.value, p) }}</div>{% endif %}
+        {% if r.next %}<div class="cap" style="color:var(--blue);font-weight:600">{{ pr.val(r.next.gap, p) }} 더 하면 {{ r.next.reward }}</div>
+        {% elif r.tier %}<div class="cap" style="color:var(--green);font-weight:600">최고 구간을 달성했습니다</div>{% endif %}</div></div>
+    <div class="ladder">{% for t in p.tiers|reverse %}<div class="rung {{ 'hit' if r.tier and t.tier_no <= r.tier.tier_no }} {{ 'next' if r.next and r.next.tier_no == t.tier_no }}">
+      <span>{{ pr.val(t.min_value, p) }} 이상</span><b>{{ pm.reward_text(t) }}</b></div>{% endfor %}</div>
+  </div>
+  {% endif %}
+  {% if p.caution %}<p class="cap" style="margin-top:16px">{{ p.caution }}</p>{% endif %}
+</section>
+{% endfor %}
+</div>
+{% endblock %}

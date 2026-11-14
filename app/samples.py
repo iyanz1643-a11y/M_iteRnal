@@ -399,3 +399,39 @@ def write_incentive_plan(raw_dir, ym=AS_OF):
     ws.append(["1주", "한빛", "10월 1일 ~ 5일", "인보험", "200%", "5만↑ 15만원"])
     wb.save(path)
     return path
+
+
+# ------------------------------------------------------------------ 샘플 프로모션
+def seed_promotions(con, ym=AS_OF, by="정산담당(데모)"):
+    """샘플 시상안의 자동 해석 줄을 게시하고, 주차·연계·여행·가동 프로모션을 하나씩 만든다. 금액과 구간은 모두 임의다."""
+    from app.engine import promotion as pm
+
+    keyword = [("건강", "health"), ("종신", "whole_life"), ("재물", "property")]
+    n = 0
+    for ln in con.execute("""SELECT l.line_id, l.criteria_raw, l.category_raw FROM incentive_plan_line l JOIN incentive_plan_doc d ON d.plan_doc_id=l.plan_doc_id
+                             WHERE d.period_ym=? AND d.status!='superseded' AND l.recipient_level='fc' AND l.line_kind='rate_promo'
+                               AND l.parse_status='auto' AND l.period_from IS NOT NULL""", (ym,)).fetchall():
+        text = (ln["criteria_raw"] or "") + (ln["category_raw"] or "")
+        cat = next((code for word, code in keyword if word in text), None)
+        pm.publish_from_line(con, ln["line_id"], by, categories=[cat] if cat else None)
+        n += 1
+    ins = {r["name"]: r["insurer_id"] for r in con.execute("SELECT insurer_id, name FROM insurer")}
+    y, m = ym[:4], ym[4:]
+    d = lambda day, month=m: f"{y}-{month}-{day:02d}"
+    pm.create(con, period_ym=ym, name="인보험 4주차 주차 시상", kind="weekly", insurer_id=ins["한빛손해"], insurer_name="한빛손해", sector="nonlife",
+              windows=[("4주차", d(19), d(31))], per_contract_cap=200_000, pay_timing="inst13", target_note="인보험 (단체, 실손, 펫 제외)",
+              tiers=[(50_000, "fixed", 50_000, None), (100_000, "fixed", 150_000, None), (200_000, "fixed", 400_000, None), (300_000, "fixed", 700_000, None)],
+              caution="13회차 유지 시 지급. 건당 20만 원까지 인정.", by=by, publish=True)
+    pm.create(con, period_ym=ym, name="3·4주차 연계 시상", kind="linked", insurer_id=ins["샘플생명"], insurer_name="샘플생명", sector="life",
+              windows=[("3주차", d(12), d(18)), ("4주차", d(19), d(31))], pay_timing="inst13", target_note="보장성 전 상품",
+              tiers=[(50_000, "fixed", 100_000, None), (150_000, "fixed", 300_000, None), (300_000, "fixed", 700_000, None)],
+              caution="두 구간을 모두 달성해야 하며 낮은 쪽 구간이 적용됩니다. 한 구간이라도 미달이면 지급하지 않습니다.", by=by, publish=True)
+    pm.create(con, period_ym=ym, name="4분기 해외 여행 시상", kind="travel", insurer_id=ins["대한생명"], insurer_name="대한생명", sector="life",
+              windows=[("4분기", d(1), f"{y}-12-31")], metric="converted_premium", pay_timing=None, target_note="보장성 전 상품 누적",
+              tiers=[(300_000, "goods", None, "건강검진권"), (600_000, "travel", None, "오사카 3박 4일"), (1_000_000, "travel", None, "다낭 4박 5일 동반 1인")],
+              caution="현금 대체 불가. 13회차 유지 계약만 합산해 최종 확정합니다.", by=by, publish=True)
+    pm.create(con, period_ym=ym, name="손해보험 가동 시상", kind="activity", sector="nonlife", metric="policy_count",
+              windows=[(f"{int(m)}월", d(1), d(31))], pay_timing="next_month", target_note="손해보험 전 상품, 건수 기준",
+              tiers=[(1, "fixed", 30_000, None), (3, "fixed", 100_000, None), (5, "fixed", 200_000, None)],
+              caution="조직 자체 시상의 예시입니다.", by=by, publish=True)
+    return n + 4

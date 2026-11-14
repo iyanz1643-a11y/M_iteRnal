@@ -6,6 +6,7 @@ import os
 import pathlib
 import secrets
 from datetime import date, datetime
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -14,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from app import db
+from app.engine import promotion as pm
 from app.periods import period_key
 from app.web import auth, menu
 
@@ -25,6 +27,7 @@ app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 templates = Jinja2Templates(directory=HERE / "templates")
 templates.env.filters["won"] = lambda v: f"{int(v):,}" if v is not None else "-"
 templates.env.filters["n"] = lambda v: f"{(v or 0):g}"
+templates.env.filters["md"] = lambda d: f"{int(d[5:7])}월 {int(d[8:10])}일" if d else ""
 
 
 def get_con():
@@ -69,7 +72,7 @@ def page(request, ctx, name, **kw):
     return templates.TemplateResponse(request, name, {
         "ctx": ctx, "groups": menu.for_role(ctx["role"]), "mobile_tabs": cfg["mobile_tabs"], "item": ctx.get("item"),
         "path": request.url.path, "SCOPES": menu.SCOPES, "PHASES": menu.PHASES, "STATUS": menu.STATUS,
-        "LEVEL_KO": auth.LEVEL_KO, "HEAD_KO": auth.HEAD_KO, **kw})
+        "LEVEL_KO": auth.LEVEL_KO, "HEAD_KO": auth.HEAD_KO, "pm": pm, **kw})
 
 
 @app.exception_handler(HTTPException)
@@ -184,7 +187,9 @@ def home(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
     if data["last_load"]:
         t = datetime.strptime(data["last_load"], "%Y-%m-%d %H:%M:%S")
         data["last_load_label"] = f"{t.month}월 {t.day}일 {t.hour}시 {t.minute:02d}분"
-    data["promos"], data["promo_total"] = _promos(con, ym)
+    cards, _ = _cards(con, ctx)
+    data["cards"] = [c for c in cards if c["recipient_level"] == "fc" and c["phase"] != "ended"][:6] or [c for c in cards if c["recipient_level"] == "fc"][:6]
+    data["promos"], data["promo_total"] = ([], 0) if data["cards"] else _promos(con, ym)
     if ctx["agent_id"]:
         mine = _perf(con, ym, [ctx["agent_id"]])
         data["mine"] = mine[0] if mine else None
@@ -286,6 +291,151 @@ def me_password(request: Request, old: str = Form(...), new: str = Form(...), ne
     con.execute("UPDATE user_account SET password_hash=?, must_change_password=0 WHERE user_id=?", (auth.hash_password(new), ctx["user_id"]))
     auth.log(con, ctx["login_id"], "password_change")
     return page(request, {**ctx, "must_change_password": False}, "me.html", message="비밀번호를 바꿨습니다.", error=None)
+
+
+# ---------------------------------------------------------------- 프로모션
+def _period_text(p):
+    md = lambda d: f"{int(d[5:7])}월 {int(d[8:10])}일"
+    if len(p["windows"]) == 1:
+        return f"{md(p['date_from'])} ~ {md(p['date_to'])}"
+    return " · ".join(f"{w['label']} {md(w['date_from'])}~{md(w['date_to'])}" for w in p["windows"])
+
+
+def _cards(con, ctx, include_unpublished=False):
+    ref = pm.ref_date(ctx["ym"])
+    out = []
+    for p in pm.listing(con, ctx["ym"], ctx["role"], include_unpublished):
+        due, due_class = pm.due_label(p, ref)
+        f, t = date.fromisoformat(p["date_from"]), date.fromisoformat(p["date_to"])
+        phase = "upcoming" if ref < f else ("ended" if ref > t else "active")
+        out.append({**p, "due": due, "due_class": due_class, "phase": phase, "head": pm.headline(p), "period_text": _period_text(p)})
+    order = {"active": 0, "upcoming": 1, "ended": 2}
+    out.sort(key=lambda c: (order[c["phase"]], c["date_to"], c["promo_id"]))
+    return out, ref
+
+
+def _scope_agents(con, ctx):
+    ids = ctx["agent_ids"] if ctx["role"] != "main" else {r["agent_id"] for r in con.execute("SELECT agent_id FROM agent WHERE status='active'")}
+    q, lst = _in(ids)
+    ym = ctx["ym"]
+    return _q(con, f"""SELECT a.agent_id, a.internal_code code, a.name, o.name org FROM agent a
+                       LEFT JOIN agent_org_history h ON h.agent_id=a.agent_id AND h.effective_from<=? AND (h.effective_to IS NULL OR h.effective_to>=?)
+                       LEFT JOIN org_unit o ON o.org_id=h.org_id WHERE a.agent_id IN ({q}) AND a.status='active' ORDER BY a.internal_code""", (ym, ym, *lst))
+
+
+@app.get("/promo/list", response_class=HTMLResponse)
+def promo_list(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
+    cards, ref = _cards(con, ctx)
+    return page(request, ctx, "promo_list.html", cards=cards, ref=ref.isoformat())
+
+
+@app.get("/promo/progress", response_class=HTMLResponse)
+def promo_progress(request: Request, p: int | None = None, view: str | None = None, ctx: dict = Depends(guard), con=Depends(get_con)):
+    cards, ref = _cards(con, ctx)
+    cards = [c for c in cards if c["recipient_level"] == "fc"]
+    team_view = ctx["role"] == "main" or (ctx["role"] == "manager" and view != "me")
+    if not team_view:
+        mine = [{**c, "r": pm.progress(con, c, [ctx["agent_id"]], ref)[ctx["agent_id"]]} for c in cards] if ctx["agent_id"] else []
+        return page(request, ctx, "promo_progress_me.html", items=mine, ref=ref.isoformat())
+    sel = next((c for c in cards if c["promo_id"] == p), cards[0] if cards else None)
+    rows, summary = [], None
+    if sel:
+        agents = _scope_agents(con, ctx)
+        res = pm.progress(con, sel, [a["agent_id"] for a in agents], ref)
+        rows = [{**a, "r": res[a["agent_id"]]} for a in agents]
+        rows.sort(key=lambda x: -x["r"]["value"])
+        near = [x for x in rows if x["r"]["next"] and x["r"]["value"] > 0 and x["r"]["next"]["gap"] <= x["r"]["next"]["min_value"] * 0.3]
+        summary = {"n": len(rows), "achieved": sum(1 for x in rows if x["r"]["tier"] or (sel["kind"] == "rate" and x["r"]["value"] > 0)),
+                   "near": len(near), "missed": sum(1 for x in rows if x["r"]["broken"]), "top": max((x["r"]["value"] for x in rows), default=0)}
+    return page(request, ctx, "promo_progress_team.html", cards=cards, sel=sel, rows=rows, summary=summary, ref=ref.isoformat(), show_amount=ctx["role"] == "main")
+
+
+@app.get("/promo/publish", response_class=HTMLResponse)
+def promo_publish(request: Request, msg: str | None = None, err: str | None = None, ctx: dict = Depends(guard), con=Depends(get_con)):
+    doc = con.execute("SELECT plan_doc_id, file_name, period_ym FROM incentive_plan_doc WHERE status!='superseded' ORDER BY period_ym=? DESC, plan_doc_id DESC LIMIT 1", (ctx["ym"],)).fetchone()
+    lines = _q(con, """SELECT l.line_id, l.insurer_name, l.category_raw, l.period_raw, l.period_from, l.criteria_raw, l.reward_raw, l.line_kind, l.parse_status, l.parse_note,
+                              (SELECT p.promo_id FROM promotion p WHERE p.source_line_id=l.line_id AND p.status!='withdrawn' LIMIT 1) promo_id
+                       FROM incentive_plan_line l WHERE l.plan_doc_id=? AND l.recipient_level='fc' ORDER BY l.line_id""", (doc["plan_doc_id"],)) if doc else []
+    for ln in lines:
+        ln["direct"] = ln["line_kind"] == "rate_promo" and ln["parse_status"] == "auto" and bool(ln["period_from"])
+    cards, _ = _cards(con, ctx, include_unpublished=True)
+    cats = _q(con, "SELECT code, name FROM product_category ORDER BY sort_order")
+    return page(request, ctx, "promo_publish.html", doc=dict(doc) if doc else None, lines=lines, cards=cards, cats=cats, msg=msg, err=err,
+                waiting=sum(1 for ln in lines if not ln["promo_id"]))
+
+
+@app.post("/promo/publish")
+async def promo_publish_action(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
+    f = await request.form()
+    action, by = f.get("action"), ctx["login_id"]
+    try:
+        if action == "publish_line":
+            pm.publish_from_line(con, int(f["line_id"]), by, categories=[f["category"]] if f.get("category") else None)
+            msg = "승인하고 게시했습니다."
+        elif action in ("published", "withdrawn"):
+            pm.set_status(con, int(f["promo_id"]), action, by)
+            msg = "게시했습니다." if action == "published" else "회수했습니다."
+        elif action == "delete":
+            pm.delete_draft(con, int(f["promo_id"]))
+            msg = "지웠습니다."
+        else:
+            raise ValueError("처리할 수 없는 요청입니다.")
+    except (ValueError, KeyError) as e:
+        return RedirectResponse(f"/promo/publish?err={quote(str(e))}", status_code=303)
+    return RedirectResponse(f"/promo/publish?msg={quote(msg)}", status_code=303)
+
+
+def _tier_form_defaults(con, ctx, line_id):
+    d = {"name": "", "kind": "weekly", "insurer_name": "", "sector": "", "caution": "", "windows": [("", "", "")] * 3, "source_line_id": "", "origin": None}
+    if line_id:
+        ln = con.execute("SELECT * FROM incentive_plan_line WHERE line_id=? AND recipient_level='fc'", (line_id,)).fetchone()
+        if ln:
+            origin = " / ".join(x for x in (ln["period_raw"], ln["criteria_raw"], ln["reward_raw"]) if x)
+            d.update(name=ln["category_raw"] or "", kind=pm.FROM_LINE_KIND.get(ln["line_kind"], "weekly") if ln["line_kind"] != "rate_promo" else "weekly",
+                     insurer_name=ln["insurer_name"], sector=ln["sector"] or "", caution=ln["reward_raw"] or "", source_line_id=str(line_id), origin=origin,
+                     windows=[("", ln["period_from"] or "", ln["period_to"] or ""), ("", "", ""), ("", "", "")])
+    return d
+
+
+@app.get("/promo/tiers", response_class=HTMLResponse)
+def promo_tiers(request: Request, line: int | None = None, err: str | None = None, ctx: dict = Depends(guard), con=Depends(get_con)):
+    return page(request, ctx, "promo_tiers.html", d=_tier_form_defaults(con, ctx, line), err=err,
+                cats=_q(con, "SELECT code, name FROM product_category ORDER BY sort_order"),
+                insurers=_q(con, "SELECT insurer_id, name, sector FROM insurer WHERE active=1 ORDER BY name"))
+
+
+@app.post("/promo/tiers")
+async def promo_tiers_save(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
+    f = await request.form()
+    num = lambda v: float(str(v).replace(",", "").strip()) if str(v or "").strip() else None
+    try:
+        windows = [(f.get(f"w_label_{i}", "").strip(), f.get(f"w_from_{i}", ""), f.get(f"w_to_{i}", "")) for i in range(1, 4)]
+        tiers = [(num(f.get(f"t_min_{i}")), f.get(f"t_kind_{i}", "fixed"), num(f.get(f"t_value_{i}")), f.get(f"t_label_{i}", "").strip())
+                 for i in range(1, 7) if num(f.get(f"t_min_{i}")) is not None]
+        for m, k, v, lab in tiers:
+            if k == "rate" and v is not None:
+                pass
+            if k in ("fixed", "rate") and v is None:
+                raise ValueError("정액과 비율 보상에는 값을 넣어야 합니다.")
+            if k in ("travel", "goods") and not lab:
+                raise ValueError("여행과 물품 보상에는 이름을 넣어야 합니다.")
+        tiers = [(m, k, (v / 100 if k == "rate" else v), lab) for m, k, v, lab in tiers]
+        ins = con.execute("SELECT insurer_id, name FROM insurer WHERE insurer_id=?", (int(f["insurer_id"]),)).fetchone() if f.get("insurer_id") else None
+        if not f.get("name", "").strip():
+            raise ValueError("이름을 넣어야 합니다.")
+        pid = pm.create(con, period_ym=ctx["ym"], name=f["name"], kind=f.get("kind", "weekly"), windows=windows, tiers=tiers, by=ctx["login_id"],
+                        insurer_id=ins["insurer_id"] if ins else None, insurer_name=(ins["name"] if ins else f.get("insurer_name", "").strip() or None),
+                        sector=f.get("sector") or None, categories=f.getlist("categories"), target_note=f.get("target_note", "").strip() or None,
+                        metric=f.get("metric", "premium_monthly"), date_basis=f.get("date_basis", "contract_date"), per_contract_cap=num(f.get("cap")),
+                        combine_rule=f.get("combine_rule") or None, pay_timing=f.get("pay_timing") or None, caution=f.get("caution", "").strip() or None,
+                        source_line_id=int(f["source_line_id"]) if f.get("source_line_id") else None, publish=f.get("action") == "publish")
+        if f.get("source_line_id"):
+            con.execute("UPDATE incentive_plan_line SET review_status='approved', reviewed_by=?, reviewed_at=? WHERE line_id=?", (ctx["login_id"], db.now(), int(f["source_line_id"])))
+            con.commit()
+    except (ValueError, KeyError) as e:
+        back = f"/promo/tiers?err={quote(str(e))}" + (f"&line={f.get('source_line_id')}" if f.get("source_line_id") else "")
+        return RedirectResponse(back, status_code=303)
+    return RedirectResponse(f"/promo/publish?msg={quote('프로모션을 ' + ('게시했습니다.' if f.get('action') == 'publish' else '초안으로 저장했습니다.'))}", status_code=303)
 
 
 @app.get("/{rest:path}", response_class=HTMLResponse)

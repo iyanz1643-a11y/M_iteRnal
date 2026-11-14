@@ -56,6 +56,8 @@ def main(path=db.DEFAULT_DB):
         ranking.run(con, ym)
         print(f"[{ym}] 계약 신규 {ins} / 상태변경 {upd} (차단 {blk}, 경고 {wrn}) · 수수료 {n_c}라인 · 시상 {n_i}건 (환수 {n_cb})")
 
+    print(f"[promotion] 샘플 프로모션 {samples.seed_promotions(con)}건 게시 (시상안의 정률 시책과 주차·연계·여행·가동 예시)")
+
     # 4) 원수사 정산서 엑셀 생성 → 적재 → 대사
     stmt_files, injected = samples.write_statement_files(con, AS_OF, RAW)
     for f in stmt_files:

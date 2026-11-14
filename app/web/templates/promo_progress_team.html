@@ -1,0 +1,27 @@
+{% extends "base.html" %}{% import "_promo.html" as pr %}
+{% block body %}
+<p class="eyebrow">{{ ctx.ym[:4] }}년 {{ ctx.ym[4:]|int }}월 · {{ SCOPES[ctx.scope] }} · 기준일 {{ ref|md }}</p>
+<h1 class="display">{{ '전체' if ctx.role == 'main' else '팀원' }} 달성 현황</h1>
+<p class="lede">프로모션을 골라 사람별 구간을 봅니다. {% if not show_amount %}시상 금액은 보이지 않습니다.{% endif %}</p>
+{% if ctx.role == 'manager' %}<div class="seg"><a class="on" href="/promo/progress">팀원 현황</a><a href="/promo/progress?view=me">내 현황</a></div>{% endif %}
+{% if not sel %}<div class="card" style="margin-top:32px"><div class="k">게시된 프로모션이 없습니다</div></div>{% else %}
+<div class="seg">{% for c in cards %}<a class="{{ 'on' if c.promo_id == sel.promo_id }}" href="/promo/progress?p={{ c.promo_id }}">{{ c.name }}</a>{% endfor %}</div>
+<div class="grid g4" style="margin-top:20px">
+  <div class="card"><div class="k">대상</div><div class="mid">{{ summary.n }}<span class="unit">명</span></div><div class="cap">{{ sel.insurer_name or '전 보험사' }} · {{ sel.kind_ko }}</div></div>
+  <div class="card"><div class="k"><span class="dot"></span>{{ '실적 있음' if sel.kind == 'rate' else '구간 달성' }}</div><div class="mid">{{ summary.achieved }}<span class="unit">명</span></div><div class="cap">{{ sel.period_text }}</div></div>
+  <div class="card"><div class="k"><span class="dot warn"></span>구간 근접</div><div class="mid">{{ summary.near }}<span class="unit">명</span></div><div class="cap">다음 구간까지 30% 이내</div></div>
+  <div class="card"><div class="k"><span class="dot {{ 'bad' if summary.missed else 'off' }}"></span>무효</div><div class="mid">{{ summary.missed }}<span class="unit">명</span></div><div class="cap">{{ sel.due }}</div></div>
+</div>
+<div class="card tablecard" style="margin-top:16px"><table>
+<tr><th>성명</th><th class="hide-sm">소속</th>{% if sel.windows|length > 1 %}{% for w in sel.windows %}<th class="num hide-sm">{{ w.label }}</th>{% endfor %}{% endif %}
+<th class="num">{{ sel.metric_ko }}</th><th>구간</th><th>다음 구간까지</th>{% if show_amount %}<th class="num">예상 시상</th>{% endif %}</tr>
+{% for x in rows %}{% set r = x.r %}<tr><td class="strong">{{ x.name }}</td><td class="hide-sm">{{ x.org or '-' }}</td>
+{% if sel.windows|length > 1 %}{% for w in r.windows %}<td class="num hide-sm">{{ pr.val(w.value, sel) }}</td>{% endfor %}{% endif %}
+<td class="num"><span class="minibar hide-sm"><i style="width:{{ (r.value / summary.top * 100)|round(1) if summary.top else 0 }}%"></i></span>{{ pr.val(r.value, sel) }}</td>
+<td>{% if r.broken %}<span class="chip bad">무효</span>{% elif r.tier %}<span class="chip good">{{ r.tier.tier_no }}구간</span>{% elif sel.kind == 'rate' and r.value %}<span class="chip good">대상</span>{% else %}<span class="chip">없음</span>{% endif %}</td>
+<td>{% if r.next %}{{ pr.val(r.next.gap, sel) }}{% elif r.tier %}<span class="chip blue">최고 구간</span>{% else %}-{% endif %}</td>
+{% if show_amount %}<td class="num">{% if r.amount is not none %}{{ r.amount|won }}원{% elif r.reward %}{{ r.reward }}{% else %}-{% endif %}</td>{% endif %}</tr>{% endfor %}
+</table></div>
+<p class="cap">구간과 금액은 예상입니다. 성립한 계약만 세고 청약, 반송, 철회는 세지 않습니다. 기준일은 {{ pm.BASIS_KO[sel.date_basis] }}입니다.</p>
+{% endif %}
+{% endblock %}

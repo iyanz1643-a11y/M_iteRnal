@@ -1,0 +1,16 @@
+{% macro card(p, link=true) %}
+<article class="card promo {{ 'ended' if p.phase == 'ended' }}">
+  <div class="promo-top"><span class="eyebrow" style="margin:0">{{ p.insurer_name or '전 보험사' }}</span><span class="chip {{ p.due_class }}">{{ p.due }}</span></div>
+  {% if p.head.big %}<div class="promo-rate {{ 'small' if p.head.big|length > 7 }}">{{ p.head.big }}</div>
+  {% else %}<div class="promo-rate none">{{ p.head.small }}</div>{% endif %}
+  {% if p.head.big %}<div class="promo-meta" style="margin-top:0">{{ p.head.small }}</div>{% endif %}
+  <div class="promo-name">{{ p.name }}</div>
+  <div class="promo-meta">{{ p.period_text }}{% if p.timing_ko %} · {{ p.timing_ko }} 지급{% endif %}</div>
+  {% if p.target_note %}<div class="target">{{ p.target_note }}</div>{% endif %}
+  <div class="chips" style="margin-top:12px"><span class="chip">{{ p.kind_ko }}</span>
+    {% if p.status != 'published' %}<span class="chip warn">{{ {'draft':'초안','withdrawn':'회수'}[p.status] }}</span>{% endif %}
+    {% if p.recipient_level != 'fc' %}<span class="chip">{{ {'ga':'GA 몫','hq':'총괄 몫','branch':'지사 몫'}.get(p.recipient_level, p.recipient_level) }}</span>{% endif %}</div>
+</article>
+{% endmacro %}
+
+{% macro val(v, p) %}{% if p.metric == 'policy_count' %}{{ v|n }}건{% else %}{{ v|won }}원{% endif %}{% endmacro %}
