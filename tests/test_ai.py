@@ -84,6 +84,101 @@ def test_key_from_env_builds_http_transport(env, monkeypatch):
     assert AIClient(env["con"]).model == "claude-sonnet-5-5"
 
 
+# ------------------------------------------------------------------ 환경 변수: 빈 값, 공백, 이상한 값
+AI_ENV = ("AI_MODEL", "AI_API_VERSION", "AI_TIMEOUT_SECONDS", "AI_MAX_RETRIES", "AI_MONTHLY_LIMIT_USD",
+          "AI_PRICE_INPUT_PER_MTOK", "AI_PRICE_OUTPUT_PER_MTOK", "AI_KNIGHTS_FILE")
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+def test_blank_env_falls_back_to_defaults(env, monkeypatch, caplog, blank):
+    for k in AI_ENV:
+        monkeypatch.setenv(k, blank)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy-for-test")
+    with caplog.at_level("WARNING", logger="app.ai.client"):
+        cli = AIClient(env["con"])
+        t = cli.transport
+        assert cli.model == aiclient.DEFAULT_MODEL
+        assert t.api_version == aiclient.DEFAULT_API_VERSION
+        assert t.timeout == aiclient.DEFAULT_TIMEOUT and t.retries == aiclient.DEFAULT_RETRIES
+        assert aiclient.limit_for(env["con"], "plan_qa") == aiclient.DEFAULT_LIMIT_USD
+        assert aiclient.price("claude-opus-5-5") == aiclient.PRICES["claude-opus-5-5"]
+        assert review.load_panel() is review.DEFAULT_PANEL
+    assert caplog.records == []                                  # 빈 값은 경고하지 않는다
+
+
+def test_blank_api_version_header_is_default(monkeypatch):
+    monkeypatch.setenv("AI_API_VERSION", "  ")
+    seen = []
+
+    def ok(req):
+        seen.append(req)
+        return httpx.Response(200, json={"content": [{"type": "text", "text": "답"}], "usage": {}})
+    HttpTransport("dummy-for-test", http=_http(ok)).send(model="m", system="s", user="u", max_tokens=5)
+    assert seen[0].headers["anthropic-version"] == aiclient.DEFAULT_API_VERSION
+
+
+def test_env_values_are_trimmed(env, monkeypatch):
+    monkeypatch.setenv("AI_MODEL", " claude-sonnet-5-5 ")
+    monkeypatch.setenv("AI_API_VERSION", " 2026-01-01 ")
+    monkeypatch.setenv("AI_TIMEOUT_SECONDS", " 15 ")
+    monkeypatch.setenv("AI_MAX_RETRIES", " 0 ")
+    monkeypatch.setenv("AI_MONTHLY_LIMIT_USD", " 3.5 ")
+    monkeypatch.setenv("AI_PRICE_INPUT_PER_MTOK", " 1 ")
+    monkeypatch.setenv("AI_PRICE_OUTPUT_PER_MTOK", "2")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy-for-test")
+    cli = AIClient(env["con"])
+    assert cli.model == "claude-sonnet-5-5" and cli.transport.api_version == "2026-01-01"
+    assert cli.transport.timeout == 15.0 and cli.transport.retries == 0
+    assert aiclient.limit_for(env["con"], "plan_qa") == 3.5
+    assert aiclient.price("anything") == (1.0, 2.0)
+
+
+@pytest.mark.parametrize("name,bad", [
+    ("AI_TIMEOUT_SECONDS", "abc"), ("AI_TIMEOUT_SECONDS", "0"), ("AI_TIMEOUT_SECONDS", "-5"), ("AI_TIMEOUT_SECONDS", "inf"),
+    ("AI_MAX_RETRIES", "two"), ("AI_MAX_RETRIES", "1.5"), ("AI_MAX_RETRIES", "-1"),
+    ("AI_MONTHLY_LIMIT_USD", "nan"), ("AI_MONTHLY_LIMIT_USD", "$20"), ("AI_MONTHLY_LIMIT_USD", "-1"),
+])
+def test_bad_number_env_uses_default_and_warns_once(env, monkeypatch, caplog, name, bad):
+    monkeypatch.setattr(aiclient, "_warned", set())
+    monkeypatch.setenv(name, bad)
+    defaults = {"AI_TIMEOUT_SECONDS": aiclient.DEFAULT_TIMEOUT, "AI_MAX_RETRIES": aiclient.DEFAULT_RETRIES,
+                "AI_MONTHLY_LIMIT_USD": aiclient.DEFAULT_LIMIT_USD}
+
+    def read():
+        if name == "AI_MONTHLY_LIMIT_USD":
+            return aiclient.limit_for(env["con"], "plan_qa")
+        t = HttpTransport("dummy-for-test", http=_http(lambda r: httpx.Response(500)))
+        return t.timeout if name == "AI_TIMEOUT_SECONDS" else t.retries
+    with caplog.at_level("WARNING", logger="app.ai.client"):
+        assert read() == defaults[name]
+        assert read() == defaults[name]
+    warns = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warns) == 1 and name in warns[0].getMessage() and bad not in warns[0].args      # 값은 남기지 않는다
+
+
+def test_bad_limit_env_still_stops_calls(env, monkeypatch):
+    # nan 한도는 비교가 늘 거짓이라 멈추지 못한다. 기본값으로 돌아가 한도가 지켜져야 한다
+    monkeypatch.setenv("AI_MONTHLY_LIMIT_USD", "nan")
+    con = env["con"]
+    con.execute("INSERT INTO ai_call(feature, ym, called_at, status, cost_usd) VALUES('plan_qa','202611','x','ok',?)",
+                (aiclient.DEFAULT_LIMIT_USD,))
+    con.commit()
+    fake = FakeTransport(["답"])
+    assert AIClient(con, fake).call("plan_qa", system="s", user="u", ym="202611").status == "budget" and fake.calls == []
+
+
+def test_bad_price_env_uses_table(monkeypatch, caplog):
+    monkeypatch.setattr(aiclient, "_warned", set())
+    monkeypatch.setenv("AI_PRICE_INPUT_PER_MTOK", "싸게")
+    monkeypatch.setenv("AI_PRICE_OUTPUT_PER_MTOK", "10")
+    with caplog.at_level("WARNING", logger="app.ai.client"):
+        assert aiclient.price("claude-opus-5-5") == aiclient.PRICES["claude-opus-5-5"]
+        assert aiclient.price("claude-opus-5-5") == aiclient.PRICES["claude-opus-5-5"]
+    assert len(caplog.records) == 1
+    monkeypatch.setenv("AI_PRICE_INPUT_PER_MTOK", "-3")          # 음수 가격은 비용을 줄여 한도를 비켜 가므로 받지 않는다
+    assert aiclient.price("claude-opus-5-5") == aiclient.PRICES["claude-opus-5-5"]
+
+
 # ------------------------------------------------------------------ HTTP 층: 시간 제한과 재시도
 def _http(handler):
     return httpx.Client(transport=httpx.MockTransport(handler))

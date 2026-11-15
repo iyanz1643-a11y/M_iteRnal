@@ -6,6 +6,8 @@
   부르기 전에 이번 달 쓴 비용과 이번 호출의 최대 추정 비용을 더해 한도를 넘으면 부르지 않는다.
 - 부를 때마다 ai_call 에 쓴 토큰과 비용 추정을 남긴다. 키, 프롬프트 본문, 응답 본문은 남기지 않는다.
 - 시간 제한 AI_TIMEOUT_SECONDS, 재시도 AI_MAX_RETRIES. 재시도는 시간 초과, 연결 실패, 408, 429, 5xx, 529 에서만 한다.
+- AI_ 환경 변수가 없거나 비었거나 공백뿐이면 기본값을 쓴다. 숫자 자리에 숫자가 아니거나 범위 밖의 값이 오면
+  기본값을 쓰고 변수 이름만 담아 경고를 한 번 남긴다. 값 자체는 로그에 남기지 않는다.
 - 시험에서는 FakeTransport 를 넣는다. 실제 API 는 부르지 않는다.
 
 anthropic 패키지는 설치되어 있지 않아 httpx 로 Messages API 를 직접 부른다.
@@ -13,6 +15,8 @@ anthropic 패키지는 설치되어 있지 않아 httpx 로 Messages API 를 직
 """
 from __future__ import annotations
 
+import logging
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -51,6 +55,35 @@ ERROR_MESSAGE = "AI 를 부르지 못했습니다. 잠시 뒤 다시 시도하�
 
 RETRY_STATUS = {408, 429, 500, 502, 503, 504, 529}
 
+log = logging.getLogger(__name__)
+_warned: set = set()
+
+
+def env_str(name: str, default: str | None = None) -> str | None:
+    """없거나 비었거나 공백뿐이면 default. 앞뒤 공백은 지운다."""
+    raw = (os.environ.get(name) or "").strip()
+    return raw or default
+
+
+def env_number(name: str, default, cast=float, *, low: float = 0.0, low_open: bool = False):
+    """숫자 환경 변수. 비면 default, 숫자가 아니거나 유한하지 않거나 low 아래면 default 와 경고 한 번.
+
+    low_open 이면 low 자체도 받지 않는다. 한도가 nan 이면 비교가 늘 거짓이 되어 멈추지 못하므로 막는다.
+    """
+    raw = env_str(name)
+    if raw is None:
+        return default
+    try:
+        val = cast(raw)
+    except (TypeError, ValueError):
+        val = None
+    if val is not None and math.isfinite(val) and (val > low if low_open else val >= low):
+        return val
+    if (name, raw) not in _warned:
+        _warned.add((name, raw))
+        log.warning("환경 변수 %s 의 값을 쓸 수 없어 기본값 %s 을 씁니다", name, default)
+    return default
+
 
 class TransportError(Exception):
     """API 호출 실패. 메시지에는 종류와 상태 번호만 둔다. 응답 본문과 키는 담지 않는다."""
@@ -78,9 +111,9 @@ class Reply:
 
 
 def price(model: str) -> tuple:
-    env_in, env_out = os.environ.get("AI_PRICE_INPUT_PER_MTOK"), os.environ.get("AI_PRICE_OUTPUT_PER_MTOK")
-    if env_in and env_out:
-        return float(env_in), float(env_out)
+    env_in, env_out = env_number("AI_PRICE_INPUT_PER_MTOK", None), env_number("AI_PRICE_OUTPUT_PER_MTOK", None)
+    if env_in is not None and env_out is not None:
+        return env_in, env_out
     return PRICES.get(model, PRICE_FALLBACK)
 
 
@@ -103,9 +136,9 @@ class HttpTransport:
         import httpx
 
         self._key = api_key
-        self.timeout = timeout if timeout is not None else float(os.environ.get("AI_TIMEOUT_SECONDS", DEFAULT_TIMEOUT))
-        self.retries = retries if retries is not None else int(os.environ.get("AI_MAX_RETRIES", DEFAULT_RETRIES))
-        self.api_version = api_version or os.environ.get("AI_API_VERSION", DEFAULT_API_VERSION)
+        self.timeout = timeout if timeout is not None else env_number("AI_TIMEOUT_SECONDS", DEFAULT_TIMEOUT, low_open=True)
+        self.retries = retries if retries is not None else env_number("AI_MAX_RETRIES", DEFAULT_RETRIES, int)
+        self.api_version = api_version or env_str("AI_API_VERSION", DEFAULT_API_VERSION)
         self._httpx = httpx
         self._http = http or httpx.Client(timeout=httpx.Timeout(self.timeout, connect=min(10.0, self.timeout)))
         self._sleep = sleep
@@ -177,7 +210,7 @@ def limit_for(con, feature: str) -> float:
     r = con.execute("SELECT monthly_limit_usd FROM ai_budget WHERE feature=? ORDER BY budget_id DESC LIMIT 1", (feature,)).fetchone()
     if r:
         return float(r[0])
-    return float(os.environ.get("AI_MONTHLY_LIMIT_USD", DEFAULT_LIMIT_USD))
+    return float(env_number("AI_MONTHLY_LIMIT_USD", DEFAULT_LIMIT_USD))
 
 
 def set_limit(con, feature: str, usd: float, by: str) -> None:
@@ -229,7 +262,7 @@ class AIClient:
 
     con: object
     transport: object = None
-    model: str = field(default_factory=lambda: os.environ.get("AI_MODEL") or DEFAULT_MODEL)
+    model: str = field(default_factory=lambda: env_str("AI_MODEL", DEFAULT_MODEL))
 
     def __post_init__(self):
         store.ensure(self.con)

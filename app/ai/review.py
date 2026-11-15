@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import pathlib
 import re
 from dataclasses import dataclass
@@ -27,7 +26,7 @@ from dataclasses import dataclass
 from app import db
 from app.ai import checks, guides, store
 from app.ai import context as aictx
-from app.ai.client import AIClient
+from app.ai.client import AIClient, env_str
 
 FEATURE = "review"
 MAX_ROUNDS = 3
@@ -69,7 +68,7 @@ def load_panel(path: str | None = None) -> dict:
     꼴: {"version": "...", "shape": {"name": "다빈치", "role": "..."},
          "seats": [{"key": "themis", "name": "테미스", "instinct": "...", "role": "..."}, ... 일곱 개]}
     """
-    path = path or os.environ.get("AI_KNIGHTS_FILE")
+    path = path or env_str("AI_KNIGHTS_FILE")
     if not path:
         return DEFAULT_PANEL
     p = pathlib.Path(path)
