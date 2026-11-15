@@ -29,9 +29,9 @@ groups:
          desc: "13회차·25회차 유지율, 위험 계약, 석 달 안 13회차 도래"}
       - {id: my-education, name: 내 교육, path: /my/education, roles: {manager: self, agent: self}, phase: 2, status: built,
          desc: "필수 과정 수료 현황, 수료 이력, 기한"}
-      - {id: my-career, name: 커리어패스, path: /my/career, roles: {manager: self, agent: self}, phase: 3, status: planned,
+      - {id: my-career, name: 커리어패스, path: /my/career, roles: {manager: self, agent: self}, phase: 3, status: built,
          desc: "현재 단계, 다음 단계의 기준, 남은 양, 목표 역산"}
-      - {id: my-cert, name: 인증, path: /my/cert, roles: {manager: self, agent: self}, phase: 3, status: planned,
+      - {id: my-cert, name: 인증, path: /my/cert, roles: {manager: self, agent: self}, phase: 3, status: built,
          desc: "MDRT와 우수인증 진척, 연말 예상"}
 
   - id: promo
@@ -102,13 +102,13 @@ groups:
     name: 제도
     icon: "▲"
     items:
-      - {id: program-career, name: 커리어패스 운영, path: /program/career, roles: {main: all, manager: org}, phase: 3, status: legacy,
+      - {id: program-career, name: 커리어패스 운영, path: /program/career, roles: {main: all, manager: org}, phase: 3, status: built,
          desc: "주관 기관별 기준, 회차, 후보, 승인, 결과"}
-      - {id: program-cert, name: 인증과 MDRT, path: /program/cert, roles: {main: all, manager: org}, phase: 3, status: legacy,
+      - {id: program-cert, name: 인증과 MDRT, path: /program/cert, roles: {main: all, manager: org}, phase: 3, status: built,
          desc: "생명보험·손해보험 인증과 MDRT의 진척과 연말 예상"}
-      - {id: program-executive, name: 임원제도, path: /program/executive, roles: {main: all, manager: org}, phase: 3, status: legacy,
+      - {id: program-executive, name: 임원제도, path: /program/executive, roles: {main: all, manager: org}, phase: 3, status: built,
          desc: "관리자 임원제도와 설계사 임원제도"}
-      - {id: program-excellence, name: 영업우수, path: /program/excellence, roles: {main: all, manager: org}, phase: 3, status: legacy,
+      - {id: program-excellence, name: 영업우수, path: /program/excellence, roles: {main: all, manager: org}, phase: 3, status: built,
          desc: "영업우수설계사 선발과 수상 이력"}
 
   - id: sales
@@ -142,6 +142,8 @@ groups:
          desc: "조직, 설계사, 조직장, 인사 이동, 퇴사를 미리보기한 뒤 반영한다. 계약현황의 조직 경로로 조직도 만든다"}
       - {id: data-plan, name: 시상안, path: /data/plan, roles: {main: all}, phase: 1, status: built,
          desc: "보험사별 시상안을 원장에 쌓고 해석하고 승인한다"}
+      - {id: data-plan-qa, name: 시상안 묻고 답하기, path: /data/plan-qa, roles: {main: all}, phase: 3, status: built,
+         desc: "승인한 설계사 몫 시상안 줄만 근거로 AI 가 답한다. 근거 줄 번호와 원안 우선 문구. 설계사에게 여는 일은 D-27"}
       - {id: data-courses, name: 수료자 명부, path: /data/courses, roles: {main: all}, phase: 2, status: built,
          desc: "교육 수료 기록 화면으로 안내한다. 명부 올리기는 수료 기록 한 곳에서 한다"}
       - {id: data-statement, name: 정산서와 유지율, path: /data/statement, roles: {main: all}, phase: 3, status: built,
@@ -184,15 +186,17 @@ groups:
          desc: "보험사, 상품, 구분"}
       - {id: org-audit, name: 변경 기록, path: /org/audit, roles: {main: all}, phase: 1, status: built,
          desc: "누가 언제 무엇을 바꿨는지, 로그인과 접근 거부 기록"}
+      - {id: org-ai, name: AI 사용량과 한도, path: /org/ai, roles: {main: all}, phase: 3, status: built,
+         desc: "앱 안 AI 기능별 이번 달 호출, 토큰, 비용 추정과 월 한도. 한도를 고친다. D-26"}
 
   - id: review
     name: 심사함
     icon: "⚖"
     items:
-      - {id: review-requests, name: 심사 요청, path: /review/requests, roles: {main: all}, phase: 3, status: planned,
-         desc: "카드뉴스, 제안 리포트 서식, 안내문, 기준 문안을 7나이츠 심사에 올린다"}
-      - {id: review-results, name: 심사 결과와 결재, path: /review/results, roles: {main: all}, phase: 3, status: planned,
-         desc: "다빈치의 형상화, 일곱 본능의 의견, 회전 수, 사람의 최종 결재"}
+      - {id: review-requests, name: 심사 요청, path: /review/requests, roles: {main: all}, phase: 3, status: built,
+         desc: "카드뉴스, 제안 리포트 서식, 안내문, 기준 문안, 랜딩 문구를 7나이츠 심사에 올린다. 심사는 작업 워커가 3회전까지 돈다"}
+      - {id: review-results, name: 심사 결과와 결재, path: /review/results, roles: {main: all}, phase: 3, status: built,
+         desc: "다빈치의 형상화, 일곱 본능의 의견, 회전 수, 사람의 최종 결재. 명세가 없는 자리는 명세 대기. 고객에게 나가는 글은 통과해야 승인한다. D-15"}
 
   - id: common
     name: 공통

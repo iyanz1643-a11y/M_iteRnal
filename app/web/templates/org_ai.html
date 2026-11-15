@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{# AI 사용량과 한도. 메인 관리자만. 기능별 이번 달 호출 수, 토큰, 쓴 비용 추정, 월 한도. 한도는 지우지 않고 줄을 더해 바꾼다.
+   비용은 토큰 수와 가격표로 낸 추정이다. 한도 금액은 D-26 이 정해지기 전의 가정이다 #}
+{% block body %}
+<p class="eyebrow">조직·설정 · 전체 · {{ ym|ymko }}</p>
+<h1 class="display">AI 사용량과 한도</h1>
+<p class="lede">앱 안 AI 기능의 이번 달 사용량과 기능별 월 한도입니다. 한도에 닿으면 그 기능은 AI 를 부르지 않고 멈추며, 사람이 처리합니다.</p>
+{% if not on %}<div class="alert ai-off" role="status" style="margin-top:24px">{{ OFF }} 한도는 지금 정해 두실 수 있습니다.</div>{% endif %}
+{% if flash %}<div class="{{ 'okmsg' if flash.kind == 'ok' else 'alert bad' }}" role="status" style="margin-top:20px">{{ flash.text }}</div>{% endif %}
+
+<div class="grid g3 keep" style="margin-top:28px">
+  <div class="card"><div class="k"><span class="dot {{ '' if on else 'off' }}"></span>상태</div><div class="mid">{{ '켜짐' if on else '꺼짐' }}</div></div>
+  <div class="card"><div class="k">이번 달 호출</div><div class="mid">{{ rows|sum(attribute='calls') }}<span class="unit">번</span></div></div>
+  <div class="card"><div class="k">비용 추정 · 달러</div><div class="mid">{{ '%.2f'|format(rows|sum(attribute='cost_usd')) }}</div></div>
+</div>
+<p class="cap">모델 {{ model }} · 비용은 토큰 수로 낸 추정이고 실제 청구와 다를 수 있습니다. 기본 한도는 기능마다 {{ default_limit|n }}달러로 둔 가정입니다(D-26).</p>
+
+<h2 class="sec">기능별 사용량</h2>
+<div class="card tablecard"><table>
+<tr><th>기능</th><th class="hide-sm">호출</th><th class="hide-sm hide-md">토큰 입력 · 출력</th><th>비용 추정 / 한도</th><th class="hide-sm">막힘 · 오류</th><th class="hide-sm hide-md">결재 · 승인율</th></tr>
+{% for r in rows %}
+<tr><td class="strong wrap-sm">{{ r.name }}{% if r.guide_status == 'pending' %} <span class="chip">제작지침 대기</span>{% endif %}
+  <span class="cap ai-ver" style="display:block;margin:2px 0 0;font-weight:400">{{ r.guide_version }}</span>
+  <div class="sm-sub"><span>호출 {{ r.calls }}번{% if r.blocked %} · 막힘 {{ r.blocked }}{% endif %}</span></div></td>
+<td class="hide-sm num">{{ r.calls }}</td>
+<td class="hide-sm hide-md num">{{ r.input_tokens|won }} · {{ r.output_tokens|won }}</td>
+<td style="min-width:150px"><div class="ai-meter" role="img" aria-label="한도의 {{ r.pct }}퍼센트"><i class="{{ 'bad' if r.reached else ('warn' if r.pct >= 80 else '') }}" style="width:{{ r.pct }}%"></i></div>
+  <div class="cap" style="margin:4px 0 0">{{ '%.2f'|format(r.cost_usd) }} / {{ r.limit_usd|n }}달러{% if r.reached %} · <span class="chip bad">한도 닿음</span>{% endif %}</div></td>
+<td class="hide-sm">{{ r.blocked }} · {{ r.errors }}</td>
+<td class="hide-sm hide-md">{{ r.decided }}건{% if r.approval_rate is not none %} · {{ (r.approval_rate * 100)|round|int }}%{% endif %}</td></tr>
+{% endfor %}
+</table></div>
+
+<h2 class="sec">월 한도 고치기</h2>
+<form class="card wide" method="post" action="{{ path }}"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  <div class="frow">
+    <label class="f">기능<select name="feature">{% for r in rows %}<option value="{{ r.feature }}">{{ r.name }} · 지금 {{ r.limit_usd|n }}달러</option>{% endfor %}</select></label>
+    <label class="f">월 한도 · 달러<input type="number" name="limit_usd" min="0" max="{{ LIMIT_MAX|int }}" step="0.01" inputmode="decimal" required></label>
+  </div>
+  <div class="actions"><button class="primary" type="submit">한도 바꾸기</button></div>
+  <p class="cap" style="margin:0">0 으로 두면 그 기능은 AI 를 부르지 않습니다. 바꾼 기록은 지우지 않고 남으며 변경 기록에도 보입니다.</p>
+</form>
+<p class="cap">금지 표현 목록 {{ forbidden_version }}. 테미스 명세를 받기 전의 시작 목록입니다.</p>
+{% endblock %}

@@ -22,6 +22,7 @@ from app import db
 from app.ops import health, observe
 from app.ops import schema as ops_schema
 from app.web.deps import HERE, PASSWORD_PATH, NeedLogin, NeedPasswordChange, csrf_protect, guard, page, templates
+from app.web.routes import ai as ai_routes
 from app.web.routes import auth, board, card, home, me, notify, org, promo, schedule, staff, team
 from app.web.routes import coaching as coaching_routes
 from app.web.routes import consult as consult_routes
@@ -35,6 +36,7 @@ from app.web.routes import my as my_routes
 from app.web.routes import org_settings as settings_routes
 from app.web.routes import perf as perf_routes
 from app.web.routes import persistency as persist_routes
+from app.web.routes import program as program_routes
 from app.web.routes import sales as sales_routes
 from app.web.routes import settle as settle_routes
 
@@ -126,6 +128,8 @@ app.include_router(settle_routes.router)        # 수수료·점검 묶음 다�
 app.include_router(sales_routes.router)         # 영업·제안 묶음의 내 DB, DB 배정과 성과, 고객, 가이드 자료. 파트 J, S4
 app.include_router(coaching_routes.router)      # 팀 관리 묶음의 면담 기록과 활동 깔때기. 파트 J, S4
 app.include_router(consult_routes.router)       # 로그인 전 공개 화면: 보장분석 상담 신청 /consult. 스위치 APP_CONSULT_OPEN, 기본 꺼짐. guard 예외 목록에 함께 적는다
+app.include_router(program_routes.router)       # 제도 묶음 네 화면과 내 진척의 커리어패스, 인증. 파트 I, S4
+app.include_router(ai_routes.router)            # 앱 안 AI: 심사함 두 화면, 시상안 묻고 답하기 /data/plan-qa, AI 사용량과 한도 /org/ai. S4
 
 
 @app.get("/favicon.ico", include_in_schema=False)

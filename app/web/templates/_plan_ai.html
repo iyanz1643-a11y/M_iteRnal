@@ -1,0 +1,46 @@
+{# 시상안 줄 상세와 AI 해석 초안. data_plan.html 이 ai 가 있을 때 넣는다. 메인 관리자만 보는 화면이다.
+   초안은 원장 값을 바꾸지 않는다. 자동 점검에서 막힌 초안은 내용을 보이지 않고 문제만 보인다 #}
+{% set a = ai %}
+<article class="card board-open" id="ai" style="margin-top:20px">
+  <div class="notif-meta"><span>원장 줄 {{ a.line.line_id }}번</span><span>{{ a.line.sheet }} {{ a.line.row_no }}행</span>
+    <span class="chip">{{ PS_KO.get(a.line.parse_status, a.line.parse_status) }}</span><span class="chip {{ 'good' if a.line.review_status == 'approved' else ('bad' if a.line.review_status == 'rejected' else '') }}">{{ REVIEW_KO.get(a.line.review_status, a.line.review_status) }}</span></div>
+  <h2 class="confirm-title board-title">줄 상세</h2>
+  <dl class="facts" style="margin-top:12px">{% for k, v in a.raw %}<div><dt>{{ k }}</dt><dd>{{ v }}</dd></div>{% endfor %}</dl>
+  {% if a.line.parse_note %}<p class="cap">기계 해석 메모: {{ a.line.parse_note }}</p>{% endif %}
+
+  <h3 class="subsec">AI 해석 초안</h3>
+  {% if not a.on %}<div class="alert ai-off" role="status">{{ a.off }}</div>{% endif %}
+  <form method="post" action="/data/plan" class="actions"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="doc" value="{{ doc.plan_doc_id }}"><input type="hidden" name="line" value="{{ a.line.line_id }}">
+    <button class="primary" name="action" value="ai_interpret" {{ 'disabled' if not a.on }}>AI 해석 초안</button>
+    <a class="pill quiet big-pill" href="/data/plan?doc={{ doc.plan_doc_id }}">닫기</a>
+  </form>
+  <div class="alert ai-gate" style="margin-top:16px">{{ a.ledger_safe }}</div>
+
+  {% set o = a.latest %}
+  {% if o %}
+  <div class="ai-draft">
+    <div class="notif-meta"><span>초안 {{ o.output_id }}번</span><span>{{ o.created_at|when }}</span><span class="chip {{ 'blue' if o.status == 'draft' else 'warn' }}">{{ o.status_ko }}</span>
+      {% if o.decision %}<span class="chip {{ 'good' if o.decision == 'approved' else 'bad' }}">{{ o.decision_ko }} · {{ o.decided_by }}</span>{% endif %}</div>
+    {% if o.rows %}
+      <dl class="facts" style="margin-top:12px">{% for k, v in o.rows %}<div><dt>{{ k }}</dt><dd>{% if v == '원문 확인' %}<span class="chip warn">원문 확인</span>{% else %}{{ v }}{% endif %}</dd></div>{% endfor %}</dl>
+      {% if o.quote %}<div class="k" style="margin-top:12px">근거 문구</div><blockquote class="ai-quote">{{ o.quote }}</blockquote>{% endif %}
+      {% if o.note %}<div class="k" style="margin-top:8px">더 볼 점</div><p class="ai-reason">{{ o.note }}</p>{% endif %}
+    {% elif o.status == 'blocked' %}<p class="cap">초안이 자동 점검을 통과하지 못해 내용을 보여 드리지 않습니다. 원문을 직접 해석해 주세요.</p>
+    {% else %}<p class="cap">{{ o.status_ko }}. 초안이 없습니다.</p>{% endif %}
+    {% if o.problems_ko %}<div class="k" style="margin-top:8px">문제</div><ul class="cap" style="margin:4px 0 0">{% for p in o.problems_ko %}<li>{{ p }}</li>{% endfor %}</ul>{% endif %}
+    {% if o.evidence %}<div class="k" style="margin-top:12px">근거로 넣은 줄</div>
+      <div class="ai-evidence">{% for e in o.evidence %}<div class="ai-ev"><span class="ai-no">[{{ e.no }}]</span><div><div class="cap" style="margin:0">{{ e.source|replace('plan_line:', '원장 줄 ') }}{{ '번' if e.source.startswith('plan_line:') }}</div><div class="ai-ev-text">{{ e.text }}</div></div></div>{% endfor %}</div>{% endif %}
+    <p class="cap">지침 {{ o.guide_version }}</p>
+    {% if o.decision_reason %}<p class="cap">반려 사유: {{ o.decision_reason }}</p>{% endif %}
+    {% if o.can_decide %}
+    <form method="post" action="/data/plan" class="wide" style="margin-top:8px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input type="hidden" name="doc" value="{{ doc.plan_doc_id }}"><input type="hidden" name="line" value="{{ a.line.line_id }}"><input type="hidden" name="output" value="{{ o.output_id }}"><input type="hidden" name="action" value="ai_decide">
+      <label class="f">반려 사유 · 반려할 때 적어 주세요<input class="sm" type="text" name="reason" maxlength="300"></label>
+      <div class="actions"><button class="primary" name="decision" value="approve">원문과 맞아 승인</button><button class="second" name="decision" value="reject">반려</button></div>
+    </form>
+    {% endif %}
+  </div>
+  {% else %}<p class="cap">아직 만든 초안이 없습니다.</p>{% endif %}
+  {% if a.older %}<p class="cap">앞선 초안: {% for x in a.older %}{{ x.output_id }}번 {{ x.status_ko }}{% if x.decision_ko %} · {{ x.decision_ko }}{% endif %}{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
+</article>

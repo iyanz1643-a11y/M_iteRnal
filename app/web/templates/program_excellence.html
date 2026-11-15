@@ -1,0 +1,88 @@
+{% extends "base.html" %}{% import "_program.html" as pg with context %}
+{% block body %}
+<p class="eyebrow">{% if x.as_of_ym %}{{ x.as_of_ym|ymko }} 기준 · {% endif %}{{ SCOPES[ctx.scope] }}</p>
+<h1 class="display">영업우수</h1>
+<p class="lede">{% if x.year %}{{ x.year }}년 기준을 채웠고 아직 선발하지 않은 사람이 {{ x.candidates|length }}명입니다.{% else %}아직 계산한 판정이 없습니다.{% endif %} 선발과 무르기는 메인 관리자가 합니다.</p>
+<p class="cap perf-fresh"><span class="dot {{ '' if x.run_at else 'off' }}"></span>{% if x.run_at %}{{ x.run_at|when }}에 계산한 판정입니다.{% else %}메인 관리자가 기존 운영 도구에서 인증 계산을 돌리면 보입니다.{% endif %}</p>
+{% for r in firsts %}{{ pg.version_line(r.issuer, r.version, r.program_name) }}{% endfor %}
+{{ pg.basis_box(x.basis) }}
+{% if error %}<div class="alert bad" role="alert" style="margin-top:16px">{{ error }}</div>{% endif %}
+{% if done %}<div class="okmsg" id="done" role="status" style="margin-top:16px">{{ '선발했습니다. 판정에 쓴 기준의 판과 함께 남겼습니다.' if done == 'select' else '선발을 물렀습니다. 사유를 남겼고 기록은 지우지 않습니다.' }}</div>{% endif %}
+
+<div class="grid g3 keep" style="margin-top:24px">
+  <div class="card"><div class="k"><span class="dot {{ '' if x.candidates else 'off' }}"></span>선발 후보</div><div class="mid" data-n="candidates">{{ x.candidates|length }}<span class="unit">명</span></div></div>
+  <div class="card"><div class="k">{{ x.year or '' }}년 선발</div><div class="mid">{{ x.selections|length }}<span class="unit">명</span></div></div>
+  <div class="card"><div class="k">수상 이력</div><div class="mid">{{ x.history|length }}<span class="unit">명</span></div></div>
+</div>
+
+{% macro hidden_fields(action) %}<input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="action" value="{{ action }}">{% endmacro %}
+{% if ask == 'select' and target %}
+<div class="card confirm-box" id="confirm" style="margin-top:20px"><div class="k" style="color:var(--red)">영업우수 선발 · 메인 관리자</div>
+  <div class="confirm-title">{{ target.name }}님을 {{ x.year }}년 {{ target.program_name }}로 선발할까요</div>
+  <p class="cap" style="margin:0">{{ target.code }} · 이 판정에 쓴 기준: {{ pg.version_short(target.issuer, target.version) }}</p>
+  <ul class="notes"><li>선발은 수상 이력과 명예의전당 누적 횟수에 듭니다.</li><li>무를 수 있지만 그사이 화면과 명함에 나간 표시는 되돌리지 못합니다.</li></ul>
+  <form class="wide" method="post" action="{{ path }}">{{ hidden_fields('select') }}
+    <input type="hidden" name="agent" value="{{ target.agent_id }}"><input type="hidden" name="prog" value="{{ target.program_code }}"><input type="hidden" name="year" value="{{ x.year }}">
+    <label class="f">선발 사유 · 꼭 적습니다<textarea name="note" required maxlength="{{ NOTE_MAX }}" placeholder="예: 연간 기준을 모두 채워 선발합니다">{{ form.note or '' }}</textarea></label>
+    <label class="confirm-check"><input type="checkbox" name="agree" value="yes" required>선발이 수상 이력에 남는다는 것을 확인했습니다</label>
+    <div class="confirm-acts"><button class="danger" type="submit">확인하고 선발합니다</button><a class="pill quiet" href="{{ path }}">그만두기</a></div>
+  </form></div>
+{% elif ask == 'revoke' and target %}
+<div class="card confirm-box" id="confirm" style="margin-top:20px"><div class="k" style="color:var(--red)">선발 무르기 · 메인 관리자</div>
+  <div class="confirm-title">{{ target.name }}님의 {{ target.year }}년 {{ target.program_name }} 선발을 무를까요</div>
+  <ul class="notes"><li>무르면 수상 이력과 명예의전당 누적 횟수에서 빠집니다. 줄은 지우지 않습니다.</li><li>무르기는 열린 결정이라 사유를 적고 무르게 둔 가정입니다.</li></ul>
+  <form class="wide" method="post" action="{{ path }}">{{ hidden_fields('revoke') }}
+    <input type="hidden" name="sel" value="{{ target.selection_id }}">
+    <label class="f">무르는 사유 · {{ REVOKE_MIN }}자 이상<textarea name="note" required minlength="{{ REVOKE_MIN }}" maxlength="{{ NOTE_MAX }}" placeholder="예: 선발 인원을 다시 정합니다">{{ form.note or '' }}</textarea></label>
+    <label class="confirm-check"><input type="checkbox" name="agree" value="yes" required>무른 기록과 사유가 남는다는 것을 확인했습니다</label>
+    <div class="confirm-acts"><button class="danger" type="submit">확인하고 무릅니다</button><a class="pill quiet" href="{{ path }}">그만두기</a></div>
+  </form></div>
+{% endif %}
+
+<h2 class="sec">선발 후보</h2>
+{% if x.candidates %}<div class="card tablecard"><table>
+<tr><th>사람</th><th class="hide-sm">프로그램</th><th>진척</th>{% if is_main %}<th></th>{% endif %}</tr>
+{% for r in x.candidates %}<tr data-agent="{{ r.agent_id }}" data-prog="{{ r.program_code }}"><td class="strong wrap-sm">{{ r.name }} <span class="cap">{{ r.code }}</span><div class="sm-sub"><span>{{ r.program_name }}</span></div></td>
+<td class="hide-sm">{{ r.program_name }}</td><td>{{ pg.rate(r.progress_rate) }}</td>
+{% if is_main %}<td class="acts"><a class="ghost" href="{{ path }}?ask=select&agent={{ r.agent_id }}&prog={{ r.program_code }}#confirm">선발</a></td>{% endif %}</tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">선발할 후보가 없습니다</div><div class="cap">기준을 채운 사람 가운데 그 해 수상 기록이나 선발이 없는 사람이 후보입니다.</div></div>{% endif %}
+
+<h2 class="sec">{{ x.year or '' }}년 선발</h2>
+{% if x.selections %}<div class="card tablecard"><table>
+<tr><th>사람</th><th class="hide-sm">프로그램</th><th class="hide-sm">사유</th><th class="hide-sm hide-md">판정 기준</th><th>선발 시각</th>{% if is_main %}<th></th>{% endif %}</tr>
+{% for s in x.selections %}<tr data-sel="{{ s.selection_id }}"><td class="strong wrap-sm">{{ s.name }} <span class="cap">{{ s.code }}</span><div class="sm-sub"><span>{{ s.program_name }}</span>{% if s.note %}<span>{{ s.note }}</span>{% endif %}</div></td>
+<td class="hide-sm">{{ s.program_name }}</td><td class="hide-sm cell-wrap">{{ s.note or '-' }}</td><td class="hide-sm hide-md">{{ s.version_label or '판을 남기기 전' }}</td>
+<td>{{ s.selected_at|when }}</td>
+{% if is_main %}<td class="acts"><a class="ghost" href="{{ path }}?ask=revoke&sel={{ s.selection_id }}#confirm">무르기</a></td>{% endif %}</tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">이 해에 선발한 사람이 없습니다</div></div>{% endif %}
+
+<h2 class="sec">판정</h2>
+{% if x.rows %}<div class="card tablecard"><table>
+<tr><th>사람</th><th class="hide-sm">프로그램</th><th>진척</th><th class="hide-sm">지금</th><th>연말</th></tr>
+{% for r in x.rows %}<tr><td class="strong wrap-sm">{{ r.name }} <span class="cap">{{ r.code }}</span><div class="sm-sub"><span>{{ r.program_name }} · {{ '달성' if r.achieved else '미달' }}</span></div></td>
+<td class="hide-sm">{{ r.program_name }}</td><td>{{ pg.rate(r.progress_rate) }}</td>
+<td class="hide-sm">{% if r.achieved %}<span class="chip good">달성</span>{% else %}<span class="chip">미달</span>{% endif %}</td><td>{{ pg.projected(r.projected) }}</td></tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">범위 안에 판정한 사람이 없습니다</div></div>{% endif %}
+
+<h2 class="sec">수상 이력</h2>
+{% if x.history %}<div class="card tablecard"><table>
+<tr><th>사람</th><th class="hide-sm">프로그램</th><th>횟수</th><th class="hide-sm">해</th></tr>
+{% for h in x.history %}<tr><td class="strong wrap-sm">{{ h.name }} <span class="cap">{{ h.code }}</span><div class="sm-sub"><span>{{ h.program_name }}</span><span>{% for y in h.years %}{{ y.year }}{{ '(앱 선발)' if y.source == 'selection' }}{{ ', ' if not loop.last }}{% endfor %}</span></div></td>
+<td class="hide-sm">{{ h.program_name }}</td><td>{{ h.count }}회</td>
+<td class="hide-sm"><div class="chips">{% for y in h.years %}<span class="chip {{ 'blue' if y.source == 'selection' }}">{{ y.year }}{{ ' 앱 선발' if y.source == 'selection' }}</span>{% endfor %}</div></td></tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">아직 수상 이력이 없습니다</div></div>{% endif %}
+
+{% if voided %}
+<h2 class="sec">무른 선발</h2>
+<div class="card tablecard"><table>
+<tr><th>사람</th><th class="hide-sm">프로그램</th><th>무른 시각</th><th class="hide-sm">사유</th></tr>
+{% for s in voided %}<tr><td class="strong wrap-sm">{{ s.name }} <span class="cap">{{ s.code }}</span><div class="sm-sub"><span>{{ s.void_reason }}</span></div></td><td class="hide-sm">{{ s.program_name }}</td>
+<td>{{ s.voided_at|when }}</td><td class="hide-sm cell-wrap">{{ s.void_reason }}</td></tr>{% endfor %}
+</table></div>
+{% endif %}
+<p class="cap" style="margin-top:20px">수상 이력은 수상 기록과 앱 선발을 합쳐 셉니다. 같은 해가 둘 다 있으면 수상 기록 하나로 셉니다. <a href="/perf/hall">명예의전당</a></p>
+{% endblock %}

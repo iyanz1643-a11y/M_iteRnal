@@ -104,6 +104,21 @@ ACTION_KO = {
     "close_reopen": "월 마감 해제",
     "recon_run": "대사 다시 돌림",
     "statement_load": "정산서·유지율 적재",
+    # 앱 안 AI. 행위 코드는 app/web/routes/ai.py 와 app/web/routes/data.py 의 _plan_ai 와 같다
+    "ai_review_request": "7나이츠 심사 요청",
+    "ai_review_approve": "심사 결재 승인",
+    "ai_review_reject": "심사 결재 반려",
+    "ai_plan_interpret": "시상안 AI 해석 초안 만듦",
+    "ai_plan_approve": "시상안 AI 해석 초안 승인",
+    "ai_plan_reject": "시상안 AI 해석 초안 반려",
+    "ai_limit_set": "AI 월 한도 바꿈",
+    # 제도. 행위 코드는 app/engine/career.py, app/engine/certification.py 와 같다
+    "career_round_open": "커리어 회차 엶",
+    "career_approve": "승격 승인",
+    "career_reject": "승격 반려",
+    "career_revoke": "승격 결정 무름",
+    "excellence_select": "영업우수 선발",
+    "excellence_revoke": "영업우수 선발 무름",
 }
 
 # 누가 칸의 시스템 행위자

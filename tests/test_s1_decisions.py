@@ -28,6 +28,7 @@ from app.engine import org_award as oa
 from app.engine import performance
 from app.engine import promotion as pm
 from app.engine import results as rs
+from app.periods import period_end, period_key, period_start, ym_add, ym_diff
 from app.web import auth, menu
 from tests.test_s1_verify import _build as build_fake_real
 
@@ -578,9 +579,92 @@ def _own_subtotals(con, agent_id) -> set:
     return out
 
 
+GOAL_COL = {"converted_premium": "converted_premium", "new_count": "net_count", "net_count": "net_count",
+            "monthly_premium": "monthly_premium", "commission_amount": "commission_amount"}   # 커리어 기준이 저장된 업적에서 읽는 칸
+BACKSOLVE_COL = {"converted_premium": "converted_premium", "new_count": "net_count", "net_count": "net_count",
+                 "monthly_premium": "monthly_premium"}                                         # 목표 역산을 하는 기간 합계 지표
+
+
+def _ceil_div(a, b):
+    return -(-a // b)
+
+
+def _own_progress(con, agent_id, ym) -> set:
+    """본인 목표와 커리어 기준에서 나오는 숫자. 내 커리어패스 /my/career 가 본인에게 보여 주는 값이다.
+
+    본인 목표 원장(agent_goal)의 목표, 지금까지, 남은 양, 남은 달 월 필요와, 지금 단계에서 다음 단계로 가는 기준마다의
+    판정 값, 남은 양, 목표 역산(지금까지, 남은 양, 월 필요)이다. 본인 금액에만 넣는다.
+    엔진(app/engine/career.py)을 부르지 않고 본인 줄만 직접 읽는다. 진행 중 기간의 실적은 업적 집계 규칙의 한 곳인
+    performance.tally 를 본인 한 사람으로만 부른다. 엔진이 남의 금액을 섞더라도 그 값이 본인 몫으로 들어오지 않게 하려는 것이다.
+    """
+    out = set()
+    if agent_id is None:
+        return out
+
+    def add(*values):
+        for v in values:
+            out.update(_ints(v))
+    tallies = {}
+
+    def own_tally(start):
+        if start not in tallies:
+            tallies[start] = performance.tally(con, start, ym, agent_ids=[agent_id]).get(agent_id) or performance.blank()
+        return tallies[start]
+
+    def months(pt, at):
+        return period_start(pt, at), period_end(pt, at)
+    for g in con.execute("SELECT period_type, period_key, metric, target_value FROM agent_goal WHERE agent_id=?", (agent_id,)):
+        try:
+            if g["period_key"] != period_key(g["period_type"], ym):
+                continue
+            start, end = months(g["period_type"], ym)
+        except ValueError:
+            continue
+        if g["metric"] not in performance.ROW_KEYS or g["target_value"] is None:
+            continue
+        so_far = own_tally(start)[g["metric"]] or 0
+        remaining = max(0, g["target_value"] - so_far)
+        left = ym_diff(end, ym)
+        add(g["target_value"], so_far, remaining)
+        if remaining and left > 0:
+            add(_ceil_div(remaining, left))
+    lvl = con.execute("""SELECT level_id FROM agent_career_history WHERE agent_id=? AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)
+                         ORDER BY effective_from DESC LIMIT 1""", (agent_id, ym, ym)).fetchone()
+    if not lvl:
+        return out
+    for c in con.execute("""SELECT metric, period_type, operator, value FROM career_promotion_criteria WHERE from_level_id=? AND effective_from<=?
+                            AND (effective_to IS NULL OR effective_to>=?)""", (lvl["level_id"], ym, ym)):
+        col, target = GOAL_COL.get(c["metric"]), c["value"]
+        if col is None or target is None:
+            continue
+        try:
+            key = period_key("quarter", ym_add(ym, -(int(ym[4:]) % 3))) if c["period_type"] == "quarter" else period_key(c["period_type"], ym)
+        except ValueError:
+            continue
+        row = con.execute(f"""SELECT s.{col} v FROM agent_performance_summary s JOIN calc_run r ON r.run_id=s.run_id AND r.status='done'
+                              WHERE s.agent_id=? AND s.period_type=? AND s.period_key=? ORDER BY s.run_id DESC LIMIT 1""",
+                          (agent_id, c["period_type"], key)).fetchone()
+        actual = row["v"] if row and row["v"] is not None else 0
+        add(actual, target - actual, actual - target)
+        if c["operator"] != ">=" or c["metric"] not in BACKSOLVE_COL or c["period_type"] not in ("month", "quarter", "half", "year"):
+            continue
+        if period_end(c["period_type"], ym) == ym:                       # 끝난 기간이면 다음 기간을 목표로 한다
+            start, end = months(c["period_type"], ym_add(ym, 1))
+            so_far = 0
+        else:
+            start, end = months(c["period_type"], ym)
+            so_far = own_tally(start)[BACKSOLVE_COL[c["metric"]]] or 0
+        remaining = max(0, target - so_far)
+        left = ym_diff(end, ym)
+        add(so_far, remaining)
+        if remaining and left > 0:
+            add(_ceil_div(remaining, left))
+    return out
+
+
 def _checkable(con, ctx, others, ym):
     """이 계정이 보면 안 되는 금액에서, 본인 금액과 이 계정의 화면에 나와도 되는 숫자와 겹치는 값을 뺀다.
-    본인 금액은 _secrets 의 본인 것과 수수료 내역의 본인 소계(_own_subtotals)다.
+    본인 금액은 _secrets 의 본인 것과 수수료 내역의 본인 소계(_own_subtotals)와 내 커리어패스의 본인 목표와 기준 값(_own_progress)이다.
     본인을 넣어 더한 범위 합계도 다른 사람의 금액이 섞여 있어 보면 안 되는 금액에 넣는다. 범위 합계 칸만 가져온다."""
     secret = _secrets(con, others, ym)
     if ctx["agent_id"] is not None and others:
@@ -588,7 +672,8 @@ def _checkable(con, ctx, others, ym):
             scope = {x + " 본인 포함" for x in f if "범위" in x}
             if scope:
                 secret.setdefault(v, set()).update(scope)
-    own = set(_secrets(con, {ctx["agent_id"]} if ctx["agent_id"] else set(), ym)) | _own_subtotals(con, ctx["agent_id"])
+    own = (set(_secrets(con, {ctx["agent_id"]} if ctx["agent_id"] else set(), ym)) | _own_subtotals(con, ctx["agent_id"])
+           | _own_progress(con, ctx["agent_id"], ym))
     public = _public(con, ym, ctx["agent_ids"])
     return {v: f for v, f in secret.items() if v not in public and v not in own}
 

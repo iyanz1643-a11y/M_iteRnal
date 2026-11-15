@@ -1,0 +1,66 @@
+{% extends "base.html" %}{% import "_perf.html" as pf %}{% import "_program.html" as pg with context %}
+{% block body %}
+<p class="eyebrow">{{ ym|ymko }} 기준 · 본인</p>
+<h1 class="display">내 커리어패스</h1>
+{% if not has_agent %}<div class="card" style="margin-top:24px"><div class="k">설계사 정보가 이어지지 않은 계정입니다</div><div class="cap">메인 관리자에게 계정과 사번 연결을 요청하세요.</div></div>
+{% elif not st or not st.level %}<div class="card" style="margin-top:24px"><div class="k">단계 이력이 없습니다</div><div class="cap">메인 관리자에게 커리어 단계 등록을 요청하세요.</div></div>
+{% else %}
+<p class="lede">{% if st.next_level %}{{ st.next_level.name }}까지 기준 {{ st.n_total }}개 가운데 {{ st.n_met }}개를 채웠습니다.{% else %}가장 높은 단계입니다.{% endif %}</p>
+{{ pf.fresh_line(fresh) }}
+
+<div class="grid g2" style="margin-top:24px">
+  <div class="card my-hero"><div class="k">지금 단계</div><div class="big word" data-level="{{ st.level.code }}">{{ st.level.name }}</div>
+    <div class="cap">{% if st.next_level %}다음 단계는 {{ st.next_level.name }}입니다{% else %}다음 단계가 없습니다{% endif %}</div></div>
+  {% if st.next_level %}<div class="card"><div class="ringbox">{{ ui.ring((st.n_met / st.n_total * 100) if st.n_total else 0, '다음 단계 기준 충족', color='var(--fill-green)' if st.eligible else 'var(--blue)') }}
+    <div><div class="k">다음 단계 기준</div><div class="mid">{{ st.n_met }}<span class="unit">/ {{ st.n_total }}개</span></div>
+    <div class="cap">{{ '모두 채웠습니다. 다음 회차에서 승인을 기다립니다' if st.eligible else '남은 기준을 아래에서 봅니다' }}</div></div></div></div>{% endif %}
+</div>
+
+{% if st.next_level %}
+<h2 class="sec">{{ st.next_level.name }}의 기준</h2>
+{{ pg.version_line(CAREER_ISSUER, st.version) }}
+<div class="grid g2" style="margin-top:12px">{% for c in st.criteria %}
+  <div class="card" data-metric="{{ c.metric }}"><div class="k">{{ c.metric_ko }} · {{ PERIOD_KO.get(c.period_type, c.period_type) }} {% if c.met %}<span class="chip good">충족</span>{% else %}<span class="chip warn">남음</span>{% endif %}</div>
+    <div class="mid">{% if c.hidden %}{{ pg.hidden() }}{% else %}{{ pg.val(c.actual, c.unit, c.metric) }}{% endif %}</div>
+    <div class="cap">기준 {{ pg.val(c.target, c.unit, c.metric) }} {{ OP_KO.get(c.op, c.op) }}{% if c.basis_key %} · {{ c.basis_key|pkey }} 값으로 판정{% endif %}</div>
+    {% if not c.met and not c.hidden %}
+      {% if c.remaining is not none %}<div class="cap">남은 양 {{ pg.val(c.remaining, c.unit, c.metric) }}{% if c.reach_ym %} · {{ c.reach_ym|ymko }}에 채웁니다{% endif %}</div>{% endif %}
+      {% set b = c.backsolve %}{% if b %}
+      <div class="backsolve" data-backsolve="{{ b.period_key }}"><div class="k">목표 역산 · {{ b.period_key|pkey }}</div>
+        {% if b.remaining > 0 and b.months_left > 0 %}<div class="mid" style="margin-top:4px">월 <span data-col="monthly">{{ pg.val(b.monthly_needed, c.unit, c.metric) }}</span></div>
+        <div class="cap">남은 {{ b.months_left }}달 동안 월 {{ pg.val(b.monthly_needed, c.unit, c.metric) }}씩 채우면 기준에 닿습니다</div>
+        {% elif b.remaining > 0 %}<div class="cap">이번 달이 기간의 마지막 달입니다. 남은 양 {{ pg.val(b.remaining, c.unit, c.metric) }}</div>
+        {% else %}<div class="cap">진행 중인 기간에 이미 기준만큼 채웠습니다</div>{% endif %}
+        <div class="cap">지금까지 확정 <span data-col="so-far">{{ pg.val(b.so_far, c.unit, c.metric) }}</span>{% if b.planned %} · 청약 {{ pg.val(b.planned, c.unit, c.metric) }} <span class="chip blue">예정</span>{% endif %}</div>
+        <div class="cap">{{ b.note }}</div></div>
+      {% elif c.metric != 'tenure_months' %}<div class="cap">이 기준은 목표 역산을 하지 않습니다.</div>{% endif %}
+    {% endif %}
+  </div>{% endfor %}
+</div>
+<p class="cap">판정은 최근 끝난 기간의 저장된 업적으로 합니다. 목표 역산은 지금 진행 중인 기간을 실적 요약과 같은 규칙으로 셉니다. 성립한 달에 더하고 철회한 달에 뺍니다.</p>
+{% endif %}
+
+<h2 class="sec">내 목표</h2>
+{% if goals %}<div class="card tablecard"><table>
+<tr><th>목표</th><th class="hide-sm">진척</th><th class="hide-sm">지금까지</th><th>남은 달 월 필요</th></tr>
+{% for g in goals %}{% set u = 'won' if g.metric in ('converted_premium', 'monthly_premium', 'commission_amount') else 'count' %}
+<tr data-goal="{{ g.goal_id }}"><td class="strong wrap-sm">{{ g.metric_ko }} · {{ g.period_key|pkey }}<div class="sm-sub"><span>목표 {% if g.hidden %}가림{% else %}{{ pg.val(g.target, u, g.metric) }}{% endif %}</span>{% if not g.hidden and g.supported %}<span>지금까지 {{ pg.val(g.so_far, u, g.metric) }}</span><span>진척 {{ ((g.progress or 0) * 100)|round|int }}%</span>{% endif %}</div></td>
+<td class="hide-sm">{{ pg.rate(g.progress) }}</td>
+<td class="hide-sm">{% if g.hidden %}{{ pg.hidden() }}{% elif g.supported %}{{ pg.val(g.so_far, u, g.metric) }}{% if g.planned %} · 청약 {{ pg.val(g.planned, u, g.metric) }} 예정{% endif %}{% else %}-{% endif %}</td>
+<td class="wrap-sm">{% if g.hidden %}{{ pg.hidden() }}{% elif not g.supported %}<span class="cap">업적 집계에 없는 지표입니다</span>{% elif g.remaining == 0 %}<span class="chip good">채움</span>{% elif g.last_month %}마지막 달 · {{ pg.val(g.remaining, u, g.metric) }} 남음{% else %}{{ g.months_left }}달 · 월 {{ pg.val(g.monthly_needed, u, g.metric) }}{% endif %}</td></tr>{% endfor %}
+</table></div>
+<p class="cap">{{ goals[0].note }}</p>
+{% else %}<div class="card"><div class="k">이 기간에 정한 목표가 없습니다</div></div>{% endif %}
+
+{% if history %}
+<h2 class="sec">승격 기록</h2>
+<div class="card tablecard"><table>
+<tr><th>회차</th><th>결정</th><th class="hide-sm">단계</th><th class="hide-sm">시작 달</th></tr>
+{% for r in history %}<tr><td class="strong">{{ r.round_key|pkey }}<div class="sm-sub"><span>{{ r.from_level.name }}에서 {{ r.to_level.name }}</span></div></td>
+<td><span class="chip good">승인</span></td>
+<td class="hide-sm">{{ r.from_level.name }}에서 {{ r.to_level.name }}</td><td class="hide-sm">{{ r.effective_ym|ymko if r.effective_ym else '-' }}</td></tr>{% endfor %}
+</table></div>
+{% endif %}
+<p class="cap" style="margin-top:20px"><a href="/my/summary?pt=quarter">이번 분기 실적 요약</a> · <a href="/my/cert">내 인증</a></p>
+{% endif %}
+{% endblock %}

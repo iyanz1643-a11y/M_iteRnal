@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{# 7나이츠 심사 결과와 결재. 메인 관리자만. 회전마다 다빈치의 형상화가 먼저, 그다음 자리별 의견이다.
+   명세가 없는 자리는 부르지 않았고 명세 대기로 보인다. 결재는 사람이 한다. 고객에게 나가는 글은 통과해야 승인한다(D-15) #}
+{% macro pct(v) %}{{ ((v * 100)|round|int ~ '%') if v is not none else '-' }}{% endmacro %}
+{% block body %}
+<p class="eyebrow">심사함 · 전체</p>
+<h1 class="display">심사 결과와 결재</h1>
+<p class="lede">회전마다 다빈치의 형상화와 자리별 의견을 보고 사람이 최종 결재합니다. 승인한 글만 밖으로 내보낼 수 있습니다.</p>
+{% if not on %}<div class="alert ai-off" role="status" style="margin-top:24px">{{ OFF }} 지난 심사의 결재는 그대로 하실 수 있습니다.</div>{% endif %}
+{% if flash %}<div class="{{ 'okmsg' if flash.kind == 'ok' else 'alert bad' }}" role="status" style="margin-top:20px">{{ flash.text }}</div>{% endif %}
+<div class="alert ai-gate" style="margin-top:20px">{{ GATE }}</div>
+
+<div class="grid g3 keep" style="margin-top:12px">
+  <div class="card"><div class="k">결재</div><div class="mid">{{ m.decided }}<span class="unit">건</span></div></div>
+  <div class="card"><div class="k">승인율</div><div class="mid">{{ pct(m.approval_rate) }}</div></div>
+  <div class="card"><div class="k">사람이 고친 비율</div><div class="mid">{{ pct(m.edited_rate) }}</div></div>
+</div>
+
+{% if d %}
+<article class="card board-open" id="detail" style="margin-top:20px">
+  <div class="notif-meta"><span>심사 {{ d.review_id }}번</span><span>{{ d.kind_ko }}</span><span>받는 사람 {{ d.audience_ko }}</span>
+    <span class="chip {{ R_CHIP.get(d.status, '') }}">{{ R_STATUS_KO.get(d.status, d.status) }}</span>
+    <span class="chip {{ 'blue' if d.required else '' }}">{{ '필수 관문' if d.required else '선택 심사' }}</span></div>
+  <h2 class="confirm-title board-title">{{ d.title or d.kind_ko }}</h2>
+  <div class="grid g3 keep" style="margin-top:12px">
+    <div><div class="k">회전</div><div class="mid">{{ d.rounds }}<span class="unit">/ {{ MAX_ROUNDS }}회전</span></div></div>
+    <div><div class="k">올린 사람</div><div class="cap" style="font-size:17px;margin:4px 0 0">{{ d.requested_by }}</div><div class="cap">{{ d.created_at|when }}</div></div>
+    <div><div class="k">심사단 버전</div><div class="cap ai-ver">{{ d.panel_version }}</div><div class="cap ai-ver">{{ d.guide_version }}</div></div>
+  </div>
+  {% if d.stop_ko %}<div class="alert" style="margin-top:16px">멈춤: {{ d.stop_ko }}</div>{% endif %}
+  {% if d.parent_id %}<p class="cap">심사 <a href="?id={{ d.parent_id }}#detail">{{ d.parent_id }}번</a>을 고쳐 다시 올린 글입니다.</p>{% endif %}
+
+  <h3 class="subsec">글</h3>
+  <div class="ai-texts">
+    <div><div class="k">처음 올린 글</div><div class="board-body ai-text">{{ d.draft_text }}</div></div>
+    {% if d.current_text != d.draft_text %}<div><div class="k">심사 뒤 글 · 고친 문안을 받음</div><div class="board-body ai-text">{{ d.current_text }}</div></div>{% endif %}
+    {% if d.final_text %}<div><div class="k">사람이 확정한 글{{ ' · 사람이 고침' if d.human_edited }}</div><div class="board-body ai-text">{{ d.final_text }}</div></div>{% endif %}
+  </div>
+
+  {% for rd in d.rounds_view %}
+  <h3 class="subsec">{{ rd.round }}회전</h3>
+  <div class="ai-shape"><div class="k">다빈치 · 형상화</div><div class="board-body" style="margin-top:6px">{{ rd.shape or '-' }}</div></div>
+  <div class="ai-seats">
+    {% for s in rd.seats %}
+    <div class="ai-seat{{ ' wait' if not s.defined }}">
+      <div class="ai-seat-head"><strong>{{ s.name }}</strong>{% if s.instinct %}<span class="cap" style="margin:0">{{ s.instinct }}</span>{% endif %}
+        {% if not s.defined %}<span class="chip">{{ SEAT_WAIT }}</span>{% elif s.op %}<span class="chip {{ s.chip }}">{{ s.verdict_ko }}</span>{% else %}<span class="chip">부르지 않음</span>{% endif %}</div>
+      {% if s.op %}
+        {% if s.op.quote %}<blockquote class="ai-quote">{{ s.op.quote }}</blockquote>{% if not s.op.quote_ok %}<span class="chip warn">글에 없는 인용</span>{% endif %}{% endif %}
+        {% if s.op.reason %}<p class="ai-reason">{{ s.op.reason }}</p>{% endif %}
+        {% if s.op.revised_text %}<div class="k" style="margin-top:8px">고친 문안{% if s.op.adopted %} <span class="chip good">다음 회전에 받음</span>{% endif %}</div><div class="board-body ai-text" style="font-size:15px">{{ s.op.revised_text }}</div>{% endif %}
+      {% elif not s.defined %}<p class="cap" style="margin:6px 0 0">역할 명세를 받으면 이 자리도 심사합니다.</p>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}<p class="cap">{{ '아직 회전 기록이 없습니다.' if d.status == 'running' else '회전 전에 멈췄습니다.' }}</p>{% endfor %}
+  {% if d.pending_seats %}<p class="cap">명세가 없는 {{ d.pending_seats|length }}자리는 부르지 않았습니다. 대표님의 심사단 명세를 받으면 채웁니다.</p>{% endif %}
+
+  <h3 class="subsec">결재</h3>
+  {% if d.status in ('approved', 'rejected') %}
+    <div class="{{ 'okmsg' if d.status == 'approved' else 'alert bad' }}">{{ R_STATUS_KO[d.status] }} · {{ d.decided_by }} · {{ d.decided_at|when }}{% if d.decision_reason %} · {{ d.decision_reason }}{% endif %}</div>
+  {% elif d.status == 'running' %}
+    <p class="cap">심사가 끝나면 결재할 수 있습니다.</p>
+  {% else %}
+  <form class="wide" method="post" action="{{ path }}"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="review_id" value="{{ d.review_id }}">
+    {% if d.required %}
+      <p class="cap" style="margin:0">{{ REEDIT }} <a href="/review/requests?from={{ d.review_id }}">고쳐서 다시 올리기</a></p>
+    {% elif d.can_approve %}
+      <label class="f">확정할 글 · 고치면 고친 글로 승인합니다<textarea name="final_text" rows="6" maxlength="4000">{{ d.current_text }}</textarea></label>
+    {% endif %}
+    {% if not d.can_approve %}<div class="alert" style="margin:0">{{ '입력에 없는 숫자가 있는 글은 승인하지 않습니다.' if d.stop_reason == 'number' else '통과하지 못한 고객용 글이라 승인할 수 없습니다. 반려하거나 고쳐서 다시 올려 주세요.' }}</div>{% endif %}
+    <label class="f">반려 사유 · 반려할 때 적어 주세요<input class="sm" type="text" name="reason" maxlength="{{ REASON_MAX }}"></label>
+    <div class="actions"><button class="primary" name="action" value="approve" {{ 'disabled' if not d.can_approve }}>승인</button><button class="second" name="action" value="reject">반려</button></div>
+  </form>
+  {% endif %}
+  <div class="actions" style="margin-top:16px"><a class="pill quiet big-pill" href="{{ path }}">목록으로</a></div>
+</article>
+{% endif %}
+
+<h2 class="sec">심사 목록</h2>
+<nav class="seg" aria-label="상태로 거르기" style="margin:0 0 12px">
+  <a class="{{ 'on' if not f_status }}" href="{{ path }}">전체</a>{% for k, v in R_STATUS_KO.items() %}<a class="{{ 'on' if f_status == k }}" href="{{ path }}?status={{ k }}">{{ v }}</a>{% endfor %}
+</nav>
+{% if rows %}
+<div class="card tablecard"><table>
+<tr><th class="num">번호</th><th>글</th><th class="hide-sm">받는 사람</th><th>상태</th><th class="hide-sm">회전</th><th class="hide-sm hide-md">올린 때</th></tr>
+{% for r in rows %}
+<tr><td class="num">{{ r.review_id }}</td>
+<td class="wrap-sm"><a href="{{ path }}?id={{ r.review_id }}#detail">{{ r.title or r.kind_ko }}</a><span class="cap" style="display:block;margin:2px 0 0">{{ r.kind_ko }}{{ ' · 필수 관문' if r.required }}</span>
+  <div class="sm-sub"><span>{{ r.audience_ko }} · {{ r.rounds }}회전</span></div></td>
+<td class="hide-sm">{{ r.audience_ko }}</td>
+<td><span class="chip {{ R_CHIP.get(r.status, '') }}">{{ R_STATUS_KO.get(r.status, r.status) }}</span></td>
+<td class="hide-sm">{{ r.rounds }}</td><td class="hide-sm hide-md">{{ r.created_at|when }}</td></tr>
+{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">심사가 없습니다</div></div>{% endif %}
+<p class="cap">심사단 {{ panel_version }}. 다빈치의 형상화와 테미스의 금지 표현 대조만 명세가 있습니다. 금지 표현 목록은 테미스 명세를 받기 전의 시작 목록입니다.</p>
+{% endblock %}

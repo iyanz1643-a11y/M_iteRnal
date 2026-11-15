@@ -16,7 +16,8 @@
 - 재적재는 계약현황만 하고 확인 단계를 거친다. 이전 배치는 superseded 로 두고 지우지 않는다. 원본 파일, 원본 행 보관 표, 품질 기록도 그대로다.
   import_batch.file_hash 가 UNIQUE 라 이전 배치의 해시 칸 뒤에 '~superseded~<배치 번호>' 를 붙여 같은 파일 막기를 비켜 간다(가정).
   앞 파일로 원장을 되돌리지 않도록 그 뒤에 들어온 계약현황 배치가 있으면 재적재하지 않는다.
-- 시상안 해석 보조(AI)는 S4 다. 지금은 사람이 줄을 확인하고 승인한다. 금액이 원문 그림에만 있는 줄은 '원문 확인' 으로 둔다.
+- 시상안 해석 보조(AI)는 줄 상세(?doc=&line=)의 AI 해석 초안 단추다. 화면 묶음은 app/web/ai_view.py 다. 초안을 승인해도 원장 값은 바뀌지 않고,
+  원장 줄의 승인은 지금처럼 사람이 표에서 한다. 금액이 원문 그림에만 있는 줄은 '원문 확인' 으로 둔다.
 """
 import hashlib
 import pathlib
@@ -38,7 +39,7 @@ from app.loader import incentive_plan as ip
 from app.loader.sheet import HeaderMismatch
 from app.ops import jobs
 from app.ops.storage import get_storage
-from app.web import auth
+from app.web import ai_view, auth
 from app.web.deps import get_con, guard, page
 
 router = APIRouter()
@@ -638,6 +639,8 @@ def _plan_page(request, ctx, con, status_code=200, **kw):
             r["original"] = needs_original(r, r["comps"])
         sm["approved"] = sum(1 for r in allrows if r["review_status"] == "approved")
         sm["rejected"] = sum(1 for r in allrows if r["review_status"] == "rejected")
+    line_pick = kw.pop("line_id", None) or (int(qp["line"]) if (qp.get("line") or "").isdigit() else None)
+    kw["ai"] = ai_view.plan_panel(con, doc["plan_doc_id"], line_pick) if doc and line_pick else None
     kw.setdefault("preview", None)
     kw.setdefault("msg", None)
     kw.setdefault("err", None)
@@ -664,6 +667,8 @@ async def plan_action(request: Request, ctx: dict = Depends(guard), con=Depends(
         return await _plan_preview(request, ctx, con, form, by)
     if action == "apply":
         return _plan_apply(request, ctx, con, by)
+    if action in ("ai_interpret", "ai_decide"):
+        return _plan_ai(request, ctx, con, form, action, by)
     if action in ("approve", "reject"):
         if not str(form.get("doc") or "").isdigit():
             raise HTTPException(400, "처리할 수 없는 요청입니다.")
@@ -680,6 +685,30 @@ async def plan_action(request: Request, ctx: dict = Depends(guard), con=Depends(
         verb = "승인했습니다" if action == "approve" else "반려했습니다"
         return _plan_page(request, ctx, con, doc_id=doc_id, msg=f"{len(mine)}줄을 {verb}.")
     raise HTTPException(400, "처리할 수 없는 요청입니다.")
+
+
+def _plan_ai(request, ctx, con, form, action, by):
+    """줄 상세의 AI 해석 초안 만들기와 초안 결재. 원장 줄은 바꾸지 않는다. 결과는 ai_output 에 남고 줄 상세가 읽는다."""
+    doc_id, line_id = form.get("doc"), form.get("line")
+    if not str(doc_id or "").isdigit() or not str(line_id or "").isdigit():
+        raise HTTPException(400, "처리할 수 없는 요청입니다.")
+    doc_id, line_id = int(doc_id), int(line_id)
+    if not con.execute("SELECT 1 FROM incentive_plan_line WHERE line_id=? AND plan_doc_id=?", (line_id, doc_id)).fetchone():
+        raise HTTPException(404, "없는 원장 줄입니다.")
+    if action == "ai_interpret":
+        kind, text = ai_view.plan_interpret(con, ctx, line_id)
+        auth.log(con, by, "ai_plan_interpret", f"line:{line_id}")
+        return _plan_page(request, ctx, con, doc_id=doc_id, line_id=line_id, **({"msg": text} if kind == "ok" else {"err": text}))
+    oid = int(form["output"]) if str(form.get("output") or "").isdigit() else None
+    decision = form.get("decision")
+    if not oid or decision not in ("approve", "reject") or ai_view.output_line(con, oid) != line_id:
+        raise HTTPException(400, "처리할 수 없는 요청입니다.")
+    try:
+        msg = ai_view.plan_decide(con, ctx, oid, decision == "approve", str(form.get("reason") or "").strip()[:300] or None)
+    except ValueError as e:
+        return _plan_page(request, ctx, con, doc_id=doc_id, line_id=line_id, err=str(e), status_code=400)
+    auth.log(con, by, f"ai_plan_{decision}", f"line:{line_id} output:{oid}")
+    return _plan_page(request, ctx, con, doc_id=doc_id, line_id=line_id, msg=msg)
 
 
 async def _plan_preview(request, ctx, con, form, by):

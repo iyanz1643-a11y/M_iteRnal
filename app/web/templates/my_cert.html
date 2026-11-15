@@ -1,0 +1,32 @@
+{% extends "base.html" %}{% import "_program.html" as pg with context %}
+{% block body %}
+<p class="eyebrow">{% if res.as_of_ym %}{{ res.as_of_ym|ymko }} 기준 · {% endif %}본인</p>
+<h1 class="display">내 인증</h1>
+{% if not has_agent %}<div class="card" style="margin-top:24px"><div class="k">설계사 정보가 이어지지 않은 계정입니다</div><div class="cap">메인 관리자에게 계정과 사번 연결을 요청하세요.</div></div>
+{% elif not res.rows and res.run_at %}<div class="card" style="margin-top:24px"><div class="k">인증 판정 대상이 아닙니다</div><div class="cap">{{ res.run_at|when }}에 계산한 판정에 이 계정의 줄이 없습니다. MDRT 와 우수인증은 재직 중인 설계사를 판정합니다.</div></div>
+{% elif not res.rows %}<div class="card" style="margin-top:24px"><div class="k">아직 계산한 인증 판정이 없습니다</div><div class="cap">메인 관리자가 인증 계산을 돌리면 MDRT 와 우수인증 진척이 보입니다.</div></div>
+{% else %}
+<p class="lede">지금 {{ n_achieved }}개를 달성했고, 연말에는 {{ n_projected }}개 달성이 예상됩니다.</p>
+<p class="cap perf-fresh"><span class="dot"></span>{{ res.run_at|when }}에 계산한 판정입니다. {{ res.as_of_ym|ymko }}까지의 자료로 셉니다.</p>
+
+<div class="grid g2 keep-2" style="margin-top:24px">
+  <div class="card my-hero"><div class="k"><span class="chip good">지금</span> 달성</div><div class="big" data-n="achieved">{{ n_achieved }}<span class="unit">/ {{ res.rows|length }}개</span></div></div>
+  <div class="card"><div class="k">{{ pg.est(none) }} 연말 달성</div><div class="big" data-n="projected">{{ n_projected }}<span class="unit">개</span></div></div>
+</div>
+<p class="cap">{{ res.projected_note }}</p>
+{{ pg.basis_box(res.basis) }}
+
+{% for g in pgroups %}
+<h2 class="sec">{{ g.title }}</h2>
+<div class="grid g2">{% for r in g.rows %}
+  <div class="card" data-prog="{{ r.program_code }}"><div class="k">{{ r.program_name }}</div>
+    <div class="mid">{{ ((r.progress_rate or 0) * 100)|round|int }}<span class="unit">% 진척</span></div>
+    <div class="chips" style="margin-top:8px">{% if r.achieved %}<span class="chip good">지금 달성</span>{% else %}<span class="chip">지금 미달</span>{% endif %} {{ pg.projected(r.projected) }}</div>
+    {{ pg.version_line(r.issuer, r.version) }}
+    {{ pg.metric_rows(r.metrics) }}
+  </div>{% endfor %}
+</div>
+{% endfor %}
+<p class="cap" style="margin-top:20px">기준마다 묶음이 여럿이면 한 묶음만 채워도 됩니다. 연말 값은 예상이고 확정이 아닙니다. <a href="/my/career">내 커리어패스</a> · <a href="/my/summary">실적 요약</a></p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{# 7나이츠 심사 요청. 메인 관리자만. 심사는 워커가 3회전까지 돌고 이 화면은 작업의 상태만 보인다.
+   심사할 글은 작업 표에 남지 않는다. 연락처와 주민번호 꼴이 있으면 받지 않는다 #}
+{% block body %}
+<p class="eyebrow">심사함 · 전체</p>
+<h1 class="display">심사 요청</h1>
+<p class="lede">카드뉴스, 제안 리포트 서식, 안내문, 기준 문안, 랜딩 문구를 7나이츠 심사에 올립니다. 다빈치의 형상화가 먼저 나오고 자리마다 따로 심사하며, 회전은 {{ MAX_ROUNDS }}번까지입니다.</p>
+{% if not on %}<div class="alert ai-off" role="status" style="margin-top:24px">{{ OFF }}</div>{% endif %}
+{% if flash %}<div class="{{ 'okmsg' if flash.kind == 'ok' else 'alert bad' }}" role="status" style="margin-top:20px">{{ flash.text }}</div>{% endif %}
+
+<h2 class="sec">새 심사</h2>
+<form class="card wide" method="post" action="{{ path }}"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  {% if pre %}<input type="hidden" name="parent_id" value="{{ pre.parent_id }}"><p class="cap" style="margin:0">심사 {{ pre.parent_id }}번의 글을 고쳐 다시 올립니다.</p>{% endif %}
+  <div class="frow">
+    <label class="f">종류<select name="kind">{% for k in REQ_KINDS %}<option value="{{ k }}" {{ 'selected' if pre and pre.kind == k }}>{{ KINDS[k] }}</option>{% endfor %}</select></label>
+    <label class="f">받는 사람<select name="audience">{% for k, v in AUDIENCES.items() %}<option value="{{ k }}" {{ 'selected' if (pre and pre.audience == k) or (not pre and k == 'customer') }}>{{ v }}</option>{% endfor %}</select></label>
+    <label class="f">제목 · 비워도 됩니다<input class="sm" type="text" name="title" maxlength="{{ TITLE_MAX }}" value="{{ pre.title if pre else '' }}"></label>
+  </div>
+  <label class="f">심사할 글 · {{ TEXT_MAX }}자까지<textarea name="text" rows="8" maxlength="{{ TEXT_MAX }}" required placeholder="고객 이름, 연락처, 주민번호는 빼고 올려 주세요.">{{ pre.text if pre else '' }}</textarea></label>
+  <div class="actions"><button class="primary" type="submit" {{ 'disabled' if not on }}>심사에 올리기</button></div>
+  <p class="cap" style="margin:0">{{ GATE }} 사람의 최종 결재는 <a href="/review/results">심사 결과와 결재</a>에서 합니다. 금액과 선발은 심사하지 않습니다.</p>
+</form>
+
+<h2 class="sec">심사 작업</h2>
+{% if rows %}
+<div class="card tablecard"><table>
+<tr><th class="num">작업</th><th>글</th><th>작업 상태</th><th class="hide-sm">넣은 때</th><th class="hide-sm">심사</th></tr>
+{% for j in rows %}{% set rv = j.review %}
+<tr><td class="num">{{ j.job_id }}</td>
+<td class="wrap-sm">{% if rv %}<a href="/review/results?id={{ j.result.review_id }}">{{ rv.title or KINDS.get(rv.kind, rv.kind) }}</a>{% else %}<span class="cap">{{ '심사 전' if j.status in ('queued', 'running') else '-' }}</span>{% endif %}
+  <div class="sm-sub"><span>{{ j.created_at|when }}</span>{% if rv %}<span><span class="chip {{ R_CHIP.get(rv.status, '') }}">{{ R_STATUS_KO.get(rv.status, rv.status) }}</span></span>{% endif %}</div></td>
+<td><span class="chip {{ 'good' if j.status == 'done' else ('bad' if j.status == 'failed' else 'warn') }}">{{ j.status_ko }}</span></td>
+<td class="hide-sm">{{ j.created_at|when }}</td>
+<td class="hide-sm">{% if rv %}<span class="chip {{ R_CHIP.get(rv.status, '') }}">{{ R_STATUS_KO.get(rv.status, rv.status) }}</span> · {{ j.result.rounds }}회전{% elif j.result and j.result.status %}{{ {'refused': '받지 않음', 'missing_file': '요청 파일 없음'}.get(j.result.status, j.result.status) }}{% elif j.error %}{{ j.error }}{% else %}-{% endif %}</td></tr>
+{% endfor %}
+</table></div>
+<p class="cap">대기와 처리 중인 작업은 워커가 처리합니다. 화면을 <a href="{{ path }}">새로 고치면</a> 상태가 바뀝니다. 워커가 꺼져 있으면 대기에 머뭅니다.</p>
+{% else %}<div class="card"><div class="k">아직 올린 심사가 없습니다</div></div>{% endif %}
+{% endblock %}

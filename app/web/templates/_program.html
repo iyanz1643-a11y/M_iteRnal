@@ -1,0 +1,36 @@
+{# 제도 묶음과 내 진척의 커리어패스, 인증이 함께 쓰는 숫자 꼴, 기준 판 줄, 예상 표지, 기준 설명. with context 로 불러 쓴다 #}
+{% macro val(v, unit, metric='') %}{% if v is none %}-{% elif unit == 'won' %}{{ v|won }}원{% elif unit == 'rate' %}{{ '%.1f'|format(v * 100) }}%{% elif unit == 'month' %}{{ v|n }}개월{% elif unit == 'person' %}{{ v|n }}명{% elif unit == 'rank' %}{{ v|n }}위{% else %}{{ v|won }}{{ COUNT_UNIT.get(metric, '건') }}{% endif %}{% endmacro %}
+
+{% macro hidden() %}<span class="chip" data-hidden="1" title="수수료는 본인과 메인 관리자만 봅니다">가림</span>{% endmacro %}
+
+{% macro est(e) %}<span class="chip blue" data-estimate="1">{{ e.label if e and e.label else '예상' }}</span>{% endmacro %}
+
+{# 연말 달성 예상 표지. e 는 엔진의 estimate 꼴 {value, is_estimate, label} #}
+{% macro projected(e) %}{% if e is none or e.value is none %}<span class="chip">-</span>{% elif e.value %}<span class="chip good" data-estimate="1">달성 {{ e.label }}</span>{% else %}<span class="chip warn" data-estimate="1">미달 {{ e.label }}</span>{% endif %}{% endmacro %}
+
+{# 이 판정에 쓴 기준. 기관, 연도, 판 #}
+{% macro version_line(issuer, version, extra='') %}<p class="std-line" data-version="{{ version.label if version else '' }}">이 판정에 쓴 기준: {{ issuer or '기관 미지정' }} {% if version %}{{ version.label }}{% else %}· 아직 판을 남기기 전의 판정입니다{% endif %}{{ ' · ' ~ extra if extra }}</p>{% endmacro %}
+
+{% macro version_short(issuer, version) %}{% if version %}{{ issuer }} {{ version.label }}{% else %}판정 전{% endif %}{% endmacro %}
+
+{# D-33 기준 설명. 엔진이 준 글을 그대로 보인다 #}
+{% macro basis_box(b) %}{% if b %}<div class="card basis-note" data-basis="{{ b.decision }}"><div class="k"><span class="dot warn"></span>숫자를 세는 기준 · {{ b.decision }}{% if b.assumed %} <span class="chip warn">가정</span>{% endif %}</div>
+  <p class="cap" style="margin:6px 0 0">{{ b.note }}</p></div>{% endif %}{% endmacro %}
+
+{% macro crit(c, ko, units) %}{% if c.criteria_group and CRIT_GROUP_KO.get(c.criteria_group, c.criteria_group) %}{{ CRIT_GROUP_KO.get(c.criteria_group, c.criteria_group) }} · {% endif %}{{ ko.get(c.metric, c.metric) }}{% if c.metric_param %}({{ c.metric_param }}){% endif %}{% if c.period_type %} · {{ PERIOD_KO.get(c.period_type, c.period_type) }}{% endif %} {{ val(c.value, units.get(c.metric, 'count'), c.metric) }} {{ OP_KO.get(c.operator, c.operator) }}{% endmacro %}
+
+{# 인증 판정 지표 한 줄씩. rows 는 엔진 metrics #}
+{% macro metric_rows(metrics) %}
+<div class="mlist">{% for m in metrics %}
+  <div class="mrow" data-metric="{{ m.metric }}"><div class="mhead"><span>{{ m.metric_ko }}{% if m.param %}({{ m.param }}){% endif %}{% if CRIT_GROUP_KO.get(m.group) %} <small class="cap">{{ CRIT_GROUP_KO.get(m.group) }}</small>{% endif %}</span>
+    {% if m.met %}<span class="chip good">충족</span>{% else %}<span class="chip warn">미충족</span>{% endif %}</div>
+    <div class="cap">기준 {{ val(m.target, m.unit, m.metric) }} {{ OP_KO.get(m.op, m.op) }} · 지금 {% if m.hidden %}{{ hidden() }}{% else %}{{ val(m.actual, m.unit, m.metric) }}{% endif %}
+    {% if not m.met and not m.hidden and m.remaining is not none %} · 남은 양 {{ val(m.remaining, m.unit, m.metric) }}{% endif %}</div>
+    {% if m.cumulative %}<div class="cap">연말 {% if m.hidden %}{{ hidden() }}{% else %}{{ val(m.year_end.value, m.unit, m.metric) }}{% endif %} {{ est(m.year_end) }}
+    {% if m.monthly_needed and not m.hidden %} · 남은 {{ m.months_left }}달 동안 월 {{ val(m.monthly_needed, m.unit, m.metric) }}씩 더 필요합니다{% endif %}</div>{% endif %}
+    {% if m.hidden %}<div class="cap">수수료는 본인과 메인 관리자만 봅니다. 달성 여부만 보입니다.</div>{% endif %}
+  </div>{% endfor %}
+</div>
+{% endmacro %}
+
+{% macro rate(r) %}{% if r is none %}-{% else %}<span class="minibar"><i style="width:{{ ([r, 1]|min * 100)|round(1) }}%"></i></span>{{ (r * 100)|round|int }}%{% endif %}{% endmacro %}

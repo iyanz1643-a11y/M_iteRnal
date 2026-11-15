@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{# 시상안 묻고 답하기. D-27 제안대로 메인 관리자만. 승인된 설계사 몫 줄만 근거로 쓰고, 답에는 근거 줄 번호가 붙는다.
+   원안 우선 문구는 늘 보인다. 자동 점검에서 막힌 답은 보이지 않고 근거 줄만 보인다 #}
+{% block body %}
+<p class="eyebrow">데이터 · 전체</p>
+<h1 class="display">시상안 묻고 답하기</h1>
+<p class="lede">승인한 시상안 줄만 근거로 답합니다. 질문에서 보험사, 상품군, 귀속월을 뽑아 맞는 줄만 넣고, 답의 문장마다 근거 줄 번호를 붙입니다.</p>
+{% if not on %}<div class="alert ai-off" role="status" style="margin-top:24px">{{ OFF }}</div>{% endif %}
+<div class="alert ai-gate" style="margin-top:20px">{{ NOTICE }}</div>
+
+<form class="card wide" method="post" action="{{ path }}" style="margin-top:12px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  <label class="f">질문 · {{ QUESTION_MAX }}자까지<textarea name="question" rows="3" maxlength="{{ QUESTION_MAX }}" required placeholder="예: 한빛손해 인보험 10월 시책은 어떻게 되나요?">{{ question }}</textarea></label>
+  <div class="actions"><button class="primary" type="submit">{{ '묻기' if on else '근거 줄 찾기' }}</button></div>
+  <p class="cap" style="margin:0">총괄 몫과 지사 몫, 승인 전의 줄, 사람의 실적은 넣지 않습니다. 상품을 권하는 답은 하지 않습니다. 지금은 메인 관리자만 씁니다(D-27).</p>
+</form>
+
+{% if result %}{% set r = result %}
+<h2 class="sec">답</h2>
+{% if r.status == 'answered' %}
+  <div class="card ai-answer"><div class="board-body" style="margin:0">{{ r.answer }}</div>
+    <p class="cap" style="margin:12px 0 0">{{ NOTICE }}</p></div>
+{% elif r.status == 'no_evidence' %}
+  <div class="alert">{{ r.message }}</div>
+{% elif r.status == 'empty' %}
+  <div class="alert bad">{{ r.message }}</div>
+{% else %}
+  <div class="alert">{{ r.message }}</div>
+  {% if r.problems_ko %}<ul class="cap">{% for p in r.problems_ko %}<li>{{ p }}</li>{% endfor %}</ul>{% endif %}
+{% endif %}
+
+{% if r.filters %}<p class="cap">질문에서 찾은 것: 보험사 {{ r.filters.insurers|join(', ') or '없음' }} · 상품군 {{ r.filters.groups|join(', ') or '없음' }} · 귀속월 {% for ym in r.filters.yms %}{{ ym|ymko }}{{ ', ' if not loop.last }}{% else %}없음{% endfor %}</p>{% endif %}
+
+{% if r.evidence %}
+<h3 class="subsec">근거 줄 {{ r.evidence|length }}개</h3>
+<div class="card ai-evidence">
+  {% for e in r.evidence %}<div class="ai-ev" id="ev{{ e.no }}"><span class="ai-no">[{{ e.no }}]</span><div><div class="cap" style="margin:0">원장 줄 {{ e.line_id }}번</div><div class="ai-ev-text">{{ e.text }}</div></div></div>{% endfor %}
+</div>
+{% endif %}
+<p class="cap">지침 {{ r.guide_version or guide_version }}. 시상 원안과 정산이 기준이고 이 답은 참고입니다.</p>
+{% endif %}
+{% endblock %}

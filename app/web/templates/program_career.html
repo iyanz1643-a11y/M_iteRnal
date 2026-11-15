@@ -1,0 +1,143 @@
+{% extends "base.html" %}{% import "_perf.html" as pf %}{% import "_program.html" as pg with context %}
+{% block body %}
+<p class="eyebrow">{{ ym|ymko }} 기준 · {{ SCOPES[ctx.scope] }}</p>
+<h1 class="display">커리어패스 운영</h1>
+<p class="lede">다음 단계의 기준을 모두 채운 사람이 {{ n_eligible }}명입니다. 승인과 반려는 회차를 연 뒤 메인 관리자가 합니다.</p>
+{{ pf.fresh_line(fresh, '분기 보험료 기준은 최근 끝난 분기인 ' ~ (round_key|pkey) ~ '의 업적으로 판정합니다.') }}
+{% if error %}<div class="alert bad" role="alert">{{ error }}</div>{% endif %}
+{% if done %}<div class="okmsg" id="done" role="status">{{ {'open': '회차를 열었습니다. 판정에 쓴 기준의 판을 남겼습니다.', 'approve': '승인했습니다. 단계 이력에 새 단계를 넣었습니다.', 'reject': '반려했습니다. 단계 이력은 그대로입니다.', 'revoke': '결정을 물렀습니다. 사유를 남겼고 기록은 지우지 않습니다.'}[done] }}</div>{% endif %}
+
+<div class="grid g3 keep" style="margin-top:24px">
+  <div class="card"><div class="k"><span class="dot {{ '' if n_eligible else 'off' }}"></span>기준 모두 충족</div><div class="mid" data-n="eligible">{{ n_eligible }}<span class="unit">명</span></div></div>
+  <div class="card"><div class="k">다음 단계가 있는 사람</div><div class="mid">{{ cands|length }}<span class="unit">명</span></div></div>
+  <div class="card"><div class="k"><span class="dot {{ '' if live else 'off' }}"></span>{{ round_key|pkey }} 회차</div><div class="mid word">{{ '열림' if live else '열기 전' }}</div></div>
+</div>
+
+<div style="margin-top:24px">{{ pf.seg(path, {'view': view}, 'view', VIEWS, view) }}</div>
+
+{# ---------------------------------------------------------------- 확인 단계 #}
+{% macro hidden_fields(action) %}<input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="action" value="{{ action }}">{% endmacro %}
+{% if ask == 'open' %}
+<div class="card confirm-box" id="confirm" style="margin-top:20px"><div class="k" style="color:var(--red)">회차 열기 · 메인 관리자</div>
+  <div class="confirm-title">{{ round_key|pkey }} 회차를 열까요</div>
+  <ul class="notes"><li>재직 설계사 전원을 {{ ym|ymko }} 기준으로 판정해 후보 줄을 남깁니다.</li>
+    <li>판정에 쓴 기준의 판을 남깁니다. 나중에 기준이 바뀌어도 이 회차는 그 판으로 보입니다.</li>
+    {% if live %}<li>같은 분기에 열린 회차가 있습니다. 결정이 하나도 없으면 새 회차로 바뀌고, 결정이 있으면 열리지 않습니다.</li>{% endif %}</ul>
+  <form method="post" action="{{ path }}">{{ hidden_fields('open') }}
+    <label class="confirm-check"><input type="checkbox" name="agree" value="yes" required>회차를 열면 후보와 기준 판이 기록으로 남는다는 것을 확인했습니다</label>
+    <div class="confirm-acts"><button class="danger" type="submit">확인하고 회차를 엽니다</button><a class="pill quiet" href="{{ path }}?view=rounds">그만두기</a></div>
+  </form></div>
+{% elif ask in ('approve', 'reject') and target %}
+<div class="card confirm-box" id="confirm" style="margin-top:20px"><div class="k" style="color:var(--red)">승격 {{ '승인' if ask == 'approve' else '반려' }} · 메인 관리자</div>
+  <div class="confirm-title">{{ target.name }}님 {{ target.from_level.name }}에서 {{ target.to_level.name }}, {{ '승인할까요' if ask == 'approve' else '반려할까요' }}</div>
+  <p class="cap" style="margin:0">{{ target.code }} · 기준 {{ target.n_met }}/{{ target.n_total }} 충족 · 이 판정에 쓴 기준: {{ CAREER_ISSUER }} {{ target.version_label or '판을 남기기 전' }}</p>
+  <ul class="notes">{% if ask == 'approve' %}<li>승인하면 새 단계를 시작 달부터 단계 이력에 넣고 앞 단계를 그 앞 달로 닫습니다.</li>
+    <li>무를 수 있지만 그사이 화면과 자료에 나간 단계는 되돌리지 못합니다.</li>{% else %}<li>반려는 단계 이력을 바꾸지 않습니다. 결정과 사유는 결과에 남습니다.</li>{% endif %}</ul>
+  <form class="wide" method="post" action="{{ path }}">{{ hidden_fields(ask) }}
+    <input type="hidden" name="round" value="{{ detail.round.round_id }}"><input type="hidden" name="agent" value="{{ target.agent_id }}">
+    {% if ask == 'approve' %}<label class="f">시작 달 · 비우면 회차 기준월의 다음 달입니다<input type="text" name="effective_ym" inputmode="numeric" maxlength="6" placeholder="예: 202611" value="{{ form.effective_ym or '' }}"></label>{% endif %}
+    <label class="f">{{ '승인' if ask == 'approve' else '반려' }} 사유 · 꼭 적습니다<textarea name="note" required maxlength="{{ NOTE_MAX }}" placeholder="{{ '예: 분기 기준을 모두 채웠습니다' if ask == 'approve' else '예: 유지율 자료를 다시 확인한 뒤 다음 회차에 봅니다' }}">{{ form.note or '' }}</textarea></label>
+    <label class="confirm-check"><input type="checkbox" name="agree" value="yes" required>{{ '승인하면 단계 이력이 바뀐다는 것을 확인했습니다' if ask == 'approve' else '반려 결정과 사유가 기록으로 남는다는 것을 확인했습니다' }}</label>
+    <div class="confirm-acts"><button class="danger" type="submit">확인하고 {{ '승인합니다' if ask == 'approve' else '반려합니다' }}</button><a class="pill quiet" href="{{ path }}?view=rounds&round={{ detail.round.round_id }}">그만두기</a></div>
+  </form></div>
+{% elif ask == 'revoke' and target %}
+<div class="card confirm-box" id="confirm" style="margin-top:20px"><div class="k" style="color:var(--red)">결정 무르기 · 메인 관리자</div>
+  <div class="confirm-title">{{ target.name }}님의 {{ DECISION_KO[target.decision][1] }}을 무를까요</div>
+  <ul class="notes"><li>{% if target.decision == 'approved' %}새 단계 이력을 어느 달에도 걸리지 않게 닫고 앞 단계를 되돌립니다. 줄은 지우지 않습니다.{% else %}반려 결정을 무르면 같은 회차에서 다시 결정할 수 있습니다.{% endif %}</li>
+    <li>무르기는 열린 결정이라 사유를 적고 무르게 둔 가정입니다.</li></ul>
+  <form class="wide" method="post" action="{{ path }}">{{ hidden_fields('revoke') }}
+    <input type="hidden" name="decision" value="{{ target.decision_id }}"><input type="hidden" name="from" value="{{ view }}">
+    <label class="f">무르는 사유 · {{ REVOKE_MIN }}자 이상<textarea name="note" required minlength="{{ REVOKE_MIN }}" maxlength="{{ NOTE_MAX }}" placeholder="예: 기준 자료가 고쳐져 다시 판정합니다">{{ form.note or '' }}</textarea></label>
+    <label class="confirm-check"><input type="checkbox" name="agree" value="yes" required>무른 기록과 사유가 남는다는 것을 확인했습니다</label>
+    <div class="confirm-acts"><button class="danger" type="submit">확인하고 무릅니다</button><a class="pill quiet" href="{{ path }}?view={{ view }}{{ '&round=%d'|format(target.round_id) if view == 'rounds' else '' }}">그만두기</a></div>
+  </form></div>
+{% endif %}
+
+{# ---------------------------------------------------------------- 후보 #}
+{% if view == 'candidates' %}
+<h2 class="sec">승격 후보</h2>
+{% if cands %}<div class="card tablecard"><table>
+<tr><th>사람</th><th class="hide-sm">지금에서 다음</th><th>기준</th><th class="hide-sm">모자란 기준</th><th class="hide-sm hide-md">판정 기준</th></tr>
+{% for c in cands %}<tr data-agent="{{ c.agent_id }}"><td class="strong wrap-sm">{{ c.name }} <span class="cap">{{ c.code }}</span>
+  <div class="sm-sub"><span>{{ c.level.name }}에서 {{ c.next_level.name }}</span><span>{{ pg.version_short(CAREER_ISSUER, c.version) }}</span></div></td>
+<td class="hide-sm">{{ c.level.name }}에서 {{ c.next_level.name }}</td>
+<td>{% if c.eligible %}<span class="chip good">모두 충족</span>{% else %}<span class="chip">{{ c.n_met }}/{{ c.n_total }}</span>{% endif %}</td>
+<td class="hide-sm cell-wrap">{% for x in c.criteria if not x.met %}<div>{{ x.metric_ko }} {% if x.hidden %}{{ pg.hidden() }}{% elif x.remaining is not none %}{{ pg.val(x.remaining, x.unit, x.metric) }} 남음{% else %}판정 못 함{% endif %}</div>{% else %}-{% endfor %}</td>
+<td class="hide-sm hide-md">{{ pg.version_short(CAREER_ISSUER, c.version) }}</td></tr>{% endfor %}
+</table></div>
+<p class="cap">판정 기준이 판정 전이면 그 기준을 아직 회차에 쓰지 않았다는 뜻입니다. 회차를 열면 판이 남습니다.</p>
+{% else %}<div class="card"><div class="k">다음 단계가 있는 사람이 없습니다</div></div>{% endif %}
+{% endif %}
+
+{# ---------------------------------------------------------------- 회차와 승인 #}
+{% if view == 'rounds' %}
+<div class="block-head"><h2 class="sec">회차</h2></div>
+{% if is_main and not ask %}{% if live and (live.n_approved or live.n_rejected) %}<p class="cap">{{ round_key|pkey }} 회차에 결정이 있어 다시 열 수 없습니다. 다시 열려면 결정을 먼저 무릅니다.</p>
+{% else %}<div class="confirm-acts" style="margin-bottom:16px"><a class="pill" href="{{ path }}?view=rounds&ask=open#confirm">{{ round_key|pkey }} 회차 {{ '다시 열기' if live else '열기' }}</a><span class="cap" style="margin:0">열기 전에 확인 단계를 거칩니다</span></div>{% endif %}{% endif %}
+{% if rounds %}<div class="card tablecard"><table>
+<tr><th>회차</th><th>상태</th><th class="hide-sm">후보</th><th class="hide-sm">충족</th><th>승인과 반려</th><th class="hide-sm hide-md">연 시각</th></tr>
+{% for r in rounds %}{% set rk = ROUND_KO.get(r.status, ('', r.status)) %}<tr data-round="{{ r.round_id }}"><td class="strong"><a href="{{ path }}?view=rounds&round={{ r.round_id }}">{{ r.round_key|pkey }}</a>
+  <div class="sm-sub"><span>후보 {{ r.n_members }}명 · 충족 {{ r.n_eligible }}명</span></div></td>
+<td><span class="chip {{ rk[0] }}">{{ rk[1] }}</span></td><td class="hide-sm">{{ r.n_members }}명</td><td class="hide-sm">{{ r.n_eligible }}명</td>
+<td>{{ r.n_approved }} / {{ r.n_rejected }}</td><td class="hide-sm hide-md">{{ r.opened_at|when }}</td></tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">아직 연 회차가 없습니다</div>{% if is_main %}<div class="cap">회차를 열면 후보와 기준 판이 남고 승인과 반려를 할 수 있습니다.</div>{% endif %}</div>{% endif %}
+
+{% if detail %}{% set R = detail.round %}
+<h2 class="sec" id="round">{{ R.round_key|pkey }} 회차 · {{ R.as_of_ym|ymko }} 기준</h2>
+{% for v in detail.versions %}{{ pg.version_line(v.issuer, v, v.std_key) }}{% else %}{{ pg.version_line(CAREER_ISSUER, none) }}{% endfor %}
+{% if detail.members %}<div class="card tablecard" style="margin-top:12px"><table>
+<tr><th>사람</th><th class="hide-sm">단계</th><th class="hide-sm">기준</th><th>결정</th>{% if is_main %}<th></th>{% endif %}</tr>
+{% for m in detail.members %}{% set d = m.decision %}<tr data-agent="{{ m.agent_id }}"><td class="strong wrap-sm">{{ m.name }} <span class="cap">{{ m.code }}</span>
+  <div class="sm-sub"><span>{{ m.from_level.name }}에서 {{ m.to_level.name }} · {{ m.n_met }}/{{ m.n_total }}</span></div></td>
+<td class="hide-sm">{{ m.from_level.name }}에서 {{ m.to_level.name }}</td>
+<td class="hide-sm">{% if m.eligible %}<span class="chip good">모두 충족</span>{% else %}<span class="chip">{{ m.n_met }}/{{ m.n_total }}</span>{% endif %}</td>
+<td>{% if d %}<span class="chip {{ DECISION_KO[d.decision][0] }}">{{ DECISION_KO[d.decision][1] }}</span>{% if d.effective_ym %}<div class="cap" style="margin:4px 0 0">{{ d.effective_ym|ymko }}부터</div>{% endif %}{% else %}<span class="chip">대기</span>{% endif %}</td>
+{% if is_main %}<td class="acts">{% if R.status == 'open' %}{% if d %}<a class="ghost" href="{{ path }}?view=rounds&round={{ R.round_id }}&ask=revoke&decision={{ d.decision_id }}#confirm">무르기</a>
+  {% else %}{% if m.eligible %}<a class="ghost" href="{{ path }}?view=rounds&round={{ R.round_id }}&ask=approve&agent={{ m.agent_id }}#confirm">승인</a>{% endif %}
+  <a class="ghost" href="{{ path }}?view=rounds&round={{ R.round_id }}&ask=reject&agent={{ m.agent_id }}#confirm">반려</a>{% endif %}{% elif d %}<a class="ghost" href="{{ path }}?view=rounds&round={{ R.round_id }}&ask=revoke&decision={{ d.decision_id }}#confirm">무르기</a>{% endif %}</td>{% endif %}</tr>{% endfor %}
+</table></div>
+{% if R.status != 'open' %}<p class="cap">이 회차는 새 회차로 바뀌어 더 결정하지 않습니다.</p>{% endif %}
+{% else %}<div class="card" style="margin-top:12px"><div class="k">이 회차에 범위 안 후보가 없습니다</div></div>{% endif %}
+{% endif %}
+{% endif %}
+
+{# ---------------------------------------------------------------- 결과 #}
+{% if view == 'results' %}
+<h2 class="sec">승인과 반려 결과</h2>
+{% if results %}<div class="card tablecard"><table>
+<tr><th>사람</th><th>결정</th><th class="hide-sm">회차</th><th class="hide-sm">시작 달</th><th class="hide-sm">사유</th><th class="hide-sm hide-md">판정 기준</th>{% if is_main %}<th></th>{% endif %}</tr>
+{% for r in results %}<tr data-decision="{{ r.decision_id }}"><td class="strong wrap-sm">{{ r.name }} <span class="cap">{{ r.code }}</span>
+  <div class="sm-sub"><span>{{ r.from_level.name }}에서 {{ r.to_level.name }}</span><span>{{ r.round_key|pkey }}{% if r.effective_ym %} · {{ r.effective_ym|ymko }}부터{% endif %}</span>{% if r.voided %}<span>무른 사유: {{ r.void_reason }}</span>{% endif %}</div></td>
+<td><span class="chip {{ DECISION_KO[r.decision][0] }}">{{ DECISION_KO[r.decision][1] }}</span>{% if r.voided %} <span class="chip">무름</span>{% endif %}<div class="cap" style="margin:4px 0 0">{{ r.decided_at|when }}</div></td>
+<td class="hide-sm">{{ r.round_key|pkey }}</td><td class="hide-sm">{{ r.effective_ym|ymko if r.effective_ym else '-' }}</td>
+<td class="hide-sm cell-wrap">{{ r.note or '-' }}{% if r.voided %}<div class="cap" style="margin:4px 0 0">무른 사유: {{ r.void_reason }}</div>{% endif %}</td>
+<td class="hide-sm hide-md">{{ CAREER_ISSUER }} {{ r.version_label or '판을 남기기 전' }}</td>
+{% if is_main %}<td class="acts">{% if not r.voided %}<a class="ghost" href="{{ path }}?view=results&ask=revoke&decision={{ r.decision_id }}#confirm">무르기</a>{% endif %}</td>{% endif %}</tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">아직 승인이나 반려가 없습니다</div></div>{% endif %}
+{% endif %}
+
+{# ---------------------------------------------------------------- 기관별 기준 #}
+{% if view == 'standards' %}
+<h2 class="sec">주관 기관별 기준</h2>
+<p class="cap">인증은 {{ ym[:4] }}년 기준, 커리어는 {{ ym|ymko }}에 걸린 기준입니다. 판은 판정에 쓴 기준의 사본이고, 같은 해 기준이 바뀌면 판이 하나 늡니다. 커리어 기준의 주관 기관은 표에 칸이 없어 {{ CAREER_ISSUER }}로 봅니다.</p>
+{% for g in stds %}
+<div class="card" style="margin-top:16px" data-issuer="{{ g.issuer }}"><div class="k">{{ g.issuer }}</div>
+  <div class="mlist">{% for it in g['items'] %}
+    <div class="mrow"><div class="mhead"><span>{{ it.name }}</span><span class="chip {{ 'blue' if it.version else '' }}">{{ it.version.label if it.version else '판정 전' }}</span></div>
+    {% set ko = CAREER_KO if it.scope == 'career' else CERT_KO %}{% set units = CAREER_UNIT if it.scope == 'career' else CERT_UNIT %}
+    <ul class="notes" style="margin:4px 0 0">{% for c in it.criteria %}<li>{{ pg.crit(c, ko, units) }}</li>{% endfor %}</ul></div>{% endfor %}
+  </div></div>
+{% endfor %}
+<h2 class="sec">남은 판</h2>
+{% if versions %}<div class="card tablecard"><table>
+<tr><th>기준</th><th>판</th><th class="hide-sm">기관</th><th class="hide-sm">쓴 판정</th><th class="hide-sm hide-md">남긴 시각</th></tr>
+{% for v in versions %}<tr><td class="strong wrap-sm">{{ v.std_key }}<div class="sm-sub"><span>{{ v.issuer or '기관 미지정' }} · 판정 {{ v.n_used }}번</span></div></td><td>{{ v.label }}</td>
+<td class="hide-sm">{{ v.issuer or '기관 미지정' }}</td><td class="hide-sm">{{ v.n_used }}번</td><td class="hide-sm hide-md">{{ v.recorded_at|when }}</td></tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">아직 남은 판이 없습니다</div><div class="cap">인증 계산을 돌리거나 커리어 회차를 열면 판이 남습니다.</div></div>{% endif %}
+{% endif %}
+
+<p class="cap" style="margin-top:20px">판정 값은 저장된 업적 계산 값을 씁니다. 보험료는 실적이라 관리자도 봅니다. 수수료 기준은 본인과 메인 관리자만 봅니다. <a href="/program/cert">인증과 MDRT</a> · <a href="/program/executive">임원제도</a></p>
+{% endblock %}

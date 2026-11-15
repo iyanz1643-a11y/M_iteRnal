@@ -1,0 +1,50 @@
+{% extends "base.html" %}{% import "_program.html" as pg with context %}
+{% block body %}
+<p class="eyebrow">{% if res.as_of_ym %}{{ res.as_of_ym|ymko }} 기준 · {% endif %}{{ SCOPES[ctx.scope] }}</p>
+<h1 class="display">{{ '인증과 MDRT' if kind == 'cert' else '임원제도' }}</h1>
+<p class="lede">{% if kind == 'cert' %}생명보험과 손해보험 우수인증, 원수사 인증, MDRT 의 진척과 연말 예상입니다.{% else %}관리자 임원제도는 조직의 실적으로, 설계사 임원제도는 본인의 실적으로 판정합니다.{% endif %}</p>
+<p class="cap perf-fresh"><span class="dot {{ '' if res.run_at else 'off' }}"></span>{% if res.run_at %}{{ res.run_at|when }}에 계산한 판정입니다. {{ res.as_of_ym|ymko }}까지의 자료로 셉니다.{% else %}아직 계산한 판정이 없습니다. 메인 관리자가 기존 운영 도구에서 인증 계산을 돌리면 보입니다.{% endif %}</p>
+{% if res.rows %}<p class="cap">{{ pg.est(none) }} {{ res.projected_note }}</p>{% endif %}
+{{ pg.basis_box(res.basis) }}
+
+{% for g in pgroups %}
+<h2 class="sec">{{ g.title }}</h2>
+<div class="grid g3">{% for p in g.programs %}
+  <a class="card prog {{ 'on' if p.program_code == prog }}" href="{{ path }}?prog={{ p.program_code }}#list" data-prog="{{ p.program_code }}">
+    <div class="k">{{ p.program_name }}</div>
+    <div class="mid">{{ p.n_achieved }}<span class="unit">/ {{ p.n }}명 달성</span></div>
+    <div class="cap">연말 달성 {{ p.n_projected }}명 {{ pg.est(none) }}</div>
+    <div class="cap" style="margin-top:4px">{{ p.issuer }} · {{ pg.version_short(p.issuer, p.version) }}</div></a>{% endfor %}
+</div>
+{% else %}
+<div class="card" style="margin-top:24px"><div class="k">범위 안에 판정한 사람이 없습니다</div>{% if kind == 'executive' %}<div class="cap">관리자 임원제도는 조직장 본인이 범위 안에 있을 때 보입니다.</div>{% endif %}</div>
+{% endfor %}
+
+{% if person %}
+<div class="card" id="person" style="margin-top:20px" data-person="{{ person.agent_id }}"><div class="k">{{ person.program_name }} · {{ person.code }}</div>
+  <div class="confirm-title">{{ person.name }}</div>
+  <div class="chips">{% if person.achieved %}<span class="chip good">지금 달성</span>{% else %}<span class="chip">지금 미달</span>{% endif %} {{ pg.projected(person.projected) }}{% if person.org_name %} <span class="chip">{{ person.org_name }}</span>{% endif %}</div>
+  {{ pg.version_line(person.issuer, person.version) }}
+  {{ pg.metric_rows(person.metrics) }}
+  <p class="cap" style="margin-top:12px"><a href="{{ path }}?prog={{ prog }}#list">목록으로</a></p></div>
+{% endif %}
+
+{% if sel %}
+<h2 class="sec" id="list">{{ sel.program_name }}</h2>
+{{ pg.version_line(sel.issuer, sel.version) }}
+<div class="card tablecard" style="margin-top:12px"><table>
+<tr><th>사람</th><th>진척</th><th class="hide-sm">지금</th><th>연말</th>{% if sel.target == 'manager' %}<th class="hide-sm">평가 조직</th>{% endif %}<th class="hide-sm hide-md">모자란 기준</th></tr>
+{% for r in rows %}<tr data-agent="{{ r.agent_id }}"><td class="strong wrap-sm"><a href="{{ path }}?prog={{ prog }}&who={{ r.agent_id }}#person">{{ r.name }}</a> <span class="cap">{{ r.code }}</span>
+  <div class="sm-sub"><span>{{ '달성' if r.achieved else '미달' }}{% if r.org_name %} · {{ r.org_name }}{% endif %}</span></div></td>
+<td>{{ pg.rate(r.progress_rate) }}</td>
+<td class="hide-sm">{% if r.achieved %}<span class="chip good">달성</span>{% else %}<span class="chip">미달</span>{% endif %}</td>
+<td>{{ pg.projected(r.projected) }}</td>
+{% if sel.target == 'manager' %}<td class="hide-sm">{{ r.org_name or '-' }}</td>{% endif %}
+<td class="hide-sm hide-md cell-wrap">{% for m in r.metrics if not m.met %}<div>{{ m.metric_ko }}{% if m.hidden %} {{ pg.hidden() }}{% elif m.remaining %} {{ pg.val(m.remaining, m.unit, m.metric) }} 남음{% endif %}</div>{% else %}-{% endfor %}</td></tr>{% endfor %}
+</table></div>
+<p class="cap">진척은 기준마다 채운 정도 가운데 가장 나은 묶음의 값입니다. 이름을 누르면 기준마다의 숫자와 연말 예상을 봅니다.</p>
+{% endif %}
+
+
+<p class="cap" style="margin-top:20px">연말 값과 연말 달성은 예상이고 확정이 아닙니다. 수수료 기준은 본인과 메인 관리자만 보고, 관리자는 달성 여부만 봅니다. <a href="/program/career">커리어패스 운영</a> · <a href="/program/excellence">영업우수</a></p>
+{% endblock %}

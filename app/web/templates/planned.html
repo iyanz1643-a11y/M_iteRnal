@@ -3,9 +3,12 @@
 <p class="eyebrow">{{ PHASES[item.phase] }}</p>
 <h1 class="display">{{ item.name }}</h1>
 <p class="lede">{{ item.desc }}.</p>
+{% set gw = guide_wait(item) if guide_wait is defined else none %}
+{% if gw %}<div class="alert ai-off" role="status" style="margin-top:28px">제작지침 대기. {{ gw.title }} 제작지침을 아직 받지 않아 이 화면은 준비 중입니다. 지침을 받으면 AI 초안과 7나이츠 심사를 거쳐 쓰실 수 있습니다.</div>{% endif %}
 <div class="grid g2" style="margin-top:40px">
   <div class="card"><div class="k">상태</div>
     {% if item.status == 'legacy' %}<div class="mid">운영 도구에 있음</div><div class="cap">지금은 메인 관리자의 운영 도구에서 씁니다. {{ PHASES[item.phase] }}에서 이 자리로 옮깁니다.</div>
+    {% elif gw %}<div class="mid">제작지침 대기</div><div class="cap">지침 {{ gw.version }}. 받은 뒤에 만듭니다.</div>
     {% else %}<div class="mid">준비 중</div><div class="cap">{{ PHASES[item.phase] }}에서 만듭니다.</div>{% endif %}</div>
   <div class="card"><div class="k">내가 보는 범위</div><div class="mid">{{ SCOPES[ctx.scope] }}</div>
     <div class="cap">{% for r, s in item.roles.items() %}{{ {'main':'메인 관리자','manager':'관리자','agent':'설계사'}[r] }} {{ SCOPES[s] }}{% if not loop.last %} · {% endif %}{% endfor %}</div></div>

@@ -13,6 +13,7 @@
 | notify_sweep | 알림 정리. 끝난 명함 승인 권한을 맞춘다 | 없음 | 없음 |
 | connect_watch | 연결 가져오기. CONNECT_WATCH_DIR 폴더의 새 파일 | 없음 | ingest 와 같다 |
 | gdrive | 연결 가져오기. 구글 드라이브. 설정 전에는 설정 안 됨으로 끝난다 | 없음 | ingest 와 같다 |
+| review_submit | 7나이츠 심사. 화면 /review/requests 가 uploads 의 review/ 에 둔 요청 파일로 review.submit 을 부른다 | key, by | 없음 |
 
 - 적재 뒤에는 그 귀속월과, 그 뒤에 이미 저장된 업적 run 이 있는 달을 모두 다시 돌린다. 분기, 반기, 연 누적이 앞 달의 적재를 담기 때문이다.
   홈과 팀원 현황은 저장된 업적 run 을 읽고 실적 화면은 계약에서 새로 센다. 적재 뒤 run 을 다시 돌려 두 숫자가 어긋나지 않게 한다.
@@ -42,13 +43,15 @@ from app.ops.storage import StorageError, get_storage
 QUEUED, RUNNING, DONE, FAILED = "queued", "running", "done", "failed"
 STATUS_KO = {QUEUED: "대기", RUNNING: "처리 중", DONE: "끝남", FAILED: "실패"}
 KIND_KO = {"ingest": "큰 적재", "perf_run": "업적 run", "rank_run": "랭킹 run", "notify_sweep": "알림 정리",
-           "connect_watch": "폴더 가져오기", "gdrive": "구글 드라이브 가져오기", "recon_run": "대사 다시 돌리기"}
+           "connect_watch": "폴더 가져오기", "gdrive": "구글 드라이브 가져오기", "recon_run": "대사 다시 돌리기",
+           "review_submit": "7나이츠 심사"}
 YM = re.compile(r"^20\d\d(0[1-9]|1[0-2])$")
 LEASE_SECONDS = 30 * 60
 BACKOFF_SECONDS = 30
 REFRESH_KINDS = ("contract", "employee")       # 들어가면 업적 run 을 다시 돌리는 원본 종류
 SETTLE_KINDS = {"statement": "원수사 정산서", "persistency": "유지율 현황"}   # 연결 흐름 밖의 적재기로 넣는 종류
 INSURER = re.compile(r"^[A-Za-z0-9_-]{1,20}$")
+REVIEW_KEY = re.compile(r"^review/[A-Za-z0-9_-]{20,64}\.json$")     # 심사 요청 파일. 심사할 글은 params 에 넣지 않고 이 파일에 둔다
 FMT = "%Y-%m-%d %H:%M:%S"
 
 
@@ -97,6 +100,12 @@ def _check(kind: str, params: dict) -> dict:
         except StorageError as e:
             raise JobError(str(e)) from None
         p = {k: str(p[k]) for k in ("area", "key", "kind", "ym", "insurer", "title", "by") if p.get(k)}
+    elif kind == "review_submit":
+        if not REVIEW_KEY.match(str(p.get("key") or "")):
+            raise JobError("심사 요청 파일의 키가 올바르지 않습니다.")
+        if not get_storage().exists("uploads", p["key"]):
+            raise JobError("저장소에 심사 요청 파일이 없습니다.")
+        p = {k: str(p[k]) for k in ("key", "by") if p.get(k)}
     else:
         p = {}
     return p
@@ -369,6 +378,34 @@ def _gdrive(con, p, job):
     return _source_result(con, run, job, "worker")
 
 
+def ai_client(con):
+    """AI 를 부르는 입구. 키가 없으면 꺼진 클라이언트다. 시험과 브라우저 확인은 이 함수를 바꿔 가짜 클라이언트를 넣는다."""
+    from app.ai.client import AIClient
+    return AIClient(con)
+
+
+def _review_submit(con, p, job):
+    """7나이츠 심사. 3회전을 돌아 오래 걸려 워커가 한다. 요청 파일을 읽어 review.submit 을 부르고 파일을 지운다.
+
+    요청은 /review/requests 가 guard 로 메인 관리자를 확인한 뒤에만 넣는다. 그래서 메인 관리자 문맥으로 부른다.
+    한 번만 한다(max_attempts 1). 다시 하면 심사 줄이 겹치기 때문이다. 결과에는 심사 번호, 상태, 회전 수만 둔다. 글은 ai_review 에 있다.
+    """
+    from app.ai import review
+    st = get_storage()
+    if not st.exists("uploads", p["key"]):
+        return {"status": "missing_file"}
+    req = json.loads(st.get("uploads", p["key"]).decode("utf-8"))
+    ctx = {"role": "main", "login_id": p.get("by") or job.get("requested_by") or "worker"}
+    try:
+        out = review.submit(con, ctx, kind=req.get("kind"), audience=req.get("audience"), text=req.get("text"), title=req.get("title"),
+                            parent_id=req.get("parent_id"), client=ai_client(con))
+    except ValueError:                                   # 빈 글, 연락처 꼴, 없는 종류. 화면이 먼저 막으므로 드물다
+        st.delete("uploads", p["key"])
+        return {"status": "refused"}
+    st.delete("uploads", p["key"])
+    return {"status": out["status"], "review_id": out["review_id"], "rounds": out["rounds"], "stop": out.get("stop_reason")}
+
+
 def _notify_sweep(con, p, job):
     from app.org import card_grant
     try:
@@ -381,7 +418,7 @@ def _notify_sweep(con, p, job):
 
 
 HANDLERS = {"ingest": _ingest, "perf_run": _perf_run, "rank_run": _rank_run, "notify_sweep": _notify_sweep,
-            "connect_watch": _connect_watch, "gdrive": _gdrive, "recon_run": _recon_run}
+            "connect_watch": _connect_watch, "gdrive": _gdrive, "recon_run": _recon_run, "review_submit": _review_submit}
 
 
 # ---------------------------------------------------------------- 정해진 때 넣기
