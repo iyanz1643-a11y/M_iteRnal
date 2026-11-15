@@ -1,0 +1,29 @@
+{# 초대 링크로 첫 비밀번호 정하기. 로그인 전 공개 화면이다. 토큰을 가진 사람에게 사번과 링크 만료 시각만 보인다. 앱 이름은 D-16 가정이다 #}
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>첫 비밀번호 정하기 · GA 업무 앱</title>
+<meta name="robots" content="noindex, nofollow">
+{% include "_head.html" %}</head>
+<body><div class="login">
+{% if done %}
+  <h1 class="display">다 됐습니다</h1>
+  <p class="lede" style="margin-left:auto;margin-right:auto">아이디는 사번 <b>{{ done }}</b> 입니다. 새 비밀번호로 들어가 주세요. 이 링크는 이제 쓸 수 없습니다.</p>
+  <p style="margin-top:28px"><a class="btn primary" href="/login">들어가기</a></p>
+  <p class="cap" style="margin-top:20px"><a href="/welcome#install">휴대폰 홈 화면에 추가하는 법</a></p>
+{% elif bad or not inv %}
+  <h1 class="display">링크를 쓸 수 없습니다</h1>
+  <p class="lede" style="margin-left:auto;margin-right:auto">{{ bad or '기간이 지났거나 이미 쓴 링크입니다. 메인 관리자에게 새 링크를 받아 주세요.' }}</p>
+  <p style="margin-top:28px"><a href="/welcome">앱 소개 보기</a></p>
+{% else %}
+  <h1 class="display">첫 비밀번호</h1>
+  <p class="lede" style="margin-left:auto;margin-right:auto">아이디는 사번 <b>{{ inv.login_id }}</b> 입니다. 쓸 비밀번호를 정해 주세요.</p>
+  <form class="stack" method="post" action="/invite"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    {% if error %}<div class="alert" style="margin:0" role="alert">{{ error }}</div>{% endif %}
+    <input type="text" name="username" value="{{ inv.login_id }}" autocomplete="username" readonly hidden>
+    <label class="f">새 비밀번호<input type="password" name="password" autocomplete="new-password" minlength="8" maxlength="64" required autofocus></label>
+    <label class="f">한 번 더<input type="password" name="password2" autocomplete="new-password" minlength="8" maxlength="64" required></label>
+    <p class="cap" style="margin:0">8자 이상, 영문과 숫자를 함께 넣습니다. 사번은 넣지 않습니다.</p>
+    <button class="primary" type="submit">정하기</button>
+  </form>
+  <p class="cap" style="margin-top:20px">이 링크는 {{ inv.expires_at|when }}까지 한 번만 쓸 수 있습니다.</p>
+{% endif %}
+</div></body></html>

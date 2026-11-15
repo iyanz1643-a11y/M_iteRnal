@@ -1,0 +1,14 @@
+# 이미지에 넣지 않는 것. 실제 자료와 비밀 값이 이미지에 들어가지 않게 한다
+data/
+.env
+.env.*
+!.env.example
+.git/
+.github/
+.claude/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+tests/
+docs/

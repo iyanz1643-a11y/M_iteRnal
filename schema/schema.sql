@@ -1215,3 +1215,148 @@ CREATE TABLE IF NOT EXISTS promotion_result (
 );
 CREATE INDEX IF NOT EXISTS idx_promotion_result_promo ON promotion_result(promo_id, agent_id);
 -- [promotion_plan:end]
+
+-- ---------------------------------------------------------------------------
+-- 초대 링크 (앱 소개와 초대 랜딩, docs/10 6.1). 메인 관리자가 초기 비밀번호를 쓰는 계정에 한 번 쓰는 링크를 만든다.
+-- 토큰 원문은 저장하지 않고 SHA-256 16진수만 둔다. 유효기간은 app/web/invite.py 의 TTL_DAYS 이고, 쓰면 used_at 이 찬다.
+-- 같은 계정에 새 링크를 만들면 앞의 줄에 revoked_at 이 찬다. 줄은 지우지 않는다.
+-- 오래된 DB 에서도 이 묶음만 다시 돌릴 수 있게 쓴다. app/web/invite.py 의 ensure 가 이 묶음을 읽는다.
+-- [invite:begin]
+CREATE TABLE IF NOT EXISTS user_invite (
+    invite_id      INTEGER PRIMARY KEY,
+    user_id        INTEGER NOT NULL REFERENCES user_account(user_id),
+    token_hash     TEXT NOT NULL UNIQUE,              -- 토큰의 SHA-256 16진수. 원문은 만든 화면에 한 번만 보인다
+    created_by     TEXT NOT NULL,                     -- 만든 메인 관리자의 login_id
+    created_at     TEXT NOT NULL,
+    expires_at     TEXT NOT NULL,                     -- 이 시각이 지나면 쓸 수 없다
+    used_at        TEXT,                              -- 첫 비밀번호를 정한 때. 차면 다시 쓸 수 없다
+    revoked_at     TEXT                               -- 새 링크를 만들었거나 다른 링크를 써서 거둔 때
+);
+CREATE INDEX IF NOT EXISTS idx_user_invite_user ON user_invite(user_id, used_at, revoked_at);
+-- [invite:end]
+
+-- ---------- 수수료·점검: 대사 차이 처리 기록 (G) ----------
+-- 웹의 대사 화면이 차이마다 남기는 처리 상태다. checked(확인함) / asked(보험사 문의) / resolved(해결). 처리 전은 줄이 없고 미처리로 본다.
+-- 한 번 처리가 한 줄이다. 지우지 않고 지금 상태는 마지막 줄이다. 대사를 다시 돌리면 diff_id 가 새로 생기므로
+-- (period_ym, insurer_id, policy_no, commission_type, installment_no) 로 묶어 새 차이에 이어 붙인다. diff_id 와 run_id 는 처리할 때의 것이다.
+-- diff_amount 는 처리할 때의 차이 금액이다. 지금 차이와 다르면 처리 뒤에 금액이 바뀐 것이다. app/engine/settle.py 가 쓴다.
+-- 기존 도구의 reconciliation_diff.status 는 건드리지 않는다.
+-- [settle:begin]
+CREATE TABLE IF NOT EXISTS recon_diff_action (
+    action_id       INTEGER PRIMARY KEY,
+    period_ym       TEXT NOT NULL,
+    insurer_id      INTEGER NOT NULL REFERENCES insurer(insurer_id),
+    policy_no       TEXT NOT NULL,
+    commission_type TEXT,
+    installment_no  INTEGER,
+    diff_id         INTEGER NOT NULL REFERENCES reconciliation_diff(diff_id),
+    run_id          INTEGER NOT NULL REFERENCES calc_run(run_id),
+    status          TEXT NOT NULL CHECK (status IN ('checked','asked','resolved')),
+    diff_amount     NUMERIC NOT NULL,
+    note            TEXT NOT NULL,
+    acted_by        TEXT NOT NULL,                    -- 메인 관리자의 login_id
+    acted_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_recon_diff_action_key ON recon_diff_action(period_ym, insurer_id, policy_no, commission_type, installment_no);
+-- [settle:end]
+
+-- ---------------------------------------------------------------------------
+-- 명함 배지 판정 (S3 명함 연동 3차). app/connect/card_badges.py 가 쓴다. 다시 만들 수 있는 계산 결과다.
+-- 근거는 인증 확정 기록 agent_certification_award, 인증 계산 agent_certification_status, 조직 부문 수상 확정 org_award_result 다.
+-- 근거가 없어진 줄은 지우지 않고 gone_at 을 채운다. 사람 이름, 실적 값, 시상 내용, 금액은 넣지 않는다.
+-- 유효기간 규칙은 가정이다. 연도 배지는 달성 연도 다음 해 12월 31일까지, 조직 부문 수상은 수상월 뒤 12개월의 말일까지다.
+-- [card_badge:begin]
+CREATE TABLE IF NOT EXISTS card_badge (
+    id               INTEGER PRIMARY KEY,
+    agent_id         INTEGER NOT NULL REFERENCES agent(agent_id),
+    badge_key        TEXT NOT NULL,                   -- cert:우수인증설계사:2025 / award:SALES_EXCELLENT:2025 / org_award:12:202610
+    kind             TEXT NOT NULL,                   -- cert(명함 자격 칩) / award(인증 프로그램의 수상) / org_award(조직 부문 수상)
+    badge            TEXT NOT NULL,                   -- 명함 사이트의 자격 이름, 또는 프로그램 이름이나 부문 이름
+    card_field       TEXT NOT NULL,                   -- certs(자격 칩과 연도 칸) / etc(그 밖의 자격·수상 칸)
+    year             INTEGER,                         -- 연도 칸에 넣을 달성 연도
+    period_ym        TEXT,                            -- 조직 부문 수상의 수상월 YYYYMM
+    label            TEXT NOT NULL,                   -- 명함에 보이는 글
+    basis            TEXT NOT NULL,                   -- award(인증 확정) / calc(인증 계산 달성, 확정 전) / org_award(부문 수상 확정)
+    source_ref       TEXT,                            -- 프로그램 코드나 부문 번호
+    valid_from       TEXT,                            -- YYYY-MM-DD
+    valid_until      TEXT,                            -- YYYY-MM-DD. 이날까지 유효
+    status           TEXT NOT NULL,                   -- valid / expiring / expired / expected
+    first_judged_at  TEXT NOT NULL,
+    judged_at        TEXT NOT NULL,
+    gone_at          TEXT,                            -- 근거가 없어진 때
+    UNIQUE (agent_id, badge_key)
+);
+CREATE INDEX IF NOT EXISTS idx_card_badge_until ON card_badge(valid_until);
+-- [card_badge:end]
+
+-- ---------------------------------------------------------------------------
+-- 조직별 설정 (파트 H, /org/settings). 항목의 목록과 기본값, 꼴은 app/org/settings.py 의 ITEMS 가 원본이다.
+-- 값은 GA 에서 아래로 상속하고 아래 조직이 덮어쓴다. 값마다 시작 달 from_ym 이 있어 지난달 계산은 그때 값을 쓴다.
+-- 지우지 않는다. 바꿀 때마다 org_setting 에 줄을 더하고, value 가 NULL 인 줄은 그 달부터 위 조직의 값을 따르게 돌린 것이다.
+-- 막기는 메인 관리자만 한다. 막은 조직의 값이 아래 전부에 가고 아래에서는 값을 둘 수 없다. 풀면 to_ym 만 채운다.
+-- 오래된 DB 에서도 이 묶음만 다시 돌릴 수 있게 IF NOT EXISTS 로 쓴다. app/org/settings.py 의 ensure 가 이 묶음을 읽는다.
+-- [org_settings:begin]
+CREATE TABLE IF NOT EXISTS org_setting (
+    id          INTEGER PRIMARY KEY,
+    org_id      INTEGER NOT NULL REFERENCES org_unit(org_id),
+    key         TEXT NOT NULL,                        -- 예: notify.tier_near, award.default_top_n
+    value       TEXT,                                 -- JSON. NULL 이면 위 조직의 값을 따른다
+    from_ym     TEXT NOT NULL,                        -- 적용 시작 달 YYYYMM
+    set_by      TEXT NOT NULL,                        -- login_id
+    set_at      TEXT NOT NULL,
+    note        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_org_setting_find ON org_setting(org_id, key, from_ym);
+
+CREATE TABLE IF NOT EXISTS org_setting_lock (
+    lock_id     INTEGER PRIMARY KEY,
+    org_id      INTEGER NOT NULL REFERENCES org_unit(org_id),
+    key         TEXT NOT NULL,
+    from_ym     TEXT NOT NULL,                        -- 막기 시작 달 YYYYMM
+    to_ym       TEXT,                                 -- 막기 끝 달. 비면 아직 막혀 있다
+    locked_by   TEXT NOT NULL,
+    locked_at   TEXT NOT NULL,
+    unlocked_by TEXT,
+    unlocked_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_org_setting_lock_live ON org_setting_lock(org_id, key) WHERE to_ym IS NULL;
+-- [org_settings:end]
+
+-- ---------------------------------------------------------------------------
+-- 운영 기반 (파트 K, platform). 세션 버전, 뒤에서 하는 작업, 스키마 버전. app/ops 가 이 묶음을 쓴다.
+-- 세션 버전: 로그아웃, 비밀번호 바꾸기, 계정 중지와 재설정 때 1 씩 올린다. 쿠키에 적힌 값과 다르면 guard 가 접속을 끊는다.
+-- 작업: 화면과 명령줄은 줄을 넣고 상태만 본다. 워커 python -m app.worker 가 하나씩 꺼내 처리한다.
+-- 작업의 params 와 result 에는 사람 이름, 연락처, 금액을 넣지 않는다. 건수와 번호와 귀속월만 둔다. error 에는 예외 종류만 둔다.
+-- 지우지 않는다. 오래된 DB 에서도 이 묶음만 다시 돌릴 수 있게 쓴다. app/ops/schema.py 의 ensure 가 읽고, 이미 있는 칸은 건너뛴다.
+-- [platform:begin]
+ALTER TABLE user_account ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS job (
+    job_id          INTEGER PRIMARY KEY,
+    kind            TEXT NOT NULL,                    -- perf_run, rank_run, ingest, connect_watch, gdrive, notify_sweep
+    params          TEXT NOT NULL DEFAULT '{}',       -- JSON. 귀속월, 저장 위치 키, 종류
+    dedupe_key      TEXT,                             -- 같은 키의 대기 중인 작업은 하나만 둔다
+    status          TEXT NOT NULL DEFAULT 'queued',   -- queued / running / done / failed
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    max_attempts    INTEGER NOT NULL DEFAULT 3,
+    run_after       TEXT NOT NULL,                    -- 이 시각 뒤에 꺼낸다. 실패하면 뒤로 미룬다
+    requested_by    TEXT,                             -- login_id 또는 system, worker
+    parent_id       INTEGER REFERENCES job(job_id),   -- 적재 뒤에 넣은 업적 run 처럼 앞 작업이 넣은 작업
+    created_at      TEXT NOT NULL,
+    started_at      TEXT,
+    finished_at     TEXT,
+    lease_until     TEXT,                             -- 처리 중인 워커가 이 시각까지 잡는다. 지나면 다시 대기로 돌린다
+    worker          TEXT,
+    result          TEXT,                             -- JSON. 건수와 번호만
+    error           TEXT                              -- 예외 종류만. 내용은 남기지 않는다
+);
+CREATE INDEX IF NOT EXISTS idx_job_queue ON job(status, run_after, job_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_job_dedupe ON job(dedupe_key) WHERE status = 'queued' AND dedupe_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS schema_migration (
+    version         INTEGER PRIMARY KEY,
+    name            TEXT NOT NULL,
+    applied_at      TEXT NOT NULL
+);
+INSERT INTO schema_migration(version, name, applied_at) VALUES (1, 'schema.sql 기준', '2026-11-15 00:00:00') ON CONFLICT (version) DO NOTHING;
+-- [platform:end]

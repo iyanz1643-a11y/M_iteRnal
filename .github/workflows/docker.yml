@@ -1,0 +1,44 @@
+# 도커 이미지가 만들어지는지만 본다. 올리지도 배포하지도 않는다. docs/10 6.4.
+# D-40 에 맞춰 올릴 때만 돌고, 이미지에 닿는 파일이 바뀐 때만 돈다. 무료 사용량을 아끼려는 것이다.
+name: docker
+
+on:
+  push:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - docker-compose.yml
+      - requirements.txt
+      - .github/workflows/docker.yml
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - docker-compose.yml
+      - requirements.txt
+      - .github/workflows/docker.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: compose 구성 확인
+        run: |
+          cp .env.example .env
+          POSTGRES_PASSWORD=ci-placeholder docker compose config -q
+
+      - name: 이미지 만들기
+        run: docker build -t ga-app:ci .
+
+      - name: 이미지 안에서 앱과 워커 불러오기
+        run: docker run --rm ga-app:ci python -c "import app.web.main, app.worker; print('ok')"

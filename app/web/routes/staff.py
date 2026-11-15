@@ -4,7 +4,6 @@
 미리보기와 반영은 같은 동기화 함수를 돌리고, 미리보기는 끝에 되돌린다. 그래서 두 화면의 건수가 같다.
 사람 이름은 화면에만 보이고 변경 기록에는 건수만 남긴다.
 """
-import os
 import pathlib
 import re
 import secrets
@@ -13,9 +12,9 @@ from datetime import date
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
 
-from app import db
 from app.loader.eternal_employee import parse_employee_file
 from app.loader.sheet import HeaderMismatch
+from app.ops.storage import get_storage
 from app.org import sync
 from app.web import auth
 from app.web.deps import get_con, guard, page
@@ -32,7 +31,7 @@ KIND_KO = {"new_agents": "새 설계사", "moved": "이동", "terminated": "퇴�
 
 
 def upload_dir() -> pathlib.Path:
-    d = pathlib.Path(os.environ.get("APP_UPLOAD_DIR") or db.ROOT / "data" / "raw" / "uploads")
+    d = get_storage().root("uploads")                    # APP_UPLOAD_DIR, 없으면 data/raw/uploads. app/ops/storage.py
     d.mkdir(parents=True, exist_ok=True)
     return d
 

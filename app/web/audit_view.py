@@ -20,6 +20,8 @@ ACTION_KO = {
     "account_unlock": "잠금 해제",
     "account_suspend": "계정 중지",
     "account_activate": "계정 다시 사용",
+    "account_invite": "초대 링크 만듦",
+    "account_invite_used": "초대 링크로 첫 비밀번호 정함",
     # 조직
     "org_head_assign": "조직장 지정",
     "org_head_end": "조직장 해제",
@@ -27,6 +29,11 @@ ACTION_KO = {
     "org_deputy_end": "대리 끝내기",
     "staff_sync": "사원현황 반영",
     "org_from_contracts": "계약현황으로 조직 만들기",
+    # 조직별 설정. 행위 코드는 app/org/settings.py 의 _audit 호출과 같다
+    "org_setting_set": "조직별 설정 바꿈",
+    "org_setting_inherit": "조직별 설정 위 조직 값 따름",
+    "org_setting_lock": "조직별 설정 막음",
+    "org_setting_unlock": "조직별 설정 풂",
     # 프로모션과 조직 부문 시상
     "promotion_published": "프로모션 게시",
     "promotion_withdrawn": "프로모션 회수",
@@ -204,6 +211,8 @@ def target_ko(action: str, target, names: _Names) -> str:
         if action.startswith("org_award_"):
             name = names.division(_num(t))
             return f"조직 부문 시상: {name}" if name else t
+        if action.startswith("org_setting_"):
+            return _setting_target(t, names)
         if action.startswith("org_head_") or action.startswith("org_deputy_"):
             return _org_target(t, names)
         if action.startswith("account_"):
@@ -296,6 +305,20 @@ def _board_target(action: str, t: str, names: _Names) -> str:
         name = names.board_file(_num(fid))
         out += f" · 첨부 {name}" if name else f" · 첨부 {fid}번"
     return out
+
+
+def _setting_target(t: str, names: _Names) -> str:
+    """'org=3 key=notify.tier_near 202612~' 꼴. 항목 이름은 app/org/settings.py 의 ITEMS 를 따른다."""
+    from app.org.settings import ITEMS
+    kv = dict(_KV.findall(t))
+    if "org" not in kv or "key" not in kv:
+        return t
+    it = ITEMS.get(kv["key"])
+    parts = [f"조직: {names.org(_num(kv['org'])) or kv['org']}", f"항목: {it['name'] if it else kv['key']}"]
+    m = re.search(r"(20\d{4})~\s*$", t)
+    if m:
+        parts.append(f"{_ym(m.group(1))}부터")
+    return " · ".join(parts)
 
 
 def _org_target(t: str, names: _Names) -> str:

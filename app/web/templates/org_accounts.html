@@ -1,13 +1,18 @@
 {% extends "base.html" %}
 {% block body %}
 <h1 class="display">계정</h1>
-<p class="lede">역할은 계정에 적지 않습니다. 조직장으로 지정되면 관리자가 되고, 지정이 끝나면 설계사로 돌아갑니다. 새 계정과 재설정한 계정은 첫 접속 때 비밀번호를 바꿔야 합니다.</p>
+<p class="lede">역할은 계정에 적지 않습니다. 조직장으로 지정되면 관리자가 되고, 지정이 끝나면 설계사로 돌아갑니다. 새 계정과 재설정한 계정은 첫 접속 때 비밀번호를 바꿔야 합니다. 초기 비밀번호 대신 초대 링크를 보내 본인이 첫 비밀번호를 정하게 할 수도 있습니다.</p>
 {% if err %}<div class="alert" style="margin-top:20px">{{ err }}</div>{% endif %}
 {% if issued %}<section class="card" style="margin-top:24px"><div class="k">초기 비밀번호 {{ issued|length }}건</div>
 <div class="cap" style="margin:4px 0 12px">이 화면을 떠나면 다시 볼 수 없습니다. 본인에게만 직접 전하세요. 저장하지 않으므로 잃어버리면 다시 재설정합니다.</div>
-<div class="tablecard"><table><tr><th>이름</th><th>아이디</th><th>초기 비밀번호</th></tr>
-{% for x in issued %}<tr><td class="strong">{{ x.name }}</td><td>{{ x.login_id }}</td><td><code style="font-size:17px">{{ x.password }}</code></td></tr>{% endfor %}
-</table></div></section>{% endif %}
+<div class="tablecard"><table><tr><th>이름</th><th>아이디</th><th>초기 비밀번호</th><th class="hide-sm"></th></tr>
+{% for x in issued %}<tr><td class="strong">{{ x.name }}</td><td>{{ x.login_id }}</td><td><code style="font-size:17px">{{ x.password }}</code></td>
+<td class="acts hide-sm">{% if x.user_id %}<form method="post" action="/org/accounts"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="user_id" value="{{ x.user_id }}"><button class="ghost" name="action" value="invite">초대 링크 만들기</button></form>{% endif %}</td></tr>{% endfor %}
+</table></div>
+<p class="cap" style="margin-top:8px">초기 비밀번호 대신 초대 링크를 보내도 됩니다. 아래 계정 목록의 초대 링크 단추로도 만듭니다.</p></section>{% endif %}
+{% if invite_link %}<section class="card invite-once" style="margin-top:24px"><div class="k">초대 링크 · {{ invite_link.name }} {{ invite_link.login_id }}</div>
+<div class="cap" style="margin:4px 0 12px">이 화면을 떠나면 다시 볼 수 없습니다. 본인에게만 직접 보내 주세요. {{ invite_days }}일 뒤인 {{ invite_link.expires_at|when }}까지 한 번만 쓸 수 있고, 새로 만들면 앞의 링크는 무효가 됩니다.</div>
+<div class="secret-box"><textarea readonly aria-label="초대 링크" onclick="this.select()">{{ invite_link.url }}</textarea></div></section>{% endif %}
 
 {% if leavers %}<h2 class="sec">퇴사자 중지 후보 {{ leavers|length }}명</h2>
 <div class="card tablecard"><table><tr><th>이름</th><th class="hide-sm">아이디</th><th>퇴사일</th><th class="hide-sm">마지막 접속</th><th></th></tr>
@@ -30,11 +35,12 @@
 <tr><td class="strong">{{ r.display_name }}<div class="sm-sub"><span>{{ r.login_id }} {{ role }}</span></div></td><td class="hide-sm">{{ r.login_id }}</td>
 <td class="hide-sm">{{ role }}</td>
 <td class="wrap-sm">{% if r.status != 'active' %}<span class="chip bad">중지</span>{% elif r.locked_until and r.locked_until > now %}<span class="chip warn">잠김</span>{% else %}<span class="chip good">사용</span>{% endif %}
-{% if r.must_change_password %}<span class="chip">초기 비밀번호</span>{% endif %}</td>
+{% if r.must_change_password %}<span class="chip">초기 비밀번호</span>{% endif %}{% if r.user_id in invites %}<span class="chip blue">초대 링크 대기</span>{% endif %}</td>
 <td class="hide-sm">{{ r.last_login_at or '-' }}</td>
 <td class="acts"><form method="post" action="/org/accounts"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="user_id" value="{{ r.user_id }}">
 {% if r.locked_until and r.locked_until > now %}<button class="ghost" name="action" value="unlock">잠금 해제</button>{% endif %}
 {% if not r.is_main_admin %}<button class="ghost" name="action" value="reset"><span class="hide-sm">비밀번호 </span>재설정</button>{% endif %}
+{% if not r.is_main_admin and r.status == 'active' and r.must_change_password %}<button class="ghost" name="action" value="invite"><span class="hide-sm">초대 </span>링크</button>{% endif %}
 {% if r.status == 'active' and r.user_id != ctx.user_id %}<button class="ghost" name="action" value="suspend">중지</button>{% elif r.status != 'active' %}<button class="ghost" name="action" value="activate">다시 사용</button>{% endif %}
 </form></td></tr>{% endfor %}
 </table></div>

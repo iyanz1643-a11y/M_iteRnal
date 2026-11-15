@@ -24,8 +24,9 @@ def _subtree(con, org_id):
 
 
 def org_members(con, org_id, ym):
-    """조직과 아래 전부(센터, 팀 포함)에 그 달 소속인 재직 설계사 agent_id 목록."""
-    return orgs.members(con, org_id, ym)
+    """조직과 아래 전부(센터, 팀 포함)에 그 달 소속인 재직 설계사 agent_id 목록.
+    조직 유지율의 목록과 같아야 하므로 persist.org_members 를 그대로 쓴다. 기존 도구의 조직 화면도 이 함수를 부른다."""
+    return persist.org_members(con, org_id, ym)
 
 
 def _recognized(con, agent_ids, year, as_of_ym, prog):

@@ -17,6 +17,7 @@
 - 프로모션 알림의 기준일은 프로모션 화면과 같은 pm.ref_date(자료 기준 달)이다.
 - 교육 기한은 팀 교육 진척도와 같은 deps.edu_today(오늘)로 따진다. 교육은 실적 자료와 상관없는 날짜 일이다.
 - 알림 글에는 고객 이름, 연락처, 시상 금액을 넣지 않는다. 구간 근접에는 본인의 남은 실적만 적는다.
+- 조직별 설정(app/org/settings.py)에서 그 사람의 조직이 꺼 둔 종류는 내지 않는다. 명함 승인 대기와 권한 요청은 끌 수 없다.
 - 13회차 도래의 이번 주는 오늘이 든 주이고 일정 화면과 같이 일요일에 시작한다. 메인 관리자에게는 띄우지 않는다.
 - 종 아이콘의 숫자는 base.html 이 notif_badge(ctx) 로 부른다. 만든 알림 목록을 사람마다 BADGE_TTL 초 동안 이 프로세스 안에 담아 두고,
   읽음 표시는 부를 때마다 표에서 새로 읽는다. 종 아이콘은 쓰기가 생기지 않게 명함 권한 요청을 표에서 바로 센다(light).
@@ -38,6 +39,7 @@ from app.engine import education as edu
 from app.engine import persist as ps
 from app.engine import promotion as pm
 from app.org import card_grant as cg
+from app.org import settings as org_settings
 from app.web import board as bd
 from app.web import menu
 from app.web.deps import _cards, edu_today, get_con, guard, page, templates
@@ -234,6 +236,8 @@ def collect(con, ctx, light: bool = False) -> list:
     ref = pm.ref_date(ctx["ym"])
     out = (_promo_notes(con, ctx, ref) + _edu_notes(con, ctx) + _due_notes(con, ctx) + _approval_notes(con, ctx, ref, light)
            + _board_notes(con, ctx))
+    off = org_settings.notify_off(con, ctx)                     # 조직별 설정에서 그 사람의 조직이 그 달에 꺼 둔 종류. 승인 대기 둘은 끌 수 없다
+    out = [n for n in out if n["kind"] not in off]
     order = {"card_grant": 0, "card_pending": 0, "promo_due": 1, "edu_due": 2, "inst13_due": 2, "board_new": 3, "tier_near": 4, "promo_new": 5}
     out.sort(key=lambda n: order[n["kind"]])
     out.sort(key=lambda n: n["at"], reverse=True)               # 날짜가 같으면 승인 대기, 마감 임박, 교육 기한 순

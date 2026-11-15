@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% macro ymtxt(ym) %}{% if ym %}{{ ym[:4] }}년 {{ ym[4:]|int }}월{% endif %}{% endmacro %}
+{% block body %}
+<p class="eyebrow">{{ ctx.role_ko }} · {{ SCOPES[ctx.scope] }} · 지금 값은 {{ ymtxt(now_ym) }} 기준</p>
+<h1 class="display">조직별 설정</h1>
+<p class="lede">GA 의 값이 아래 조직으로 내려가고, 아래 조직이 자기 값을 두면 그 조직과 그 아래는 그 값을 씁니다. 값마다 시작 달이 있어 지난 달은 그때 값을 그대로 씁니다.</p>
+{% if msg %}<div class="okmsg" role="status" style="margin-top:20px">{{ msg }}</div>{% endif %}
+{% if err %}<div class="alert bad" role="alert" style="margin-top:20px">{{ err }}</div>{% endif %}
+
+<form class="perf-pick" method="get" action="/org/settings" style="margin-top:24px">
+  <label class="f">조직<select name="org" onchange="this.form.submit()">{% for o in orgs %}<option value="{{ o.org_id }}"{% if o.org_id == org_id %} selected{% endif %}>{{ o.text }} · {{ LEVEL_KO.get(o.level, o.level) }}</option>{% endfor %}</select></label>
+  <noscript><button class="ghost" type="submit">보기</button></noscript>
+</form>
+{% if not writable %}<p class="cap">이 조직의 설정은 볼 수만 있습니다. 바꾸기는 메인 관리자와 지사장·본부장, 지점장과 그 대리가 자기 조직에서 합니다.</p>{% endif %}
+
+{% if ask %}
+<section class="card confirm" id="confirm" style="margin-top:24px">
+  <div class="k">{{ ask.do }} 확인</div>
+  <h3 class="confirm-title">{{ org_text }}의 {{ ask.name }} 설정을 {{ ymtxt(ask.from_ym) }}부터 {{ ask.q }}?</h3>
+  <ul class="notes">
+    {% if ask.action in ('set', 'inherit') %}<li>지금 값은 {{ ask.old }}이고, 바꾸면 {{ ask.new }}입니다.</li>
+    <li>{{ ymtxt(ask.from_ym) }} 전의 달은 지금 값을 그대로 씁니다.</li>
+    {% elif ask.action == 'lock' %}<li>막으면 이 조직의 값이 아래 조직 전부에 가고, 아래 조직의 값은 쓰지 않습니다. 관리자는 이 항목을 바꾸지 못합니다.</li>
+    {% else %}<li>풀면 아래 조직이 다시 자기 값을 쓰고, 관리자가 바꿀 수 있습니다.</li>{% endif %}
+    <li>바꾼 일은 이력과 변경 기록에 남고 지우지 않습니다.</li>
+  </ul>
+  <form method="post" action="/org/settings" class="actions"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="org_id" value="{{ org_id }}"><input type="hidden" name="key" value="{{ ask.key }}">
+    <input type="hidden" name="action" value="{{ ask.action }}"><input type="hidden" name="from_ym" value="{{ ask.from_ym }}">
+    <input type="hidden" name="note" value="{{ ask.note }}"><input type="hidden" name="confirm" value="1">
+    {% for v in ask['values'] %}<input type="hidden" name="value" value="{{ v }}">{% endfor %}
+    <button class="primary" type="submit">{{ ask.do }}</button><a class="pill quiet big-pill" href="/org/settings?org={{ org_id }}">취소</a></form>
+</section>
+{% endif %}
+
+{% if form %}
+<section class="card" id="edit" style="margin-top:24px">
+  <div class="k">{{ form.name }} 바꾸기</div>
+  <p class="cap" style="margin:0">{{ form.help }} 지금 값은 {{ form.value_text }}이고 {{ form.src_text }}입니다.</p>
+  {% if form.can_edit %}
+  <form class="stack" method="post" action="/org/settings#confirm" style="max-width:640px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  <input type="hidden" name="org_id" value="{{ org_id }}"><input type="hidden" name="key" value="{{ form.key }}">
+  {% if form.kind == 'bool' %}
+  <div class="checks" role="radiogroup" aria-label="{{ form.name }}">
+    <label><input type="radio" name="value" value="1"{% if form.value %} checked{% endif %}> 켬</label>
+    <label><input type="radio" name="value" value="0"{% if not form.value %} checked{% endif %}> 끔</label></div>
+  {% elif form.kind == 'int' %}
+  <label class="f">{{ form.min }}~{{ form.max }}{{ form.unit }}<input class="sm" type="number" name="value" value="{{ form.value }}" min="{{ form.min }}" max="{{ form.max }}" required></label>
+  {% elif form.kind == 'multi' %}
+  <div class="checks">{% for c, label in form.choices.items() %}<label><input type="checkbox" name="value" value="{{ c }}"{% if c in form.value %} checked{% endif %}> {{ label }}</label>{% endfor %}</div>
+  {% elif form.kind == 'courses' %}
+  {% if form.parts %}<p class="cap" style="margin:0">지금 더한 과정: {% for p in form.parts %}{{ p.org }} {{ p.text }}{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+  <div class="checks">{% for c in courses if not c.required %}<label><input type="checkbox" name="value" value="{{ c.course_id }}"{% if c.course_id in form.value %} checked{% endif %}> {{ c.name }}</label>{% else %}<span class="cap" style="margin:0">더할 수 있는 선택 과정이 없습니다.</span>{% endfor %}</div>
+  {% endif %}
+  <div class="frow">
+    <label class="f">시작 달<input class="sm" type="text" name="from_ym" value="{{ first_ym }}" pattern="20[0-9]{4}" required inputmode="numeric"></label>
+    <label class="f">메모<input class="sm" type="text" name="note" maxlength="200" placeholder="바꾸는 까닭"></label>
+  </div>
+  <div class="actions"><button class="primary" type="submit" name="action" value="set">확인하기</button>
+    {% if form.has_own %}<button class="ghost big" type="submit" name="action" value="inherit" formnovalidate>위 조직 값 따르기</button>{% endif %}
+    <a class="pill quiet big-pill" href="/org/settings?org={{ org_id }}">취소</a></div>
+  <p class="cap" style="margin:0">시작 달은 {{ ymtxt(first_ym) }}부터 고릅니다. 지난 달의 값은 바꾸지 않습니다.</p>
+  </form>
+  {% else %}<div class="alert">{{ form.why }}</div>{% endif %}
+  {% if is_main %}
+  <form class="stack" method="post" action="/org/settings#confirm" style="max-width:640px;margin-top:16px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="org_id" value="{{ org_id }}"><input type="hidden" name="key" value="{{ form.key }}">
+    <div class="k">{{ '막기 풀기' if form.live_lock else '막기' }}</div>
+    <p class="cap" style="margin:0">{% if form.live_lock %}{{ ymtxt(form.live_lock.from_ym) }}부터 이 조직에서 막아 두었습니다. 풀면 아래 조직이 다시 자기 값을 씁니다.{% else %}막으면 이 조직의 값이 아래 조직 전부에 가고 관리자는 바꾸지 못합니다.{% endif %}</p>
+    <div class="frow"><label class="f">{{ '푸는 달' if form.live_lock else '막는 달' }}<input class="sm" type="text" name="from_ym" value="{{ first_ym }}" pattern="20[0-9]{4}" required inputmode="numeric"></label></div>
+    <div class="actions"><button class="ghost big" type="submit" name="action" value="{{ 'unlock' if form.live_lock else 'lock' }}">{{ '풀기 확인' if form.live_lock else '막기 확인' }}</button></div>
+  </form>
+  {% endif %}
+</section>
+{% endif %}
+
+{% for g in sections if g.rows %}
+<h2 class="sec">{{ g.name }}</h2>
+<div class="card tablecard"><table><tr><th>항목</th><th>지금 값</th><th class="hide-sm">어디서</th><th class="hide-sm">시작 달</th><th></th></tr>
+{% for r in g.rows %}
+<tr><td class="strong" style="white-space:normal">{{ r.name }}
+  <div class="sm-sub"><span>{{ r.src_text }}</span>{% if r.from_ym %}<span>{{ ymtxt(r.from_ym) }}부터</span>{% endif %}</div>
+  <div class="cap" style="margin:4px 0 0">{{ r.help }}{% if not r.used_by %} 값만 저장하고 아직 화면에 쓰지 않습니다.{% endif %}</div>
+  {% if r.locked_text or r.main_only or r.upcoming %}<div class="chips" style="margin-top:6px">
+    {% if r.locked_text %}<span class="chip warn">{{ r.locked_text }}</span>{% endif %}
+    {% if r.main_only %}<span class="chip">메인 관리자만</span>{% endif %}
+    {% for u in r.upcoming %}<span class="chip blue">{{ ymtxt(u.from_ym) }}부터 {{ u.text }} 예정</span>{% endfor %}</div>{% endif %}</td>
+<td style="white-space:normal">{{ r.value_text }}</td>
+<td class="hide-sm" style="white-space:normal">{{ r.src_text }}</td>
+<td class="hide-sm">{{ ymtxt(r.from_ym) if r.from_ym else '처음부터' }}</td>
+<td class="acts">{% if r.can_edit or is_main %}<a class="pill quiet" href="/org/settings?org={{ org_id }}&edit={{ r.key }}#edit">바꾸기</a>{% endif %}{% if r.n_hist %}<a class="pill quiet" href="#hist">이력 {{ r.n_hist }}</a>{% endif %}</td></tr>
+{% endfor %}
+</table></div>
+{% endfor %}
+
+<h2 class="sec" id="hist">{{ org_text }}의 이력 {{ n_hist }}건</h2>
+<div class="card tablecard"><table><tr><th>때</th><th>항목</th><th>바뀐 것</th><th class="hide-sm">시작 달</th><th class="hide-sm">누가</th></tr>
+{% for h in hist %}
+<tr><td>{{ h.at|when }}</td><td class="strong" style="white-space:normal">{{ h.name }}<div class="sm-sub"><span>{{ ymtxt(h.from_ym) }}부터</span><span>{{ h.by }}</span></div></td>
+<td style="white-space:normal">{% if h.what == 'set' %}{{ h.value_text }}{% else %}<span class="chip{{ ' warn' if h.what == 'lock' }}">{{ h.what_ko }}</span>{% endif %}{% if h.note %}<div class="cap" style="margin:2px 0 0">{{ h.note }}</div>{% endif %}</td>
+<td class="hide-sm">{{ ymtxt(h.from_ym) }}</td><td class="hide-sm">{{ h.by }}</td></tr>
+{% else %}<tr><td colspan="5" class="cap">이 조직에 바로 둔 값이 아직 없습니다. 모두 위 조직이나 기본값을 따릅니다.</td></tr>{% endfor %}
+</table></div>
+<p class="cap">이력은 이 조직에 바로 둔 값과 막기만 보입니다. 줄은 지우지 않습니다. 같은 시작 달에 여러 번 바꾸면 마지막 줄을 씁니다.</p>
+{% endblock %}

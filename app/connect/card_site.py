@@ -1,4 +1,4 @@
-"""모바일 명함 사이트 클라이언트. 1차: 읽기. D-44: 승인과 반려 쓰기. 2차: 수료 코드 발급 쓰기와 발급 기록 읽기.
+"""모바일 명함 사이트 클라이언트. 1차: 읽기. D-44: 승인과 반려 쓰기. 2차: 수료 코드 발급 쓰기와 발급 기록 읽기. 3차: 내리기 쓰기.
 
 명함 사이트의 API (netlify/functions/api.mjs 기준)
 - GET /api/status?slug=   공개. {slug, live, liveAt, status, reason, at, decidedAt}
@@ -16,9 +16,12 @@
                           성공 {ok, rows: [{serial, course, ym, name, phone, code, at, status}]}. 일련번호는 과정+YYMM-순번이다.
                           검사에 걸리면 400 bad_course / bad_ym / bad_people 이고 아무것도 만들지 않는다.
 - GET /api/admin/codes    머리글 x-admin-key. {log: [발급 기록]}. 기록마다 이름, 연락처, 코드 원문이 있다
+- POST /api/admin/remove {slug, reason}    머리글 x-admin-key. 공개본 파일과 공개 기록을 지우고, 요청 기록이 있으면
+                          status removed 와 reason 을 적는다. 성공 {ok}. 이미 내린 주소에도 {ok} 다. 꼴이 틀리면 400 bad_slug.
+                          reason 은 사이트가 자르지 않고, 비면 사이트가 정한 말을 넣는다. 공개 상태 조회에 그대로 보인다
 
 쓰기 규칙
-- 승인, 반려, 수료 코드 발급만 만든다. 내리기는 만들지 않는다.
+- 승인, 반려, 수료 코드 발급, 내리기만 만든다.
 - 환경 변수 CARD_SITE_WRITE 가 1 일 때만 POST 를 보낸다. 아니면 보내지 않고 write_off 를 돌려준다. 기본은 꺼짐이다.
 - 쓰기는 자동으로 다시 보내지 않는다. 응답을 받지 못했거나 5xx 면 공개 상태를 한 번 GET 으로 확인해 결과를 정한다.
 - 화면은 이 클라이언트의 approve, reject 를 바로 부르지 않고 app/connect/card_decide.py 의 decide_card 를 부른다.
@@ -34,6 +37,14 @@
   repr 과 to_dict 에는 원문이 없다. 이름과 휴대폰은 맞춰 보는 데만 쓰고 버린다.
 - 화면은 issue_codes 를 바로 부르지 않고 app/connect/card_codes.py 의 issue_card_codes 를 부른다.
 - code_log 는 발급 기록을 읽어 일련번호, 과정, 수료월, 해시, 시각만 돌려준다. 이름, 연락처, 원문은 버린다.
+
+내리기 remove (S3 명함 연동 3차)
+- 쓰기 규칙은 승인과 같다. 쓰기 스위치와 키를 먼저 보고, POST 는 한 번만 보내고 다시 보내지 않는다.
+- 응답을 받지 못했거나 5xx 면 공개 상태를 한 번 GET 으로 읽는다. 공개 중도 승인 대기도 아니면 성공, 남아 있으면 실패다.
+  사이트의 내리기는 승인 대기 요청도 removed 로 바꾼다.
+  읽지도 못하면 unknown 으로 돌려준다. 사이트의 내리기는 여러 번 보내도 결과가 같아, 메인 관리자가 확인한 뒤 다시 할 수 있다.
+- 사유는 공개 상태 조회로 누구나 볼 수 있다. 사유가 비면 보내지 않아 사이트가 정한 말이 들어간다.
+- 화면은 remove 를 바로 부르지 않고 app/connect/card_remove.py 의 remove_card 를 부른다. 권한, 사유 검사, 변경 기록은 그쪽에 있다.
 
 앱 쪽으로 넘기는 것은 주소, 공개 여부, 승인 시각, 대기와 반려 상태뿐이다.
 이름은 suggest_links 안에서 설계사와 잇는 데만 쓰고 결과와 상태 기록에 남기지 않는다. 목록의 연락처는 읽지 않는다.
@@ -86,8 +97,8 @@ TOO_BIG = "too_big"               # 크기 상한을 넘어 읽다가 멈췄다
 # 쓰기 결과 상태. OK, FAILED, NOT_CONFIGURED 와 함께 쓴다
 WRITE_OFF = "write_off"           # CARD_SITE_WRITE 가 꺼져 있어 보내지 않았다
 NO_PENDING = "no_pending"         # 사이트에 대기 중인 요청이 없다
-WRITE_ACTIONS = ("approve", "reject")
-TARGET_STATE = {"approve": "approved", "reject": "rejected"}
+WRITE_ACTIONS = ("approve", "reject")             # _write 가 받는 것. 내리기는 remove 로 따로 보낸다
+TARGET_STATE = {"approve": "approved", "reject": "rejected", "remove": "removed"}
 REASON_MAX = 200                  # 사이트가 자르는 길이와 같다
 
 # 수료 코드 발급. 사이트 issueCodes 와 같은 규칙
@@ -148,7 +159,7 @@ class CardEntry:
 class WriteResult:
     """승인이나 반려 한 번의 결과. 사유 원문은 담지 않는다."""
     slug: str
-    action: str                   # approve / reject
+    action: str                   # approve / reject / remove
     decided_at: str | None = None
     confirmed_by_status: bool = False   # 응답을 받지 못해 공개 상태를 읽어 결과를 확인했다
 
@@ -477,6 +488,61 @@ class CardSiteClient:
             return Outcome(FAILED, reason=f"{why}. 아직 승인 대기입니다. 다시 시도해 주세요"[:300], attempts=1)
         return Outcome(FAILED, reason=f"{why}. 지금 상태는 {STATE_KO.get(st, st)} 입니다. 명함 사이트 관리 화면에서 확인해 주세요"[:300],
                        attempts=1)
+
+    # ---------------------------------------------------------- 내리기
+    def remove(self, slug: str, reason: str = "") -> Outcome:
+        """내리기 요청을 한 번 보낸다. 돌려주는 값은 Outcome(value=WriteResult). 예외를 올리지 않는다.
+        status: ok / unknown / write_off / not_configured / failed
+        - ok: 사이트가 받았거나, 응답을 받지 못했지만 공개 상태로 내려간 것을 확인했다.
+        - unknown: 보냈지만 결과를 확인하지 못했다. 자동으로 다시 보내지 않는다.
+        사유는 앞뒤 공백을 지우고 200자로 자른다. 비면 보내지 않는다. 사유 원문은 결과와 상태 기록에 남기지 않는다.
+        화면은 card_remove.remove_card 를 거쳐 부른다."""
+        slug = str(slug or "").strip().lower()
+        if not SLUG_RE.match(slug):
+            return Outcome(FAILED, reason="명함 주소는 영문 소문자, 숫자, 하이픈 2자에서 30자입니다")
+        gate = self.write_gate()
+        if gate is not None:
+            return gate
+        body = {"slug": slug}
+        text = str(reason or "").strip()[:REASON_MAX]
+        if text:
+            body["reason"] = text
+        out = self._post_remove(slug, body)
+        self._record(CONN_WRITE, OK if out.status == OK else FAILED, out.reason)
+        return out
+
+    def _post_remove(self, slug: str, body: dict) -> Outcome:
+        headers = {"accept": "application/json", "user-agent": "ga-app-connect/1", ADMIN_HEADER: self._admin_key}
+        try:
+            with httpx.Client(base_url=self.base_url, timeout=self.timeout, transport=self.transport) as c:
+                r = c.request("POST", "/api/admin/remove", json=body, headers=headers)
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            return Outcome(FAILED, reason=f"명함 사이트에 닿지 않아 보내지 못했습니다. {describe(e)}"[:300], attempts=1)
+        except httpx.TransportError as e:
+            return self._confirm_remove(slug, f"응답을 받지 못했습니다. {describe(e)}")
+        if 200 <= r.status_code < 300:
+            return Outcome(OK, value=WriteResult(slug=slug, action="remove"), reason="명함을 내렸습니다", attempts=1)
+        if r.status_code == 401:
+            return Outcome(FAILED, reason="관리자 키가 맞지 않습니다 (401)", attempts=1)
+        if r.status_code == 429:
+            return Outcome(FAILED, reason="명함 사이트가 요청이 많다고 받지 않았습니다 (429). 잠시 뒤 다시 해 주세요", attempts=1)
+        if r.status_code >= 500:
+            return self._confirm_remove(slug, f"명함 사이트가 {r.status_code} 를 돌려줬습니다")
+        return Outcome(FAILED, reason=f"명함 사이트가 요청을 받지 않았습니다 ({r.status_code})", attempts=1)
+
+    def _confirm_remove(self, slug: str, why: str) -> Outcome:
+        """결과를 모를 때 공개 상태를 한 번 읽는다. 다시 보내지는 않는다."""
+        try:
+            d = self._get_json("/api/status", params={"slug": slug})
+        except Exception as e:
+            return Outcome(UNKNOWN, value=WriteResult(slug=slug, action="remove"),
+                           reason=f"{why}. 결과를 확인하지 못했습니다. 명함 사이트 관리 화면에서 공개 여부를 확인해 주세요 ({describe(e)})"[:300],
+                           attempts=1)
+        if not d.get("live") and _state(d.get("status")) != "pending":
+            return Outcome(OK, value=WriteResult(slug=slug, action="remove", decided_at=d.get("decidedAt"), confirmed_by_status=True),
+                           reason=f"{why}. 공개 상태로 내려간 것을 확인했습니다"[:300], attempts=1)
+        left = "아직 공개 중입니다" if d.get("live") else "아직 승인 대기가 남아 있습니다"
+        return Outcome(FAILED, reason=f"{why}. {left}. 명함 사이트 관리 화면을 확인한 뒤 다시 내려 주세요"[:300], attempts=1)
 
     # ---------------------------------------------------------- 수료 코드
     def code_log(self) -> Outcome:

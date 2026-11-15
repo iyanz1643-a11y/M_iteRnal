@@ -7,7 +7,7 @@
   조직장에서 빠지거나 대리 기간이 끝나면 켜진 줄이 남아 있어도 거부한다. card_approver 표가 없는 오래된 DB 에서는 관리자를 거부한다.
 - 같은 결정: 관리자 본인의 명함 요청은 본인이 처리하지 못하고 메인 관리자가 처리한다. 본인 설계사 번호는 own_agent_ids 로 찾는다.
 - card_link 로 이어지지 않은 주소는 메인 관리자만 다룬다.
-- 내리기와 수료 코드 발급은 여기 없다. 메인 관리자만 하는 일이고 이번에 만들지 않았다.
+- 내리기와 수료 코드 발급은 여기 없다. 메인 관리자만 하는 일이고 card_remove.py 와 card_codes.py 에 있다.
 
 같은 요청을 두 번 보내지 않는 장치
 1. 클라이언트는 POST 를 자동으로 다시 보내지 않는다.
@@ -121,10 +121,16 @@ class PendingCard:
 
 
 # ------------------------------------------------------------------ 반려 사유
+def has_pii(text) -> bool:
+    """전화번호, 주민번호, 붙여 쓴 긴 숫자 꼴이 있는가. 반려와 내리기의 사유가 함께 쓴다."""
+    text = str(text or "")
+    return any(p.search(text) for p in _PII)
+
+
 def clean_reason(reason) -> tuple[str, str | None]:
     """반려 사유를 다듬는다. 돌려주는 값은 (다듬은 사유, 거부 사유). 거부 사유가 있으면 보내지 않는다."""
     text = str(reason or "").strip()
-    if any(p.search(text) for p in _PII):
+    if has_pii(text):
         return "", "반려 사유에 전화번호나 주민번호 꼴이 있어 보내지 않았습니다. 지우고 다시 적어 주세요"
     return text[:REASON_MAX], None
 

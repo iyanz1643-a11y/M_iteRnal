@@ -8,6 +8,7 @@ fastapi
 uvicorn
 jinja2
 itsdangerous
+cryptography>=42
 python-multipart
 httpx
 pytest

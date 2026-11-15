@@ -679,11 +679,10 @@ def test_contract_names_by_role_on_list_detail_and_csv(env):
     assert not PLAIN.search(admin.get(f"/perf/contracts?id={cid}").text), "사유는 한 번만 쓴다"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "app/web/templates/perf_contracts.html 15행의 증권번호 칸은 <input class=\"sm\" type=\"search\"> 인데 app/web/static/app.css 201행의 "
-    "48픽셀 규칙은 input[type=text].sm 에만 걸린다. 휴대폰에서 테두리 없는 21픽셀 칸으로 보인다. web-screen 이 규칙에 type=search 를 더하거나 칸을 type=text 로 바꾼다"))
 def test_contract_search_box_is_touch_size():
-    """계약 원장의 증권번호 칸은 type=search 이고 class sm 이다. 휴대폰 390 폭에서 높이가 21픽셀로 보였다(사진 admin_390_perf_contracts.png)."""
+    """계약 원장의 증권번호 칸은 type=search 이고 class sm 이다. 휴대폰 390 폭에서 높이가 21픽셀로 보였다(사진 admin_390_perf_contracts.png).
+
+    app.css 의 글 칸 규칙에 search, email, tel, url 을 더해 고쳤다. 테두리와 54픽셀 기본 높이, sm 의 48픽셀이 함께 걸린다."""
     html = (pathlib.Path(__file__).resolve().parents[1] / "app/web/templates/perf_contracts.html").read_text()
     css = (pathlib.Path(__file__).resolve().parents[1] / "app/web/static/app.css").read_text()
     kind = re.search(r'<input class="sm" type="(\w+)" name="q"', html)

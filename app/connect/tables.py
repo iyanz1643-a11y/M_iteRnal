@@ -16,18 +16,18 @@ BEGIN, END = "-- [connect:begin]", "-- [connect:end]"
 TABLES = ("connection_state", "connection_watch", "card_link")
 
 _LOCK = threading.Lock()
-_STATEMENTS: list | None = None
+_STATEMENTS: dict = {}
 
 
-def statements() -> list:
-    """schema.sql 의 연결 묶음을 문 하나씩 나눠 돌려준다."""
-    global _STATEMENTS
-    if _STATEMENTS is None:
+def block_statements(begin: str, end: str) -> list:
+    """schema.sql 의 begin 에서 end 사이 묶음을 문 하나씩 나눠 돌려준다."""
+    key = (begin, end)
+    if key not in _STATEMENTS:
         text = db.SCHEMA.read_text(encoding="utf-8")
-        i, j = text.find(BEGIN), text.find(END)
+        i, j = text.find(begin), text.find(end)
         if i < 0 or j < i:
-            raise RuntimeError("schema.sql 에 연결 표 묶음이 없습니다")
-        body = "\n".join(re.sub(r"--.*$", "", line) for line in text[i + len(BEGIN):j].splitlines())
+            raise RuntimeError(f"schema.sql 에 {begin} 묶음이 없습니다")
+        body = "\n".join(re.sub(r"--.*$", "", line) for line in text[i + len(begin):j].splitlines())
         out, buf = [], ""
         for part in body.split(";"):
             buf += part + ";"
@@ -35,19 +35,30 @@ def statements() -> list:
                 if buf.strip(" \n;"):
                     out.append(buf.strip())
                 buf = ""
-        _STATEMENTS = out
-    return list(_STATEMENTS)
+        _STATEMENTS[key] = out
+    return list(_STATEMENTS[key])
+
+
+def statements() -> list:
+    """schema.sql 의 연결 묶음을 문 하나씩 나눠 돌려준다."""
+    return block_statements(BEGIN, END)
+
+
+def ensure_block(con, begin: str, end: str, names) -> None:
+    """names 의 표가 하나라도 없으면 그 묶음을 돌린다. 묶음의 문은 모두 IF NOT EXISTS 다."""
+    names = tuple(names)
+    with _LOCK:
+        have = {r[0] for r in con.execute(
+            f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({','.join('?' * len(names))})", names)}
+        if have == set(names):
+            return
+        for sql in block_statements(begin, end):
+            con.execute(sql)
 
 
 def ensure(con) -> None:
     """연결 표가 없으면 만든다. 이미 있으면 아무것도 하지 않는다."""
-    with _LOCK:
-        have = {r[0] for r in con.execute(
-            f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({','.join('?' * len(TABLES))})", TABLES)}
-        if have == set(TABLES):
-            return
-        for sql in statements():
-            con.execute(sql)
+    ensure_block(con, BEGIN, END, TABLES)
 
 
 @contextmanager

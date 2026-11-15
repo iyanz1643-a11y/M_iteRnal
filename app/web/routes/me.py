@@ -7,6 +7,7 @@
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from app.ops import sessions
 from app.org import card_grant as cg
 from app.web import auth
 from app.web.deps import get_con, guard, page
@@ -78,5 +79,7 @@ def me_post(request: Request, action: str = Form(""), old: str = Form(""), new: 
     if error:
         return _page(request, ctx, con, error=error)
     con.execute("UPDATE user_account SET password_hash=?, must_change_password=0 WHERE user_id=?", (auth.hash_password(new), ctx["user_id"]))
+    sessions.bump(con, ctx["user_id"])                       # 다른 기기와 복사한 쿠키는 끊고 이 기기만 새 버전으로 이어 간다
     auth.log(con, ctx["login_id"], "password_change")
+    sessions.stamp(request, con, ctx["user_id"])
     return _page(request, {**ctx, "must_change_password": False}, con, message="비밀번호를 바꿨습니다.")

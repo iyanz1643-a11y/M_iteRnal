@@ -438,9 +438,8 @@ def test_card_client_sends_only_get(tmp_path):
     c.admin_list()
     c.suggest_links([(1, FAKE_NAMES[0])])
     assert site.requests and {r.method for r in site.requests} == {"GET"}
-    # D-44 로 승인과 반려가, 명함 연동 2차로 수료 코드 발급이 생겼다. 내리기는 없다
-    assert not any(hasattr(c, m) for m in ("remove", "remove_live"))
-    assert hasattr(c, "issue_codes")
+    # D-44 로 승인과 반려가, 명함 연동 2차로 수료 코드 발급이, 3차로 내리기가 생겼다. 쓰기는 모두 쓰기 스위치를 따른다
+    assert hasattr(c, "issue_codes") and hasattr(c, "remove") and not hasattr(c, "remove_live")
     assert not c.write_enabled                                                     # 쓰기는 기본으로 꺼져 있다
 
 
@@ -1756,3 +1755,396 @@ def test_card_codes_reconcile_by_serial_and_hash(codes_env):
     site.log = [r for r in site.log if r["serial"] != s1]
     assert reconcile_card_codes(con, env["code_client"], actor=MAIN, is_main=True).value.app_only == (s1,)
     assert len(site.code_posts()) == 2                                               # 대조는 보내지 않는다. 발급 두 묶음뿐이다
+
+
+# ------------------------------------------------------------------ 명함 연동 3차: 배지 자격과 만료
+BADGE_DAY = __import__("datetime").date(2026, 12, 10)
+AWARD_MARK = "상금표시QX"                         # 조직 부문 시상 내용. 배지 결과에 남으면 안 된다
+AWARD_VALUE = 7654321                             # 조직 부문 실적 값. 배지 결과에 남으면 안 된다
+
+
+@pytest.fixture()
+def badge_env(decide_env):
+    """decide_env 위에 인증 프로그램과 확정 기록, 인증 계산, 조직 부문 수상을 둔다. a_dep 는 card-d 로 잇는다. a_gone 은 해촉자다."""
+    from app.engine import org_award
+    env = decide_env
+    con = env["con"]
+    env["links"].link(env["a_dep"], "card-d", by=MAIN)
+    a_none = con.execute("INSERT INTO agent(internal_code, name) VALUES('D900', ?)", (FAKE_NAMES[1],)).lastrowid    # 명함이 없다
+    a_gone = con.execute("INSERT INTO agent(internal_code, name, status, termination_date) VALUES('D901', ?, 'terminated', '2026-10-31')",
+                         (FAKE_NAMES[1] + "9",)).lastrowid
+    prog = {}
+    for code, name, cat in (("EXCELLENT_FC_LIFE", "우수인증설계사(생명보험)", "association_cert"),
+                            ("EXCELLENT_FC_NONLIFE", "우수인증설계사(손해보험)", "association_cert"),
+                            ("MDRT", "MDRT 회원", "mdrt"), ("HAN_BLUE", "한빛손해 블루리본", "insurer_cert"),
+                            ("SALES_EXCELLENT", "영업우수설계사", "award"), ("EXEC_FC_DIRECTOR", "설계사 임원제도: 명예이사", "executive_fc")):
+        prog[code] = con.execute("INSERT INTO certification_program(code, name, category) VALUES(?,?,?)", (code, name, cat)).lastrowid
+
+    def award(agent, code, year, at=None):
+        con.execute("INSERT INTO agent_certification_award(agent_id, program_id, year, awarded_at) VALUES(?,?,?,?)",
+                    (agent, prog[code], year, at))
+    a1, dep = env["a1"], env["a_dep"]
+    award(a1, "EXCELLENT_FC_LIFE", 2025, "2026-02-01")
+    award(a1, "EXCELLENT_FC_NONLIFE", 2025, "2026-01-20")           # 같은 칩, 같은 연도라 하나로 합친다
+    award(a1, "EXCELLENT_FC_LIFE", 2026, "2026-12-01")              # 새 연도
+    award(a1, "SALES_EXCELLENT", 2024, "2025-01-15")                 # 이미 끝났다
+    award(a1, "EXEC_FC_DIRECTOR", 2025)                              # 직함이라 배지가 아니다
+    award(dep, "EXCELLENT_FC_NONLIFE", 2025, "2026-01-20")
+    award(dep, "HAN_BLUE", 2025, "2026-01-20")
+    award(a_gone, "EXCELLENT_FC_LIFE", 2025)                         # 해촉자는 판정하지 않는다
+    award(a_none, "EXCELLENT_FC_LIFE", 2025)
+    run = db.new_run(con, "certification", "202611", MAIN)
+    for agent, code, ach in ((a1, "MDRT", 1), (dep, "MDRT", 0)):
+        con.execute("""INSERT INTO agent_certification_status(run_id, agent_id, program_id, year, as_of_ym, metric_json, progress_rate, achieved)
+                       VALUES(?,?,?,?,?,?,?,?)""", (run, agent, prog[code], 2026, "202611", "{}", 1.0 if ach else 0.5, ach))
+    db.finish_run(con, run)
+    div = org_award.save(con, by=MAIN, org_id=env["o1"], name="인정업적 부문", metric="converted_premium", top_n=3,
+                         effective_from="202501", rewards=[(1, AWARD_MARK)])
+    for agent, ym, rank in ((a1, "202601", 1), (dep, "202512", 2), (a_gone, "202601", 2)):
+        con.execute("""INSERT INTO org_award_result(division_id, period_ym, rank_no, agent_id, value, reward_label, confirmed_by, confirmed_at)
+                       VALUES(?,?,?,?,?,?,?,?)""", (div, ym, rank, agent, AWARD_VALUE, AWARD_MARK if rank == 1 else None, MAIN, f"{ym[:4]}-{ym[4:]}-28 09:00:00"))
+    con.commit()
+    env.update(a_none=a_none, a_gone=a_gone, div=div, prog=prog)
+    return env
+
+
+def _badges(env, ids=None):
+    from app.connect.card_badges import judge_badges
+    ids = ids if ids is not None else [env["a1"], env["a_dep"], env["a_none"], env["a_gone"]]
+    return {(b.agent_id, b.key): b for b in judge_badges(env["con"], ids, today=BADGE_DAY)}
+
+
+def test_card_badges_judge_eligibility_and_validity(badge_env):
+    from app.connect import card_badges as cb
+    env = badge_env
+    a1, dep, div = env["a1"], env["a_dep"], env["div"]
+    got = _badges(env)
+    assert set(got) == {
+        (a1, "cert:우수인증설계사:2025"), (a1, "cert:우수인증설계사:2026"), (a1, "award:SALES_EXCELLENT:2024"),
+        (a1, "cert:MDRT:2026"), (a1, f"org_award:{div}:202601"),
+        (dep, "cert:우수인증설계사:2025"), (dep, "cert:블루리본:2025"), (dep, f"org_award:{div}:202512"),
+        (env["a_none"], "cert:우수인증설계사:2025"),
+    }                                                                 # 해촉자, 임원제도, 달성하지 못한 계산은 없다
+    b = got[(a1, "cert:우수인증설계사:2025")]
+    assert (b.label, b.card_field, b.year, b.basis) == ("우수인증설계사 2025", "certs", 2025, "award")
+    assert (b.valid_from, b.valid_until, b.days_left, b.status, b.eligible) == ("2026-01-20", "2026-12-31", 21, "expiring", True)
+    assert b.source_ref == "EXCELLENT_FC_LIFE,EXCELLENT_FC_NONLIFE"
+    assert got[(a1, "cert:우수인증설계사:2026")].status == "valid"
+    old = got[(a1, "award:SALES_EXCELLENT:2024")]
+    assert (old.label, old.card_field, old.status, old.eligible) == ("2024 영업우수설계사", "etc", "expired", False)
+    calc = got[(a1, "cert:MDRT:2026")]
+    assert (calc.basis, calc.status, calc.eligible, calc.valid_from) == ("calc", "expected", False, None)
+    org = got[(a1, f"org_award:{div}:202601")]
+    assert (org.label, org.valid_from, org.valid_until, org.status) == ("2026년 1월 인정업적 부문 1위", "2026-01-28", "2027-01-31", "valid")
+    assert got[(dep, f"org_award:{div}:202512")].valid_until == "2026-12-31"
+    assert cb.org_award_until("202602") == __import__("datetime").date(2027, 2, 28)
+    assert set(cb.ANNUAL) <= set(cb.CERTS) and set(cb.CERT_BADGES.values()) <= set(cb.ANNUAL)
+    # 범위 밖 설계사는 보지 않는다
+    assert {k[0] for k in _badges(env, [dep])} == {dep}
+    assert _badges(env, []) == {}
+    text = json.dumps([x.to_dict() for x in got.values()], ensure_ascii=False)
+    assert AWARD_MARK not in text and str(AWARD_VALUE) not in text and FAKE_NAMES[0] not in text and FAKE_NAMES[1] not in text
+
+
+def test_card_badges_confirmed_award_beats_calc(badge_env):
+    env = badge_env
+    con, a1 = env["con"], env["a1"]
+    con.execute("INSERT INTO agent_certification_award(agent_id, program_id, year, awarded_at) VALUES(?,?,2026,'2026-12-05')",
+                (a1, env["prog"]["MDRT"]))
+    b = _badges(env, [a1])[(a1, "cert:MDRT:2026")]
+    assert (b.basis, b.status, b.valid_from) == ("award", "valid", "2026-12-05")
+
+
+def test_card_badges_expiring_list_and_reissue_notice(badge_env):
+    from app.connect.card_badges import expiring_badges
+    env = badge_env
+    con, a1, dep, div = env["con"], env["a1"], env["a_dep"], env["div"]
+    ids = [a1, dep, env["a_none"], env["a_gone"]]
+    rows = expiring_badges(con, ids, today=BADGE_DAY)
+    assert [(n.agent_id, n.badge.key, n.slug) for n in rows] == [
+        (a1, "cert:우수인증설계사:2025", "card-a"), (dep, "cert:블루리본:2025", "card-d"),
+        (dep, "cert:우수인증설계사:2025", "card-d"), (dep, f"org_award:{div}:202512", "card-d")]   # 명함이 없는 설계사는 빠진다
+    first = rows[0]
+    assert first.newer_label == "우수인증설계사 2026"
+    assert "2026-12-31 에 끝납니다" in first.notice and "지울 수 없습니다" in first.notice
+    assert "연도를 2026 로 바꿔" in first.notice and "다시 신청해 주세요" in first.notice
+    assert "블루리본 배지를 빼고" in rows[1].notice and rows[1].newer_label is None
+    assert "그 밖의 자격·수상 칸에서 2025년 12월 인정업적 부문 2위 를 지우고" in rows[3].notice
+    # 끝난 배지, 명함 없는 설계사, 범위
+    more = expiring_badges(con, ids, today=BADGE_DAY, include_expired=True, linked_only=False)
+    keys = {(n.agent_id, n.badge.key) for n in more}
+    assert (a1, "award:SALES_EXCELLENT:2024") in keys and (env["a_none"], "cert:우수인증설계사:2025") in keys
+    gone = next(n for n in more if n.badge.key == "award:SALES_EXCELLENT:2024")
+    assert "에 끝났습니다" in gone.notice
+    assert all(n.badge.basis != "calc" for n in more)
+    assert {n.agent_id for n in expiring_badges(con, [dep], today=BADGE_DAY)} == {dep}
+    assert expiring_badges(con, ids, today=BADGE_DAY, days=5) == []
+    text = json.dumps([n.to_dict() for n in more], ensure_ascii=False)
+    assert AWARD_MARK not in text and str(AWARD_VALUE) not in text and FAKE_NAMES[0] not in text
+
+
+def test_card_badges_refresh_keeps_rows_and_no_names(badge_env):
+    from app.connect.card_badges import refresh_badges, saved_badges
+    env = badge_env
+    con, a1 = env["con"], env["a1"]
+    first = refresh_badges(con, today=BADGE_DAY)
+    assert first == {"judged": 9, "new": 9, "gone": 0}
+    assert refresh_badges(con, today=BADGE_DAY) == {"judged": 9, "new": 0, "gone": 0}
+    con.execute("DELETE FROM agent_certification_award WHERE agent_id=? AND year=2024", (a1,))
+    con.commit()
+    assert refresh_badges(con, today=BADGE_DAY)["gone"] == 1
+    rows = saved_badges(con, [a1], include_gone=True)
+    assert len(rows) == 5 and [r["badge_key"] for r in rows if r["gone_at"]] == ["award:SALES_EXCELLENT:2024"]
+    assert len(saved_badges(con, [a1])) == 4 and saved_badges(con, []) == []
+    dump = "\n".join(line for line in _dump(env["path"]) if "card_badge" in line)
+    assert dump and AWARD_MARK not in dump and str(AWARD_VALUE) not in dump and FAKE_NAMES[0] not in dump and FAKE_NAMES[1] not in dump
+
+
+def test_card_badges_table_in_old_db(tmp_path):
+    import sqlite3
+
+    from app.connect.card_badges import refresh_badges
+    con = db.init_db(tmp_path / "o.db")
+    con.execute("DROP TABLE card_badge")
+    con.commit()
+    assert refresh_badges(con, today=BADGE_DAY) == {"judged": 0, "new": 0, "gone": 0}
+    assert con.execute("SELECT COUNT(*) FROM card_badge").fetchone()[0] == 0
+    con.close()
+    assert sqlite3.connect(str(tmp_path / "o.db")).execute("SELECT name FROM sqlite_master WHERE name='card_badge'").fetchone()
+
+
+# ------------------------------------------------------------------ 명함 연동 3차: 해촉자 내리기
+class RemoveSite(FakeSite):
+    """내리기를 받는 가짜 명함 사이트. 사이트의 removeLive 처럼 공개본을 지우고 요청 기록을 removed 로 바꾼다.
+    remove_fail 은 POST 에 차례로 적용한다. (예외, 처리했는가) 짝이면 처리 여부를 정한 뒤 예외를 올리고, 숫자면 그 상태로 답한다.
+    status_fail 은 POST 를 받은 뒤의 GET /api/status 에 차례로 적용한다."""
+
+    def __init__(self, live=("card-a", "card-c"), pending=("card-p",), removed=("card-d",), remove_fail=None, status_fail=None):
+        super().__init__()
+        self.live, self.pend, self.removed = set(live), set(pending), set(removed)
+        self.remove_fail = list(remove_fail or [])
+        self.status_fail = list(status_fail or [])
+        self.bodies = []
+
+    def _apply(self, slug):
+        self.live.discard(slug)
+        if slug in self.pend or slug in self.removed or slug in ("card-a", "card-c"):
+            self.removed.add(slug)
+        self.pend.discard(slug)
+
+    def __call__(self, request):
+        self.requests.append(request)
+        path = request.url.path
+        if request.method == "POST" and path == "/api/admin/remove":
+            if request.headers.get("x-admin-key") != KEY:
+                return httpx.Response(401, json={"error": "unauthorized"})
+            body = json.loads(request.content or b"{}")
+            self.bodies.append(body)
+            if self.remove_fail:
+                f = self.remove_fail.pop(0)
+                if isinstance(f, tuple):
+                    exc, applied = f
+                    if applied:
+                        self._apply(body.get("slug"))
+                    raise exc
+                return httpx.Response(f, json={"error": "server_error"})
+            self._apply(body.get("slug"))
+            return httpx.Response(200, json={"ok": True})
+        if request.method == "GET" and path == "/api/status":
+            if self.fail:                                              # 보내기 전 상태 읽기의 실패
+                return httpx.Response(self.fail.pop(0), json={"error": "server_error"})
+            if self.status_fail and self.posts():
+                f = self.status_fail.pop(0)
+                if isinstance(f, Exception):
+                    raise f
+                return httpx.Response(f, json={"error": "server_error"})
+            slug = request.url.params.get("slug")
+            live = slug in self.live
+            st = "pending" if slug in self.pend else "removed" if slug in self.removed else "approved" if live else "none"
+            return httpx.Response(200, json={"slug": slug, "live": live, "liveAt": "2026-10-01T00:00:00Z" if live else None, "status": st,
+                                             "reason": "", "at": "2026-10-01T00:00:00Z", "decidedAt": "2026-11-20T00:00:00Z" if st == "removed" else None})
+        return httpx.Response(404, json={"error": "not_found"})
+
+    def posts(self):
+        return [r for r in self.requests if r.method == "POST"]
+
+
+@pytest.fixture()
+def remove_env(decide_env):
+    """a2(card-c) 는 해촉자, a_dep(card-d) 는 해촉자인데 이미 내렸고, 새 해촉자 a_p(card-p) 는 승인 대기만 있다. a1(card-a) 는 재직이다."""
+    env = decide_env
+    con = env["con"]
+    con.execute("UPDATE agent SET status='terminated', termination_date='2026-10-31' WHERE agent_id IN (?,?)", (env["a2"], env["a_dep"]))
+    a_p = con.execute("INSERT INTO agent(internal_code, name, status, termination_date) VALUES('D950', ?, 'terminated', '2026-11-01')",
+                      (FAKE_NAMES[1],)).lastrowid
+    a_late = con.execute("INSERT INTO agent(internal_code, name, termination_date) VALUES('D951', ?, '2099-01-31')", (FAKE_NAMES[1] + "2",)).lastrowid
+    con.execute("INSERT INTO agent(internal_code, name, status) VALUES('D952', ?, 'terminated')", (FAKE_NAMES[1] + "3",))   # 명함이 없다
+    con.commit()
+    links = env["links"]
+    links.link(env["a_dep"], "card-d", by=MAIN)
+    links.link(a_p, "card-p", by=MAIN)
+    links.link(a_late, "card-l", by=MAIN)                             # 해촉일이 아직 오지 않았다
+    links.record_check("card-d", card_site.CardStatus(slug="card-d", live=False, status="removed"))
+    site = RemoveSite()
+    env.update(a_p=a_p, rm_site=site, rm_client=_client(site, env["tmp"], write=True))
+    return env
+
+
+def _remove(env, slug, actor=MAIN, *, is_main=True, reason="", client=None):
+    from app.connect.card_remove import remove_card
+    return remove_card(env["con"], client or env["rm_client"], slug=slug, reason=reason, actor=actor, is_main=is_main, link_table=env["links"])
+
+
+def _remove_audit(con):
+    return [(r[0], r[1], json.loads(r[2])) for r in con.execute("SELECT actor, target, after_json FROM audit_log WHERE action='card_remove' ORDER BY id")]
+
+
+def test_card_remove_candidates_main_only(remove_env):
+    from app.connect.card_decide import DENIED
+    from app.connect.card_remove import removal_candidates
+    env = remove_env
+    con, site = env["con"], env["rm_site"]
+    for actor, is_main in ((MGR, False), (MGR, True), (FC, False)):
+        out = removal_candidates(con, actor=actor, is_main=is_main, client=env["rm_client"], refresh=True, link_table=env["links"])
+        assert out.status == DENIED and out.value == []
+    assert site.requests == []
+    out = removal_candidates(con, actor=MAIN, is_main=True, link_table=env["links"])
+    assert out.status == OK
+    assert [(c.agent_id, c.slug, c.live, c.last_status) for c in out.value] == [(env["a2"], "card-c", None, None), (env["a_p"], "card-p", None, None)]
+    assert [c.slug for c in removal_candidates(con, actor=MAIN, is_main=True, include_done=True, link_table=env["links"]).value] == \
+        ["card-c", "card-d", "card-p"]
+    # 공개 상태를 다시 읽으면 card_link 에 적는다. GET 만 보낸다
+    out = removal_candidates(con, actor=MAIN, is_main=True, client=env["rm_client"], refresh=True, link_table=env["links"])
+    assert [(c.slug, c.live, c.last_status) for c in out.value] == [("card-c", True, "approved"), ("card-p", False, "pending")]
+    assert out.value[0].url == f"{BASE}/card-c/" and out.value[1].url is None
+    assert env["links"].get(env["a2"])["last_live"] is True
+    assert site.posts() == []
+    assert FAKE_NAMES[0] not in json.dumps([c.to_dict() for c in out.value], ensure_ascii=False)
+
+
+def test_card_remove_main_admin_removes_once(remove_env):
+    from app.connect.card_remove import REMOVE_KO, removal_candidates
+    env = remove_env
+    con, site = env["con"], env["rm_site"]
+    out = _remove(env, "card-c", reason="소속 변경으로 내림")
+    assert out.status == OK and out.value.agent_id == env["a2"] and out.value.terminated is True
+    assert out.value.to_dict()["result_ko"] == REMOVE_KO[OK]
+    posts = site.posts()
+    assert [(r.url.path, json.loads(r.content)) for r in posts] == [("/api/admin/remove", {"slug": "card-c", "reason": "소속 변경으로 내림"})]
+    assert posts[0].headers["x-admin-key"] == KEY
+    row = env["links"].get(env["a2"])
+    assert row["last_status"] == "removed" and row["last_live"] is False and row["unlinked_at"] is None
+    assert _remove_audit(con) == [(MAIN, f"agent:{env['a2']}", {"slug": "card-c", "result": OK, "reason_len": 10, "terminated": True})]
+    assert StateStore(env["tmp"] / "state").get(card_site.CONN_WRITE)["last_status"] == OK
+    assert [c.slug for c in removal_candidates(con, actor=MAIN, is_main=True, link_table=env["links"]).value] == ["card-p"]
+    # 다시 눌러도 공개 중이 아니라 보내지 않는다
+    again = _remove(env, "card-c")
+    assert again.status == "not_live" and len(site.posts()) == 1
+    # 빈 사유는 보내지 않는다. 승인 대기만 있는 해촉자의 요청도 내린다
+    assert _remove(env, "card-p").status == OK
+    assert site.bodies[-1] == {"slug": "card-p"} and "card-p" not in site.pend
+
+
+def test_card_remove_main_admin_only(remove_env):
+    from app.connect.card_decide import DENIED
+    env = remove_env
+    for actor, is_main in ((MGR, False), (MGR, True), (DEP, True), (FC, False), ("nobody", True), (MAIN, False)):
+        out = _remove(env, "card-c", actor, is_main=is_main)
+        assert out.status == DENIED, actor
+        assert "메인 관리자만" in out.reason
+    assert env["rm_site"].requests == []
+    assert {a[2]["result"] for a in _remove_audit(env["con"])} == {DENIED}
+
+
+def test_card_remove_write_switch_off_sends_nothing(remove_env, monkeypatch):
+    from app.connect.card_site import WRITE_OFF
+    env = remove_env
+    site = env["rm_site"]
+    monkeypatch.setenv(card_site.ENV_WRITE, "true")                   # 정확히 1 이 아니면 꺼짐이다
+    off = card_site.CardSiteClient(BASE, KEY, transport=httpx.MockTransport(site), state=StateStore(env["tmp"] / "state"), sleep=_no_sleep)
+    out = _remove(env, "card-c", client=off)
+    assert out.status == WRITE_OFF and site.requests == []
+    assert StateStore(env["tmp"] / "state").get(card_site.CONN_WRITE)["last_status"] == NOT_CONFIGURED
+    no_key = _client(site, env["tmp"], key="", write=True)
+    assert _remove(env, "card-c", client=no_key).status == NOT_CONFIGURED and site.requests == []
+    assert off.remove("card-c").status == WRITE_OFF and site.requests == []
+    assert [a[2]["result"] for a in _remove_audit(env["con"])] == [WRITE_OFF, NOT_CONFIGURED]
+    assert env["links"].get(env["a2"])["last_status"] is None
+
+
+def test_card_remove_unknown_result_is_confirmed_by_one_get(remove_env):
+    from app.connect.card_site import UNKNOWN
+    env = remove_env
+    con = env["con"]
+    # 응답을 받지 못했지만 사이트가 처리했다
+    site = RemoveSite(remove_fail=[(httpx.ReadTimeout("시험"), True)])
+    out = _remove(env, "card-c", client=_client(site, env["tmp"], write=True))
+    assert out.status == OK and out.value.confirmed_by_status is True and len(site.posts()) == 1
+    assert _remove_audit(con)[-1][2]["confirmed_by_status"] is True
+    # 응답을 받지 못했고 처리되지 않았다. 다시 보내지 않는다
+    site = RemoveSite(remove_fail=[(httpx.ReadTimeout("시험"), False)])
+    out = _remove(env, "card-a", client=_client(site, env["tmp"], write=True))
+    assert out.status == FAILED and "아직 공개 중" in out.reason and len(site.posts()) == 1
+    # 5xx 뒤 확인 GET 도 실패하면 확인 필요로 둔다. GET 은 한 번이다
+    site = RemoveSite(remove_fail=[503], status_fail=[httpx.ReadTimeout("시험"), 500, 500])
+    out = _remove(env, "card-a", client=_client(site, env["tmp"], write=True))
+    assert out.status == UNKNOWN and "확인하지 못했습니다" in out.reason
+    assert len(site.posts()) == 1 and len(site.status_fail) == 2
+    assert env["links"].get(env["a1"])["last_status"] == "approved"           # 모르는 결과는 적지 않는다
+    assert _remove_audit(con)[-1][2]["result"] == UNKNOWN
+    # 401 과 연결 실패는 바로 실패다
+    site = RemoveSite(remove_fail=[401])
+    assert _remove(env, "card-a", client=_client(site, env["tmp"], write=True)).status == FAILED and len(site.posts()) == 1
+    site = RemoveSite(remove_fail=[(httpx.ConnectError("시험"), False)])
+    out = _remove(env, "card-a", client=_client(site, env["tmp"], write=True))
+    assert out.status == FAILED and "닿지 않아" in out.reason and len(site.posts()) == 1
+
+
+@pytest.mark.parametrize("bad", [FAKE_MOBILE, "주민 " + "-".join(("9" * 6, "1" + "0" * 6)), "연락 x.test@example.com", "1234567890123 확인",
+                                 FAKE_NAMES[0] + "2 해촉", f"{FAKE_NAMES[0][:2]} {FAKE_NAMES[0][2:]}2 님"])
+def test_card_remove_reason_with_pii_or_name_is_refused(remove_env, bad):
+    from app.connect.card_decide import DENIED
+    env = remove_env
+    out = _remove(env, "card-c", reason=bad)
+    assert out.status == DENIED and "누구나 볼 수 있으니" in out.reason
+    assert env["rm_site"].requests == []
+    audit = _remove_audit(env["con"])
+    assert audit[-1][2]["result"] == DENIED and audit[-1][2]["reason_len"] == len(bad.strip())
+    text = json.dumps(audit, ensure_ascii=False) + out.reason + repr(out)
+    assert bad not in text
+
+
+def test_card_remove_reason_keeps_ordinary_words(remove_env):
+    env = remove_env
+    out = _remove(env, "card-c", reason="  2026년 10월 해촉. 명함 1건 " + "가" * 300)
+    assert out.status == OK
+    assert len(env["rm_site"].bodies[0]["reason"]) == card_site.REASON_MAX
+
+
+def test_card_remove_status_read_failure_sends_nothing(remove_env):
+    env = remove_env
+    site = RemoveSite()
+    site.fail = [500, 500, 500]
+    out = _remove(env, "card-c", client=_client(site, env["tmp"], write=True))
+    assert out.status == FAILED and "보내지 않았습니다" in out.reason and site.posts() == []
+
+
+def test_card_remove_in_flight_blocks_second_call(remove_env):
+    from app.connect import card_remove
+    from app.connect.card_decide import IN_FLIGHT
+    env = remove_env
+    card_remove._INFLIGHT.add("card-c")
+    try:
+        assert _remove(env, "card-c").status == IN_FLIGHT
+    finally:
+        card_remove._INFLIGHT.discard("card-c")
+    assert env["rm_site"].requests == []
+
+
+def test_card_site_remove_checks_before_sending(tmp_path):
+    site = RemoveSite()
+    client = _client(site, tmp_path, write=True)
+    assert client.remove("Bad Slug").status == FAILED and site.requests == []
+    assert client.remove("card-a", "  ").status == OK
+    assert site.bodies == [{"slug": "card-a"}]
+    assert "remove" in repr(card_site.TARGET_STATE)

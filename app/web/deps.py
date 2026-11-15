@@ -13,6 +13,7 @@ from fastapi.templating import Jinja2Templates
 
 from app import db
 from app.engine import promotion as pm
+from app.ops import sessions
 from app.web import auth, menu
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -79,7 +80,10 @@ class NeedPasswordChange(Exception):
 
 
 def current(request: Request, con=Depends(get_con)) -> dict:
+    """로그인한 사람. 쿠키의 세션 버전이 계정의 버전과 다르면 로그아웃한 쿠키로 보고 로그인 전으로 돌린다(app/ops/sessions.py)."""
     uid = request.session.get("uid")
+    if uid and not sessions.matches(request, con, uid):
+        uid = None
     ctx = auth.context(con, uid) if uid else None
     if not ctx:
         clear_login(request)

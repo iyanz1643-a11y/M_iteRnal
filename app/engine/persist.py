@@ -20,6 +20,7 @@
 import calendar
 from datetime import date, timedelta
 
+from app.engine import orgs
 from app.periods import date_ym, ym_add, ym_diff
 
 KIND_KO = {"p13": "13회차", "p25": "25회차"}
@@ -35,6 +36,21 @@ DUE_NOTE = "13회차 도래일은 계약일에서 12개월 뒤 같은 날입니�
 
 
 # ---------------------------------------------------------------- 유지율
+def org_members(con, org_id, ym, agent_ids=None) -> list:
+    """조직 유지율을 셀 설계사 목록. 웹 유지율 화면, 기존 도구의 조직 화면, 인증 판정이 모두 이 목록을 쓴다.
+
+    그 달에 그 조직과 아래 전부에 소속 이력이 있는 재직 설계사다. orgs.members(fc_only, active_only) 와 같다.
+    그 달 중간 퇴사자는 빠진다. 실적 합계에는 퇴사 전 실적을 넣는 D-42 와 다르다. 유지율은 인증과 같은 재직자 기준이라는
+    제안대로 둔 가정이다. 재직은 지금의 agent.status 로 본다. 지난 달을 보면 그 뒤에 퇴사한 사람도 빠진다.
+    agent_ids 를 주면 그 목록과 겹치는 사람만 남긴다. 화면은 범위 안 설계사 목록을 넘긴다. 사번이 아니라 agent_id 순이다.
+    """
+    got = orgs.members(con, org_id, ym)
+    if agent_ids is None:
+        return got
+    allowed = set(agent_ids)
+    return [a for a in got if a in allowed]
+
+
 def _latest(con, ids, kind, ym):
     marks = ",".join("?" * len(ids))
     return con.execute(f"SELECT MAX(period_ym) m FROM persistency WHERE period_ym<=? AND kind=? AND agent_id IN ({marks})", [ym, kind] + ids).fetchone()["m"]

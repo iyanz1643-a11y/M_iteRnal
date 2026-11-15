@@ -21,14 +21,13 @@ import json
 import os
 import pathlib
 import re
-import secrets
 import sqlite3
 import zipfile
-from hashlib import sha256
 from urllib.parse import quote
 
 from app import db
 from app.engine import orgs
+from app.ops.storage import LocalStorage
 
 BEGIN, END = "-- [board:begin]", "-- [board:end]"
 CATEGORY_KO = {"notice": "공지", "plan": "시상안 원문", "lesson": "교안", "form": "양식"}
@@ -100,24 +99,21 @@ def board_dir() -> pathlib.Path:
     return pathlib.Path(os.environ.get("APP_BOARD_DIR") or db.ROOT / "data" / "board")
 
 
+def _store() -> LocalStorage:
+    """첨부 파일의 저장소. app/ops/storage.py 의 board 구역이고 폴더는 board_dir() 이다."""
+    return LocalStorage({"board": board_dir()})
+
+
 def blob_path(digest: str) -> pathlib.Path | None:
     if not isinstance(digest, str) or not SHA.match(digest):
         return None
-    p = board_dir() / digest
-    return p if p.is_file() else None
+    st = _store()
+    return st.local_path("board", digest) if st.exists("board", digest) else None
 
 
 def save_blob(data: bytes) -> str:
     """내용을 폴더에 두고 SHA-256 을 돌려준다. 같은 내용이 이미 있으면 다시 쓰지 않는다."""
-    digest = sha256(data).hexdigest()
-    d = board_dir()
-    d.mkdir(parents=True, exist_ok=True)
-    p = d / digest
-    if not p.is_file():
-        tmp = d / f".{digest}.{secrets.token_hex(4)}.part"
-        tmp.write_bytes(data)
-        os.replace(tmp, p)
-    return digest
+    return _store().put_hashed("board", data)
 
 
 # ---------------------------------------------------------------- 첨부 검사

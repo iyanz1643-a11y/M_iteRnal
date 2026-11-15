@@ -206,9 +206,9 @@ def test_post_without_csrf_token_is_refused(env):
     assert raw.post("/org/accounts", data={"user_id": uid, "action": "unlock"}, headers={"X-CSRF-Token": after}).status_code == 303
 
 
-# guard 없이 열리는 주소. 로그인과 나가기, 그리고 자료가 없는 브라우저 아이콘뿐이다.
+# guard 없이 열리는 주소. 로그인과 나가기, 자료가 없는 브라우저 아이콘, 로그인 전 랜딩인 앱 소개와 초대 링크뿐이다.
 # scripts/check_context.py 의 NON_MENU_ROUTES 에서 마지막 라우트를 뺀 것과 같아야 한다
-OPEN_ROUTES = {"/login", "/logout", "/favicon.ico"}
+OPEN_ROUTES = {"/login", "/logout", "/favicon.ico", "/welcome", "/invite", "/healthz"}     # /welcome 과 /invite 는 앱 소개와 초대 랜딩. tests/test_web_s3_landing.py. /healthz 는 상태 점검. tests/test_platform_s3.py
 
 
 def test_open_routes_match_check_context():
@@ -224,17 +224,31 @@ def test_favicon_returns_nothing(env):
     assert r.status_code == 204 and r.content == b""
 
 
+def api_routes(routes):
+    """앱의 모든 APIRoute 를 등록 순서대로 펼친다.
+
+    FastAPI 0.16x 는 include_router 한 라우터를 app.routes 에 _IncludedRouter 하나로 둔다. 펼치지 않으면
+    라우터 안의 주소가 하나도 검사되지 않고 favicon 과 마지막 주소만 남는다. 11월 15일 S3 랜딩 작업에서 찾았다."""
+    from fastapi.routing import APIRoute
+    for r in routes:
+        if isinstance(r, APIRoute):
+            yield r
+        elif hasattr(r, "original_router"):
+            yield from api_routes(r.original_router.routes)
+        elif hasattr(r, "routes") and not hasattr(r, "app"):
+            yield from api_routes(r.routes)
+
+
 def test_every_screen_goes_through_guard(env):
     """OPEN_ROUTES 를 뺀 모든 주소가 guard 를 거친다. 라우터를 나눠도 빠지는 화면이 없어야 한다."""
-    from fastapi.routing import APIRoute
-
     from app.web.deps import guard
 
     def deps_of(dep):
         for d in dep.dependencies:
             yield d.call
             yield from deps_of(d)
-    routes = [r for r in env["app"].routes if isinstance(r, APIRoute)]
+    routes = list(api_routes(env["app"].routes))
+    assert len(routes) > 40, "라우터 안의 주소까지 다 펼치지 못했다"
     assert routes[-1].path == "/{rest:path}"                                                         # 기획 화면 처리는 마지막
     for r in routes:
         if r.path not in OPEN_ROUTES:

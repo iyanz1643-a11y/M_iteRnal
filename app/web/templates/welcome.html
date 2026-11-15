@@ -1,0 +1,50 @@
+{# 앱 소개와 초대 랜딩. 로그인 전 공개 화면이라 자료를 하나도 싣지 않는다. 앱 이름과 로고는 D-16 가정이다.
+   문구는 7나이츠 심사 전이다. 운영에 게시하기 전에 확인을 받는다. docs/10 6.1 #}
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>앱 소개 · GA 업무 앱</title>
+<meta name="description" content="내 실적과 프로모션을 한 곳에서 보는 업무 앱입니다.">
+{% include "_head.html" %}</head>
+<body><main class="wrap landing">
+<header class="land-hero">
+  <img class="land-logo" src="/static/icons/icon-192.png" alt="" width="72" height="72">
+  <p class="eyebrow">설계사와 관리자를 위한 업무 앱</p>
+  <h1 class="display">GA 업무 앱</h1>
+  <p class="lede">내 실적과 진행 중인 프로모션, 교육 진척을 휴대폰 하나로 봅니다.</p>
+  <div class="land-cta"><a class="btn primary" href="/login">들어가기</a><a class="btn second" href="#install">홈 화면에 추가하는 법</a></div>
+</header>
+
+<h2 class="sec">이런 것을 봅니다</h2>
+<div class="grid g3">
+  <section class="card land-feat"><div class="k">내 진척</div><div class="land-t">이번 달 실적과 순위</div><p class="cap">기준 시각과 함께 보여 드립니다. 시상까지 남은 거리도 봅니다.</p></section>
+  <section class="card land-feat"><div class="k">프로모션</div><div class="land-t">진행 중인 시상과 마감</div><p class="cap">지급률과 기간, 마감이 가까운 것을 한눈에 봅니다.</p></section>
+  <section class="card land-feat"><div class="k">팀과 교육</div><div class="land-t">관리자의 조직 진척</div><p class="cap">관리자는 맡은 조직의 실적과 교육 진척을 봅니다.</p></section>
+</div>
+
+<h2 class="sec" id="install">휴대폰 홈 화면에 추가하기</h2>
+<p class="cap land-note">한 번 추가하면 앱처럼 아이콘을 눌러 바로 엽니다. 따로 내려받는 것은 없습니다.</p>
+<div class="grid g2">
+  <section class="card"><div class="k">아이폰</div><div class="land-t">사파리에서</div>
+    <ol class="land-steps">
+      <li>사파리로 이 주소를 엽니다.</li>
+      <li>아래쪽의 공유 단추를 누릅니다. 네모에서 화살표가 위로 나온 모양입니다.</li>
+      <li>목록을 내려 <b>홈 화면에 추가</b>를 누릅니다.</li>
+      <li>오른쪽 위의 <b>추가</b>를 누릅니다.</li>
+    </ol></section>
+  <section class="card"><div class="k">안드로이드</div><div class="land-t">크롬에서</div>
+    <ol class="land-steps">
+      <li>크롬으로 이 주소를 엽니다.</li>
+      <li>오른쪽 위의 점 세 개 단추를 누릅니다.</li>
+      <li><b>홈 화면에 추가</b> 또는 <b>앱 설치</b>를 누릅니다.</li>
+      <li><b>설치</b>나 <b>추가</b>를 누릅니다.</li>
+    </ol></section>
+</div>
+
+<h2 class="sec">처음 쓰시는 분</h2>
+<div class="grid g2">
+  <section class="card"><div class="k">초대 링크를 받으셨다면</div><div class="land-t">링크에서 비밀번호를 정합니다</div>
+    <p class="cap">메인 관리자가 보낸 링크를 열고 새 비밀번호를 두 번 넣습니다. 링크는 {{ TTL_DAYS }}일 동안 한 번만 쓸 수 있습니다. 그다음 사번과 새 비밀번호로 들어갑니다.</p></section>
+  <section class="card"><div class="k">초기 비밀번호를 받으셨다면</div><div class="land-t">들어간 뒤 바로 바꿉니다</div>
+    <p class="cap">사번과 초기 비밀번호로 들어가면 내 정보 화면이 열립니다. 거기서 새 비밀번호로 바꿔 주세요.</p></section>
+</div>
+<p class="cap land-foot">링크가 지났거나 비밀번호를 잊으셨다면 메인 관리자에게 새 링크나 재설정을 요청해 주세요.</p>
+</main></body></html>

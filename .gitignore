@@ -5,3 +5,5 @@ __pycache__/
 .streamlit/
 data/state/
 data/board/
+data/backup/
+.env

@@ -6,17 +6,20 @@
 - 아래는 요청 없이 직접 켜고 끄는 표다. grant, revoke 만 부른다.
 어느 함수든 메인 관리자인지 한 번 더 보고 스스로 커밋한다. 보내기 전에 고른 사람을 다시 보여 주는 확인 단계를 거친다.
 """
+import os
 from datetime import date
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app import db
+from app.ops import sessions
 from app.org import card_grant as cg
 from app.org import heads as hd
 from app.org import levels
 from app.org.sync import org_texts, termination_candidates
 from app.web import audit_view, auth
+from app.web import invite as iv
 from app.web.deps import _in, _q, get_con, guard, page
 
 router = APIRouter()
@@ -264,7 +267,7 @@ def org_heads_action(request: Request, action: str = Form(...), org_id: int | No
 
 
 # ---------------------------------------------------------------- 계정
-def _accounts_page(request, ctx, con, issued=None, err=None, status_code=200):
+def _accounts_page(request, ctx, con, issued=None, err=None, status_code=200, invite_link=None):
     rows = _q(con, """SELECT u.user_id, u.login_id, u.display_name, u.is_main_admin, u.status, u.must_change_password, u.locked_until, u.last_login_at,
                              (SELECT COUNT(*) FROM org_manager m WHERE m.agent_id=u.agent_id AND m.effective_to IS NULL) heads
                       FROM user_account u ORDER BY u.is_main_admin DESC, u.login_id""")
@@ -278,7 +281,8 @@ def _accounts_page(request, ctx, con, issued=None, err=None, status_code=200):
     for r in no_account:
         r["org"] = texts.get(r["org_id"], "")
     resp = page(request, ctx, "org_accounts.html", rows=rows, now=db.now(), no_account=no_account, leavers=termination_candidates(con),
-                issued=issued or [], err=err, status_code=status_code)
+                issued=issued or [], err=err, status_code=status_code, invites=iv.pending(con), invite_link=invite_link,
+                invite_days=iv.TTL_DAYS)
     resp.headers.update(NO_STORE)
     return resp
 
@@ -292,6 +296,18 @@ def org_accounts(request: Request, ctx: dict = Depends(guard), con=Depends(get_c
 def org_accounts_action(request: Request, action: str = Form(...), user_id: int | None = Form(None), agent_id: int | None = Form(None),
                         ctx: dict = Depends(guard), con=Depends(get_con)):
     by = ctx["login_id"]
+    if action == "invite":                            # 초대 링크. 원문은 이 응답에 한 번만 싣고 저장하지 않는다. app/web/invite.py
+        if user_id is None:
+            raise HTTPException(400, "처리할 수 없는 요청입니다.")
+        try:
+            token, expires = iv.create(con, user_id, by)
+        except iv.InviteError as e:
+            con.rollback()
+            return _accounts_page(request, ctx, con, err=str(e), status_code=400)
+        u = con.execute("SELECT login_id, display_name FROM user_account WHERE user_id=?", (user_id,)).fetchone()
+        base = (os.environ.get("APP_BASE_URL") or str(request.base_url)).rstrip("/")
+        return _accounts_page(request, ctx, con, invite_link={"login_id": u["login_id"], "name": u["display_name"],
+                                                              "url": f"{base}/invite?t={token}", "expires_at": expires})
     if action in ("issue", "issue_all"):
         if action == "issue":
             if agent_id is None:
@@ -307,8 +323,8 @@ def org_accounts_action(request: Request, action: str = Form(...), user_id: int 
             except ValueError as e:
                 con.rollback()
                 return _accounts_page(request, ctx, con, err=str(e), status_code=400)
-            name = con.execute("SELECT display_name FROM user_account WHERE login_id=?", (login_id,)).fetchone()[0]
-            issued.append({"login_id": login_id, "name": name, "password": pw})
+            uid, name = con.execute("SELECT user_id, display_name FROM user_account WHERE login_id=?", (login_id,)).fetchone()
+            issued.append({"login_id": login_id, "name": name, "password": pw, "user_id": uid})
         con.commit()
         for x in issued:
             auth.log(con, by, "account_issue", x["login_id"])
@@ -319,12 +335,16 @@ def org_accounts_action(request: Request, action: str = Form(...), user_id: int 
         raise HTTPException(400, "처리할 수 없는 요청입니다.")
     if action == "reset":
         pw = auth.reset_password(con, target["user_id"])
+        sessions.bump(con, target["user_id"])                # 열려 있던 접속을 끊는다. app/ops/sessions.py
         auth.log(con, by, "account_reset", target["login_id"])
-        return _accounts_page(request, ctx, con, issued=[{"login_id": target["login_id"], "name": target["display_name"], "password": pw}])
+        return _accounts_page(request, ctx, con, issued=[{"login_id": target["login_id"], "name": target["display_name"], "password": pw,
+                                                                 "user_id": target["user_id"]}])
     if action == "unlock":
         con.execute("UPDATE user_account SET failed_count=0, locked_until=NULL WHERE user_id=?", (target["user_id"],))
     else:
         con.execute("UPDATE user_account SET status=? WHERE user_id=?", ("suspended" if action == "suspend" else "active", target["user_id"]))
+        if action == "suspend":
+            sessions.bump(con, target["user_id"])            # 다시 켜도 중지 전의 쿠키는 쓰지 못한다
     auth.log(con, by, f"account_{action}", target["login_id"])
     return RedirectResponse("/org/accounts", status_code=303)
 
