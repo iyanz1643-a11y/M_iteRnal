@@ -1360,3 +1360,69 @@ CREATE TABLE IF NOT EXISTS schema_migration (
 );
 INSERT INTO schema_migration(version, name, applied_at) VALUES (1, 'schema.sql 기준', '2026-11-15 00:00:00') ON CONFLICT (version) DO NOTHING;
 -- [platform:end]
+
+-- ---------------------------------------------------------------------------
+-- 프로모션 확정 기능 (파트 D, S3). app/engine/promotion.py 가 쓴다. 기존 CREATE 문은 그대로 두고 덧붙이기만 한다.
+-- 창별 구간표: promotion_tier.window_seq 가 비면 공통 구간표, 숫자면 그 창의 구간표다. 기존 프로모션은 모두 공통이라 그대로 돈다.
+--   창별 구간표는 창마다 달성하는 결합 규칙(all)에서만 쓴다. 보상은 공통 구간표에서, 없으면 마지막 창의 구간표에서 읽는다. 가정이다.
+-- 13회차 조건: promotion.inst13_required 가 1 이거나 지급 시점에 inst13 이 들면 13회차 유지 판정을 한다.
+-- 확정 순위: promotion_result.rank_no 는 확정할 때의 재직자 전체에서 실적 큰 순이다. 같은 값은 같은 순위이고 실적이 0 이하면 비운다.
+-- 확정할 때 센 계약: promotion_result_contract. 13회차 판정은 이 계약들로 한다. 지우지 않는다.
+-- 13회차 확정: promotion_inst13 한 줄이 한 사람의 지급 또는 환수 판정이다. 판정 전인 사람은 줄이 없고 다음에 다시 확정한다.
+--   (confirm_id, agent_id) 가 하나라 한 번 남긴 판정은 바뀌지 않는다. 결과 확정을 무르면 그 확정에 달린 판정도 함께 보이지 않는다.
+-- 확정 무르기(D-50 제안대로 둔 가정): promotion_confirm 의 voided_at, voided_by, void_reason 을 채운다. 줄은 지우지 않는다.
+-- 확정 규칙: promotion_confirm.rule_json 은 확정할 때의 창, 구간표, 지급률이다. 13회차 판정이 이 규칙으로 다시 계산한다.
+-- 오래된 DB 에서도 이 묶음만 다시 돌릴 수 있게 쓴다. app/engine/promotion.py 의 ensure 가 이 묶음을 읽고, 이미 있는 칸은 건너뛴다.
+-- [promotion_confirm:begin]
+ALTER TABLE promotion_tier ADD COLUMN window_seq INTEGER;                     -- 비면 공통 구간표. 숫자면 그 창(promotion_window.seq)의 구간표
+ALTER TABLE promotion ADD COLUMN inst13_required INTEGER NOT NULL DEFAULT 0;  -- 1 이면 13회차 유지 계약만 인정
+ALTER TABLE promotion_result ADD COLUMN rank_no INTEGER;                      -- 확정할 때의 순위. 실적이 0 이하면 NULL
+ALTER TABLE promotion_confirm ADD COLUMN rule_json TEXT;                      -- 확정할 때의 창, 구간표, 지급률
+
+CREATE TABLE IF NOT EXISTS promotion_result_contract (
+    id              INTEGER PRIMARY KEY,
+    confirm_id      INTEGER NOT NULL REFERENCES promotion_confirm(confirm_id),
+    promo_id        INTEGER NOT NULL REFERENCES promotion(promo_id),
+    agent_id        INTEGER NOT NULL REFERENCES agent(agent_id),
+    contract_id     INTEGER NOT NULL REFERENCES contract(contract_id),
+    window_seq      INTEGER NOT NULL,                 -- 그 계약을 센 창
+    value           NUMERIC NOT NULL                  -- 그 창에서 센 값. 건당 인정 한도를 적용한 뒤다
+);
+CREATE INDEX IF NOT EXISTS idx_promotion_result_contract ON promotion_result_contract(confirm_id, agent_id);
+
+CREATE TABLE IF NOT EXISTS promotion_inst13 (
+    inst13_id       INTEGER PRIMARY KEY,
+    confirm_id      INTEGER NOT NULL REFERENCES promotion_confirm(confirm_id),
+    promo_id        INTEGER NOT NULL REFERENCES promotion(promo_id),
+    agent_id        INTEGER NOT NULL REFERENCES agent(agent_id),
+    ref_date        TEXT NOT NULL,                    -- 판정 기준일 YYYY-MM-DD
+    decision        TEXT NOT NULL CHECK (decision IN ('pay','clawback')),  -- 지급 / 환수
+    value           NUMERIC NOT NULL,                 -- 결과 확정 때의 실적
+    value_kept      NUMERIC NOT NULL,                 -- 실효 계약을 뺀 실적
+    tier_no         INTEGER,
+    tier_no_kept    INTEGER,
+    amount          NUMERIC,                          -- 결과 확정 때의 배포안 금액
+    amount_kept     NUMERIC,                          -- 실효 계약을 뺀 배포안 금액
+    original_amount NUMERIC,
+    original_amount_kept NUMERIC,
+    outcome_kept    TEXT NOT NULL,                    -- achieved / missed
+    n_kept          INTEGER NOT NULL,
+    n_lapsed        INTEGER NOT NULL,
+    judged_by       TEXT NOT NULL,                    -- 메인 관리자의 login_id
+    judged_at       TEXT NOT NULL,
+    UNIQUE (confirm_id, agent_id)
+);
+
+CREATE TABLE IF NOT EXISTS promotion_inst13_contract (
+    id              INTEGER PRIMARY KEY,
+    inst13_id       INTEGER NOT NULL REFERENCES promotion_inst13(inst13_id),
+    contract_id     INTEGER NOT NULL REFERENCES contract(contract_id),
+    window_seq      INTEGER NOT NULL,
+    value           NUMERIC NOT NULL,
+    due_date        TEXT,                             -- 13회차 도래일
+    judgement       TEXT NOT NULL,                    -- kept / lapsed
+    reason          TEXT NOT NULL,                    -- paid / lapsed / single
+    paid_ym         TEXT                              -- 판정에 쓴 마지막 납입 달
+);
+CREATE INDEX IF NOT EXISTS idx_promotion_inst13_contract ON promotion_inst13_contract(inst13_id);
+-- [promotion_confirm:end]

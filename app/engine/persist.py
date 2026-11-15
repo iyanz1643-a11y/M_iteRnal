@@ -16,6 +16,10 @@
 - lapsed 는 기준 월과 그 앞 두 달 안에 이미 실효된 계약이다. 13회차 시책 환수와 이어진다.
 - 13회차 도래일: 계약일에서 12개월 뒤 같은 날. 그 달에 그날이 없으면 말일이다. 월납의 13회차, 연납과 3월납과 6월납의
   같은 달 납입이 모두 이날에 온다. 일시납은 13회차 납입이 없어 뺀다. 유지 중(inforce)인 계약만 센다.
+- 13회차 유지 판정(inst13_judge): 프로모션의 13회차 확정이 쓴다. 마지막 납입 달이 도래 달 이상이면 유지(kept),
+  아니면서 실효, 해지, 철회 상태면 실효(lapsed), 둘 다 아니면 판정 전(pending)이다. 판정 전의 사유는 도래 전(not_due),
+  도래했지만 납입 확인 전(unpaid), 계약일 없음(no_date)이다. 일시납은 13회차 납입이 없어 도래일이 지나고 실효가 아니면 유지로 본다.
+  지금 상태로 판정한다. 상태가 바뀐 날을 따지지 않는다. 모두 가정이다.
 """
 import calendar
 from datetime import date, timedelta
@@ -239,3 +243,52 @@ def overview(con, agent_ids, ym, *, ref: date | None = None, months_ahead=DUE_AH
     end = date(ey, em, min(ref.day, calendar.monthrange(ey, em)[1]))
     return {"ym": ym, "ref": ref.isoformat(), "rates": rates(con, agent_ids, ym), "risk": risk(con, agent_ids, ym),
             "due": inst13_due(con, agent_ids, ref + timedelta(days=1), end, ym=ym)}
+
+
+# ---------------------------------------------------------------- 13회차 유지 판정
+INST13_KO = {"kept": "유지", "lapsed": "실효", "pending": "판정 전"}
+INST13_REASON_KO = {"paid": "13회차 납입 확인", "single": "일시납, 도래일 지나 유지", "lapsed": "실효 또는 해지", "not_due": "도래 전",
+                    "unpaid": "도래했지만 납입 확인 전", "no_date": "계약일 없음"}
+GONE = ("lapsed", "cancelled", "withdrawn")    # 이 상태면 13회차 납입이 없는 한 실효로 본다
+INST13_NOTE = ("13회차 도래일은 계약일에서 12개월 뒤 같은 날입니다. 마지막 납입 달이 도래 달 이상이면 유지, 아니면서 실효나 해지면 실효, "
+               "그 밖에는 판정 전입니다. 마지막 납입 달은 계약현황의 최종납입년월이고, 비었으면 납입 회차 기록입니다.")
+
+
+def judge13(contract_date, payment_mode, status, paid_ym, ref: date) -> dict:
+    """계약 하나의 13회차 유지 판정. {due_date, judgement, judgement_ko, reason, reason_ko, paid_ym}. 모듈 설명의 규칙이다."""
+    if not contract_date:
+        j, why, due = "pending", "no_date", None
+    else:
+        due = due13(contract_date)
+        due_ym = due.strftime("%Y%m")
+        if paid_ym and paid_ym >= due_ym:
+            j, why = "kept", "paid"
+        elif status in GONE:
+            j, why = "lapsed", "lapsed"
+        elif ref < due:
+            j, why = "pending", "not_due"
+        elif payment_mode == "single":
+            j, why = "kept", "single"
+        else:
+            j, why = "pending", "unpaid"
+    return {"due_date": due.isoformat() if due else None, "judgement": j, "judgement_ko": INST13_KO[j], "reason": why,
+            "reason_ko": INST13_REASON_KO[why], "paid_ym": paid_ym}
+
+
+def inst13_judge(con, contract_ids, ref: date) -> dict:
+    """계약마다 13회차 유지 판정. {contract_id: judge13()}. 마지막 납입 달은 기준일의 달까지의 기록만 본다.
+    계약 번호로만 읽는다. 부르는 쪽이 범위 안 설계사의 계약만 넘긴다."""
+    ids = sorted(set(contract_ids or ()))
+    if not ids:
+        return {}
+    ym = ref.strftime("%Y%m")
+    out = {}
+    for i in range(0, len(ids), 500):
+        part = ids[i:i + 500]
+        marks = ",".join("?" * len(part))
+        for c in con.execute(
+                f"""SELECT c.contract_id, c.contract_date, c.payment_mode, c.status,
+                           COALESCE(c.last_paid_ym, (SELECT MAX(pp.period_ym) FROM premium_payment pp WHERE pp.contract_id=c.contract_id AND pp.period_ym<=?)) paid
+                    FROM contract c WHERE c.contract_id IN ({marks})""", [ym, *part]):
+            out[c["contract_id"]] = judge13(c["contract_date"], c["payment_mode"], c["status"], c["paid"], ref)
+    return out
