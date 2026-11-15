@@ -20,7 +20,7 @@
 | `docs/08_시상안_원장.md` | 보험사별 시상안 엑셀을 원문 그대로 쌓는 시상안 원장, 수령 계층·일 단위 기간·지급 시점·지급률 해석 |
 | `docs/09_기능기획서.md` | 목표와 성공 기준, 조직과 권한, 핵심 흐름, 메뉴별 기능 명세, 추가 기능 제안, 알림, 화면 목록, 데이터, 보안, 기술 구성, 위험 |
 | `docs/10_개발계획.md` | 앱 정의와 단계, 페르소나, 메뉴, 파트별 업무와 완료 기준, 검토 방식, 결정 기록 |
-| `docs/11_개발구조.md` | 개발 도구, 시스템 구조, 저장소 구조, 메뉴 구성(화면 64개와 역할별 범위), 권한 구조, 환경, 시험, 작업 방식 |
+| `docs/11_개발구조.md` | 개발 도구, 시스템 구조, 저장소 구조, 메뉴 구성(화면 66개와 역할별 범위), 권한 구조, 환경, 시험, 작업 방식 |
 | `docs/12_디자인.md` | 디자인 원칙, 글자와 색, 구성 요소, 반응형 배치, 인포그래픽 규칙 |
 | `docs/13_AI운영설계.md`, `CLAUDE.md`, `.claude/agents/` | 컨텍스트 엔지니어링, 루프 엔지니어링, 연결 엔지니어링, 파트별 에이전트 9개 |
 | `scripts/check_context.py` | 컨텍스트 신선도 점검. 자동 시험에서도 돈다 |
@@ -39,7 +39,11 @@
 ```bash
 pip install -r requirements.txt
 python run_demo.py          # 샘플 엑셀·PDF 생성 → 적재·추출 → 202601~202610 수수료·업적·시상·랭킹·대사·인증 계산
-streamlit run app/ui.py     # 화면 열기
+uvicorn app.web.main:app --port 8000   # 새 웹 화면
+streamlit run app/ui.py     # 기존 운영 도구
+python -m app.worker        # 작업 워커. 큰 적재와 업적, 랭킹, 대사 다시 돌리기
+python scripts/backup_db.py # DB 백업. 확인은 scripts/restore_check.py
+docker compose up --build   # 시험용 구성. .env.example 을 .env 로 복사해 값을 채운 뒤
 ```
 
 자세한 내용은 `docs/01_앱구성.md`부터 읽으면 됩니다.
