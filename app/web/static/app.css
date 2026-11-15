@@ -370,3 +370,28 @@ code.secret{display:block;margin-top:4px;font:700 clamp(24px,3vw,32px)/1.2 ui-mo
 button.second.lift{background:var(--card)}
 @media (max-width:760px){.g2.keep-2{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:1000px){.md-sub .sm-sub{display:grid;gap:2px;margin-top:4px;font-size:13px;font-weight:400;line-height:1.4;color:var(--quiet);white-space:normal}}
+
+/* ---------- 공지와 자료실, 신인 정착 (web-screen, S2 파트 F) */
+.board-hero{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+.board-open{scroll-margin-top:72px}
+.board-title{margin:10px 0 4px}
+.board-target{margin:0 0 12px}
+.board-body{white-space:pre-line;overflow-wrap:anywhere;font-size:17px;line-height:1.6;margin-top:12px}
+ul.board-files{list-style:none;margin:20px 0 0;padding:0;display:grid;gap:8px}
+a.board-file{display:flex;align-items:center;gap:10px;min-height:52px;padding:8px 16px;border-radius:14px;background:var(--bg);color:var(--ink);min-width:0}
+a.board-file .board-fname{flex:1;min-width:0;font-weight:600;overflow-wrap:anywhere}
+a.board-file .cap{margin:0;flex:none}
+fieldset.board-fc{border:none;margin:0;padding:0;min-width:0}
+fieldset.board-fc legend{font-size:13px;font-weight:600;color:var(--quiet);padding:0;margin-bottom:6px}
+fieldset.board-fc .checks label{white-space:normal;min-height:44px}
+.board-list{overflow:hidden}
+.board-row.on{background:var(--tint);margin:0 calc(-1 * var(--pad));padding-left:var(--pad);padding-right:var(--pad)}
+.notif-title a{overflow-wrap:anywhere}
+.onboard-steps{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
+.onboard-todo{margin:4px 0 0;white-space:normal;font-weight:400}
+table.onboard .chip{white-space:nowrap}
+@media (max-width:760px){
+  .board-hero .pill{flex:1}
+  table.onboard .sm-sub .chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px}
+  table.onboard td.strong{min-width:0}
+}

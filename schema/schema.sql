@@ -1131,3 +1131,44 @@ CREATE TABLE IF NOT EXISTS notification_read (
     PRIMARY KEY (user_id, note_key)
 );
 -- [notifications:end]
+
+-- ---------------------------------------------------------------------------
+-- 공지와 자료실 (파트 F, /board). 글과 첨부 파일의 정보만 둔다. 파일 자체는 저장소 밖 data/board/<sha256> 에 둔다.
+-- 폴더는 APP_BOARD_DIR 로 바꾼다. DB 에는 파일 이름, 크기, 해시, 꼴만 남기고 내용은 넣지 않는다.
+-- 글은 메인 관리자만 올리고 고치고 내린다. docs/09 2.4 에 관리자의 공지 올리기가 없어서다.
+-- 대상은 조직과 역할을 함께 고른다. 조직이 비면 모든 조직, 역할이 비면 모든 역할이다. 조직은 그 아래까지 포함한다.
+-- 시상안 원문은 수령 계층의 몫이 담겨 있을 수 있어 올릴 때 fc_visible 을 고른다(D-18). 0 이면 메인 관리자만 본다.
+-- 지우지 않는다. 내리면 withdrawn 으로 두고, 고치면서 뺀 첨부는 removed_at 을 채운다. app/web/board.py 의 ensure 가 이 묶음을 읽는다.
+-- [board:begin]
+CREATE TABLE IF NOT EXISTS board_post (
+    post_id        INTEGER PRIMARY KEY,
+    category       TEXT NOT NULL,                     -- notice(공지) / plan(시상안 원문) / lesson(교안) / form(양식)
+    title          TEXT NOT NULL,
+    body           TEXT,
+    target_org_id  INTEGER REFERENCES org_unit(org_id),   -- NULL 이면 모든 조직. 아니면 그 조직과 아래
+    target_role    TEXT,                              -- NULL 이면 모든 역할. manager / agent
+    fc_visible     INTEGER,                           -- 시상안 원문만. 1 설계사에게 보여도 되는 FC 몫만 / 0 메인 관리자만. 다른 분류는 NULL
+    status         TEXT NOT NULL DEFAULT 'posted',    -- posted / withdrawn
+    posted_by      TEXT NOT NULL,
+    posted_at      TEXT NOT NULL,
+    updated_by     TEXT,
+    updated_at     TEXT,
+    withdrawn_by   TEXT,
+    withdrawn_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_board_post_status ON board_post(status, posted_at);
+
+CREATE TABLE IF NOT EXISTS board_file (
+    file_id        INTEGER PRIMARY KEY,
+    post_id        INTEGER NOT NULL REFERENCES board_post(post_id),
+    name           TEXT NOT NULL,                     -- 올린 파일 이름. 경로를 떼고 위험한 글자를 바꾼 것
+    size_bytes     INTEGER NOT NULL,
+    sha256         TEXT NOT NULL,                     -- 내용의 SHA-256 16진수. 저장 파일 이름이기도 하다
+    kind           TEXT NOT NULL,                     -- pdf / image / excel / hwp / word
+    uploaded_by    TEXT NOT NULL,
+    uploaded_at    TEXT NOT NULL,
+    removed_by     TEXT,                              -- 고치면서 뺀 때. 파일과 줄은 지우지 않는다
+    removed_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_board_file_post ON board_file(post_id);
+-- [board:end]

@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.web.deps import HERE, PASSWORD_PATH, NeedLogin, NeedPasswordChange, csrf_protect, guard, page, templates
-from app.web.routes import auth, card, home, me, notify, org, promo, schedule, staff, team
+from app.web.routes import auth, board, card, home, me, notify, org, promo, schedule, staff, team
 from app.web.routes import edu as edu_routes
 from app.web.routes import my as my_routes
 from app.web.routes import perf as perf_routes
@@ -58,7 +58,7 @@ async def _http_error(request: Request, exc: HTTPException):
 
 for r in (auth, home, team, org, staff, me, promo, card):
     app.include_router(r.router)
-for r in (notify, schedule):                 # 공통 묶음의 알림함과 일정
+for r in (notify, schedule, board):          # 공통 묶음의 알림함, 일정, 공지와 자료실
     app.include_router(r.router)
 for r in (perf_routes, my_routes):            # 실적 묶음과 내 진척의 실적 요약, 시상 진척
     app.include_router(r.router)

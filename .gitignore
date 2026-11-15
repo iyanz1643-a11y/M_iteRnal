@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 .streamlit/
 data/state/
+data/board/

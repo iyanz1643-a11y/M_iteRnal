@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{# 신인 정착. 금액은 없다. 건수와 여부, 달만 보인다. 색은 상태: 마침 초록, 예정과 남음 주황, 기한 지남 빨강 #}
+{% macro ymko(k) %}{{ k[:4] }}년 {{ k[4:]|int }}월{% endmacro %}
+{% macro edu_chip(r) %}{% if r.edu_total == 0 %}<span class="chip">필수 과정 없음</span>{% elif r.edu_ok %}<span class="chip good">필수 {{ r.edu_done }}/{{ r.edu_total }} 수료</span>{% elif r.edu_overdue %}<span class="chip bad">필수 {{ r.edu_done }}/{{ r.edu_total }} · 기한 지남 {{ r.edu_overdue }}</span>{% elif r.edu_soon %}<span class="chip bad">필수 {{ r.edu_done }}/{{ r.edu_total }} · 임박 {{ r.edu_soon }}</span>{% else %}<span class="chip warn">필수 {{ r.edu_done }}/{{ r.edu_total }}</span>{% endif %}{% endmacro %}
+{% macro contract_chip(r) %}{% if r.first_contract %}<span class="chip good">{{ ymko(r.first_contract) }} 성립</span>{% elif r.no_data %}<span class="chip">자료 없음</span>{% elif r.applied %}<span class="chip warn">청약 {{ r.applied }}건 · 예정</span>{% else %}<span class="chip warn">아직</span>{% endif %}{% endmacro %}
+{% macro active_chip(r) %}{% if r.first_active %}<span class="chip good">{{ ymko(r.first_active) }} 가동</span>{% elif r.no_data %}<span class="chip">자료 없음</span>{% else %}<span class="chip warn">아직</span>{% endif %}{% endmacro %}
+{% block body %}
+{% set n = rows|length %}{% set all3 = rows|selectattr('steps', 'equalto', 3)|list|length %}
+<p class="eyebrow">팀 관리 · {{ SCOPES[ctx.scope] }} · 오늘 {{ today|md }}</p>
+<h1 class="display">신인 정착</h1>
+<p class="lede">위촉한 지 {{ days }}일 안의 설계사 {{ n }}명입니다. 필수 교육, 첫 계약, 첫 가동을 차례로 봅니다. 금액은 보이지 않습니다.</p>
+
+<div class="grid g2" style="margin-top:32px">
+  <div class="card"><div class="ringbox">{{ ui.ring(all3 / n * 100 if n else 0, '세 가지를 모두 마친 신인', color='var(--fill-green)') }}
+    <div><div class="k">세 가지 모두 마침</div><div class="mid">{{ all3 }}<span class="unit">/ {{ n }}명</span></div>
+      <div class="cap">필수 교육, 첫 계약, 첫 가동</div></div></div></div>
+  <div class="card"><div class="k">아직 남은 신인</div><div class="big">{{ n - all3 }}<span class="unit">명</span></div><div class="cap">덜 마친 사람과 위촉이 오래된 사람이 위에 옵니다</div></div>
+</div>
+<div class="grid g3 keep" style="margin-top:16px">
+  <div class="card"><div class="k">필수 교육</div><div class="mid">{{ rows|selectattr('edu_ok')|list|length }}<span class="unit">명</span></div></div>
+  <div class="card"><div class="k">첫 계약</div><div class="mid">{{ rows|selectattr('first_contract')|list|length }}<span class="unit">명</span></div></div>
+  <div class="card"><div class="k">첫 가동</div><div class="mid">{{ rows|selectattr('first_active')|list|length }}<span class="unit">명</span></div></div>
+</div>
+
+<h2 class="sec">체크리스트 {{ n }}명</h2>
+{% if rows %}
+<div class="card tablecard"><table class="onboard">
+<tr><th>성명</th><th class="hide-sm">소속</th><th class="hide-sm hide-md">위촉일</th><th class="hide-sm">필수 교육</th><th class="hide-sm">첫 계약</th><th class="hide-sm">첫 가동</th><th class="num">마친 것</th></tr>
+{% for r in rows %}
+<tr><td class="strong wrap-sm">{{ r.name }} <span class="req-code">D+{{ r.days }}</span>
+  <div class="sm-sub"><span>{{ r.org or '-' }} · {{ r.hire_date|md }} 위촉</span>
+    <span class="chips">{{ edu_chip(r) }}{{ contract_chip(r) }}{{ active_chip(r) }}</span></div>
+  {% if r.edu_todo %}<div class="cap onboard-todo">남은 과정 {% for x in r.edu_todo %}{{ x.course_name }}{% if x.due %} {{ x.due|md }}까지{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</div>{% endif %}</td>
+<td class="hide-sm">{{ r.org or '-' }}</td><td class="hide-sm hide-md">{{ r.hire_date }}</td>
+<td class="hide-sm">{{ edu_chip(r) }}</td>
+<td class="hide-sm">{{ contract_chip(r) }}{% if r.new_count %}<div class="cap" style="margin:4px 0 0">성립 {{ r.new_count|n }}건</div>{% endif %}</td>
+<td class="hide-sm">{{ active_chip(r) }}</td>
+<td class="num" data-col="steps"><span class="onboard-steps">{{ r.steps }}<span class="unit">/ 3</span></span></td></tr>
+{% endfor %}
+</table></div>
+{% else %}
+<div class="card"><div class="k">위촉한 지 {{ days }}일 안의 설계사가 없습니다</div>
+  <div class="cap">사원현황에 새 설계사가 반영되면 여기에 보입니다.</div></div>
+{% endif %}
+<p class="cap">교육은 오늘 기준입니다. 첫 계약과 첫 가동은 {{ ctx.ym[:4] }}년 {{ ctx.ym[4:]|int }}월 자료까지, {{ last_load|when if last_load else '적재 없음' }} 적재 기준입니다. 첫 계약은 성립한 첫 달, 첫 가동은 순건수가 1건 이상인 첫 달입니다. 청약만 있으면 예정으로 표시합니다. 위촉한 달이 자료 기준 달보다 늦으면 자료 없음으로 표시합니다.</p>
+{% endblock %}

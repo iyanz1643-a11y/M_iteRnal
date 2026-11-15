@@ -66,6 +66,11 @@ ACTION_KO = {
     "edu_card_code_issued": "명함 수료 코드 발급 기록",
     "edu_card_code_failed": "명함 수료 코드 발급 실패",
     "edu_card_code_revoke": "명함 수료 코드 내림",
+    # 공지와 자료실. 행위 코드는 app/web/board.py 의 audit 호출과 같다
+    "board_post": "공지·자료 올림",
+    "board_update": "공지·자료 고침",
+    "board_withdraw": "공지·자료 내림",
+    "board_download": "자료실 첨부 내려받음",
     # 기존 운영 도구
     "quality_resolve": "품질검증 처리",
     "diff_update": "대사 차이 처리",
@@ -87,7 +92,7 @@ PROMO_FIELD_KO = {
     "target_note": "대상 상품", "caution": "유의사항", "windows": "기간 창", "tiers": "구간",
 }
 OP_KO = {"approve": "요청 승인", "reject": "요청 반려", "grant": "권한 켜기", "revoke": "권한 끄기", "request": "권한 요청"}
-FORM_ACTION_KO = {"save": "저장", "active": "다시 열기", "inactive": "닫기", "confirm": "확정", "card_request": "명함 승인 권한 요청"}
+FORM_ACTION_KO = {"save": "저장", "withdraw": "내리기", "edit": "고치기 폼", "active": "다시 열기", "inactive": "닫기", "confirm": "확정", "card_request": "명함 승인 권한 요청"}
 
 _KV = re.compile(r"(\w+)=(\S+)")
 
@@ -147,6 +152,12 @@ class _Names:
         return self._one("card_issue", "SELECT a.internal_code || ' · ' || k.card_course_code || ' ' || k.completed_ym FROM edu_card_code k "
                                        "JOIN agent a ON a.agent_id=k.agent_id WHERE k.issue_id=?", iid)
 
+    def board_post(self, pid):
+        return self._one("board_post", "SELECT title FROM board_post WHERE post_id=?", pid)
+
+    def board_file(self, fid):
+        return self._one("board_file", "SELECT name FROM board_file WHERE file_id=?", fid)
+
     def agent_code(self, aid):
         return self._one("agent", "SELECT internal_code FROM agent WHERE agent_id=?", aid)
 
@@ -192,6 +203,8 @@ def target_ko(action: str, target, names: _Names) -> str:
             return f"계정: {t}"
         if action.startswith("edu_"):
             return _edu_target(action, t, names)
+        if action.startswith("board_"):
+            return _board_target(action, t, names)
         if action == "card_code_issue":
             _, course, ym = (t.split(":") + ["", "", ""])[:3]
             out = "명함 수료 코드"
@@ -204,6 +217,9 @@ def target_ko(action: str, target, names: _Names) -> str:
             path, _, rest = t.partition(" ")
             item = menu.find(path)
             out = f"화면: {item['name']}" if item else f"주소: {path}"
+            m = re.fullmatch(r"(post|file):(\d+)", rest)
+            if m:                                 # 공지와 자료실에서 대상 밖 글이나 첨부를 연 시도
+                return out + f" · {'글' if m.group(1) == 'post' else '첨부'} {m.group(2)}번"
             return out + (f" · {FORM_ACTION_KO.get(rest, rest)}" if rest else "")
         if action == "login_fail":
             return f"까닭: {t}"
@@ -253,6 +269,19 @@ def _edu_target(action: str, t: str, names: _Names) -> str:
         name = names.card_issue(n)
         return f"수료 코드: {name}" if name else t
     return t
+
+
+def _board_target(action: str, t: str, names: _Names) -> str:
+    """공지와 자료실의 대상. 올림, 고침, 내림은 글 번호, 내려받음은 '글 번호:첨부 번호' 다."""
+    pid, _, fid = t.partition(":")
+    title = names.board_post(_num(pid))
+    if title is None:
+        return t
+    out = f"게시물: {title}"
+    if fid:
+        name = names.board_file(_num(fid))
+        out += f" · 첨부 {name}" if name else f" · 첨부 {fid}번"
+    return out
 
 
 def _org_target(t: str, names: _Names) -> str:

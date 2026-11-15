@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% macro size(b) %}{% if b >= 1048576 %}{{ '%.1f'|format(b / 1048576) }}MB{% else %}{{ [((b / 1024)|round(0, 'ceil'))|int, 1]|max }}KB{% endif %}{% endmacro %}
+{% macro flashbox(f) %}{% if f %}<div class="{{ 'okmsg' if f.kind == 'ok' else 'alert' }}" role="status" style="margin-top:24px">{{ f.text }}</div>{% endif %}{% endmacro %}
+{% block body %}
+<p class="eyebrow">공통 · {{ SCOPES[ctx.scope] }}</p>
+<h1 class="display">공지와 자료실</h1>
+<p class="lede">{% if is_main %}공지, 시상안 원문, 교안, 양식을 올리고 대상을 정합니다. 대상 안의 사람에게만 보이고, 공지는 알림함에도 새 공지로 뜹니다.{% else %}나에게 온 공지와 자료입니다. 첨부는 눌러서 내려받습니다.{% endif %}</p>
+{{ flashbox(flash) }}
+{% if error %}<div class="alert bad" role="alert" style="margin-top:24px">{{ error }}</div>{% endif %}
+
+<div class="card board-hero" style="margin-top:32px">
+  <div><div class="k">게시 중</div><div class="big">{{ n_live }}<span class="unit">건</span></div>
+    <div class="cap">공지 {{ counts.notice }}건 · 자료 {{ counts.plan + counts.lesson + counts.form }}건</div></div>
+  {% if is_main %}<a class="pill big-pill" href="{{ path }}?new=1{{ '&cat=' ~ cat if cat }}#post-form">올리기</a>{% endif %}
+</div>
+
+<nav class="seg" aria-label="분류">
+  <a class="{{ 'on' if not cat }}" href="{{ path }}">전체 {{ n_live }}</a>
+  {% for k, v in CATEGORY_KO.items() %}<a class="{{ 'on' if cat == k }}" href="{{ path }}?cat={{ k }}">{{ v }} {{ counts[k] }}</a>{% endfor %}
+</nav>
+
+{% if form %}
+<section class="card confirm" id="post-form" style="margin-top:20px">
+  <div class="k">{{ '고치기' if form.post_id else '올리기' }}</div>
+  <h2 class="confirm-title">{{ form.title or '새 글' }}</h2>
+  <form method="post" action="{{ path }}" enctype="multipart/form-data" class="wide"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="action" value="save"><input type="hidden" name="post_id" value="{{ form.post_id }}">
+    <div class="frow">
+      <label class="f">분류<select name="category">{% for k, v in CATEGORY_KO.items() %}<option value="{{ k }}"{{ ' selected' if form.category == k }}>{{ v }}</option>{% endfor %}</select></label>
+      <label class="f">대상 조직 · 그 아래 포함<select name="target_org_id"><option value="">모든 조직</option>{% for oid, t in orgs %}<option value="{{ oid }}"{{ ' selected' if form.target_org_id|string == oid|string }}>{{ t }}</option>{% endfor %}</select></label>
+      <label class="f">대상 역할<select name="target_role"><option value="">모든 역할</option>{% for k, v in ROLE_KO.items() %}<option value="{{ k }}"{{ ' selected' if form.target_role == k }}>{{ v }}</option>{% endfor %}</select></label>
+    </div>
+    <label class="f">제목<input class="sm" type="text" name="title" value="{{ form.title }}" required maxlength="{{ TITLE_MAX }}"></label>
+    <label class="f">본문<textarea name="body" rows="6" maxlength="{{ BODY_MAX }}">{{ form.body }}</textarea></label>
+    <fieldset class="board-fc">
+      <legend>시상안 원문일 때 고릅니다</legend>
+      <div class="checks">
+        <label><input type="radio" name="fc_visible" value="1"{{ ' checked' if form.fc_visible == '1' }}> 설계사에게 보여도 되는 FC 몫만 담긴 파일입니다</label>
+        <label><input type="radio" name="fc_visible" value="0"{{ ' checked' if form.fc_visible == '0' }}> 총괄이나 지사 몫이 있어 메인 관리자만 봅니다</label>
+      </div>
+    </fieldset>
+    {% if form.files %}<fieldset class="board-fc"><legend>지금 첨부 · 빼려면 고릅니다</legend><div class="checks">
+      {% for f in form.files %}<label><input type="checkbox" name="remove" value="{{ f.file_id }}"> {{ f.name }} · {{ size(f.size_bytes) }}</label>{% endfor %}</div></fieldset>{% endif %}
+    <label class="f">첨부 · PDF, 그림, 엑셀, 한글, 워드. 한 파일 {{ MAX_MB }}MB, 한 글에 {{ MAX_FILES }}개까지<input type="file" name="files" multiple accept="{{ ACCEPT }}"></label>
+    <ul class="notes">
+      <li>대상 조직을 고르면 그 조직과 그 아래에 속하거나 그 조직을 맡은 사람에게만 보입니다. 대상 역할을 고르면 그 역할에게만 보입니다.</li>
+      <li>시상안 원문은 고르지 않으면 올리지 않습니다. 메인 관리자만 보게 하면 대상과 상관없이 다른 사람에게 보이지 않습니다.</li>
+      <li>올리기, 고치기, 내리기와 첨부 내려받기는 변경 기록에 남습니다. 본문과 파일 내용은 남기지 않습니다.</li>
+    </ul>
+    <div class="actions"><button class="primary" type="submit">{{ '고친 내용 저장' if form.post_id else '올리기' }}</button><a class="pill quiet big-pill" href="{{ path }}{{ '?post=' ~ form.post_id if form.post_id }}">취소</a></div>
+  </form>
+</section>
+{% endif %}
+
+{% if opened %}
+<article class="card board-open" id="post" style="margin-top:20px">
+  <div class="notif-meta"><span class="chip{{ ' blue' if opened.category == 'notice' }}">{{ CATEGORY_KO[opened.category] }}</span>
+    <span>{{ opened.posted_at|when }}</span>{% if opened.updated_at %}<span>{{ opened.updated_at|when }} 고침</span>{% endif %}
+    {% if opened.status != 'posted' %}<span class="chip bad">내림</span>{% endif %}</div>
+  <h2 class="confirm-title board-title">{{ opened.title }}</h2>
+  {% if is_main %}<p class="cap board-target">대상 {{ opened.target_ko }}</p>{% endif %}
+  {% if opened.body %}<div class="board-body">{{ opened.body }}</div>{% endif %}
+  {% if opened.files %}
+  <ul class="board-files">{% for f in opened.files %}
+    <li><a class="board-file" href="{{ path }}?file={{ f.file_id }}" download><span class="chip">{{ KIND_KO[f.kind] }}</span><span class="board-fname">{{ f.name }}</span><span class="cap">{{ size(f.size_bytes) }}</span></a></li>{% endfor %}
+  </ul>{% endif %}
+  {% if is_main and opened.status == 'posted' %}
+  <div class="actions" style="margin-top:20px"><a class="pill quiet" href="{{ path }}?edit={{ opened.post_id }}#post-form">고치기</a>
+    {% if ask != 'withdraw' %}<a class="pill quiet" href="{{ path }}?post={{ opened.post_id }}&ask=withdraw#confirm">내리기</a>{% endif %}</div>
+  {% if ask == 'withdraw' %}
+  <div class="alert" id="confirm" style="margin:20px 0 0">이 글을 내리면 대상자에게 더 보이지 않습니다. 글과 첨부는 지우지 않고 기록으로 남깁니다.
+    <form method="post" action="{{ path }}" class="actions" style="margin-top:12px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input type="hidden" name="action" value="withdraw"><input type="hidden" name="post_id" value="{{ opened.post_id }}"><input type="hidden" name="confirm" value="1">
+      <button class="primary" type="submit">내리기</button><a class="pill quiet big-pill" href="{{ path }}?post={{ opened.post_id }}#post">취소</a></form></div>
+  {% endif %}{% endif %}
+</article>
+{% endif %}
+
+<h2 class="sec">{{ CATEGORY_KO[cat] if cat else '전체' }} {{ posts|length }}건</h2>
+{% if posts %}
+<div class="card notif-list board-list">
+{% for p in posts %}
+<div class="notif board-row{{ ' on' if opened and opened.post_id == p.post_id }}">
+  <div class="notif-main">
+    <div class="notif-meta"><span class="chip{{ ' blue' if p.category == 'notice' }}">{{ CATEGORY_KO[p.category] }}</span><span>{{ p.posted_at|md }}</span>
+      {% if p.n_files %}<span>첨부 {{ p.n_files }}개</span>{% endif %}</div>
+    <div class="notif-title"><a href="{{ path }}?post={{ p.post_id }}{{ '&cat=' ~ cat if cat }}#post">{{ p.title }}</a></div>
+    {% if is_main %}<div class="notif-body">대상 {{ p.target_ko }}</div>{% endif %}
+  </div>
+</div>
+{% endfor %}
+</div>
+{% else %}
+<div class="card"><div class="k">{{ '이 분류에 ' if cat }}게시 중인 글이 없습니다</div>
+  <div class="cap">{{ '올리기를 눌러 공지나 자료를 올립니다.' if is_main else '메인 관리자가 공지나 자료를 올리면 여기에 보입니다.' }}</div></div>
+{% endif %}
+
+{% if is_main and withdrawn %}
+<h2 class="sec">내린 글 {{ withdrawn|length }}건</h2>
+<div class="card notif-list">
+{% for p in withdrawn %}
+<div class="notif read"><div class="notif-main">
+  <div class="notif-meta"><span class="chip">{{ CATEGORY_KO[p.category] }}</span><span>{{ p.withdrawn_at|md }} 내림</span></div>
+  <div class="notif-title"><a href="{{ path }}?post={{ p.post_id }}#post">{{ p.title }}</a></div>
+  <div class="notif-body">대상 {{ p.target_ko }}</div></div></div>
+{% endfor %}
+</div>
+{% endif %}
+<p class="cap" style="margin-top:20px">{% if is_main %}총괄이나 지사 몫이 담긴 시상안 원문은 메인 관리자만 봅니다. 공지와 자료는 메인 관리자만 올립니다.{% else %}첨부를 내려받으면 기록에 남습니다.{% endif %}</p>
+{% endblock %}

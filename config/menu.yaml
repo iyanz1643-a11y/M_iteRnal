@@ -80,7 +80,7 @@ groups:
          desc: "팀원별 실적, 프로모션 달성, 교육, 정착 단계. 금액은 가린다"}
       - {id: team-education, name: 교육 진척도, path: /team/education, roles: {main: all, manager: org}, phase: 2, status: built,
          desc: "과정별 수료율, 미수료자, 수료 확인 처리"}
-      - {id: team-onboarding, name: 신인 정착, path: /team/onboarding, roles: {main: all, manager: org}, phase: 2, status: planned,
+      - {id: team-onboarding, name: 신인 정착, path: /team/onboarding, roles: {main: all, manager: org}, phase: 2, status: built,
          desc: "위촉 뒤 필수 교육, 첫 계약, 첫 가동까지의 체크리스트"}
       - {id: team-coaching, name: 면담 기록, path: /team/coaching, roles: {manager: org}, phase: 3, status: planned,
          desc: "팀원별 면담 날짜와 약속 사항, 다음 면담 알림"}
@@ -197,10 +197,10 @@ groups:
     icon: "…"
     items:
       - {id: notifications, name: 알림함, path: /notifications, roles: {main: all, manager: org, agent: self}, phase: 2, status: built,
-         desc: "프로모션 게시와 마감, 구간 근접, 교육 기한, 승인 대기"}
+         desc: "프로모션 게시와 마감, 구간 근접, 교육 기한, 승인 대기, 새 공지"}
       - {id: calendar, name: 일정, path: /calendar, roles: {main: all, manager: org, agent: self}, phase: 2, status: built,
          desc: "프로모션 기간, 교육 일정, 마감일, 13회차 도래"}
-      - {id: board, name: 공지와 자료실, path: /board, roles: {main: all, manager: org, agent: self}, phase: 2, status: planned,
+      - {id: board, name: 공지와 자료실, path: /board, roles: {main: all, manager: org, agent: self}, phase: 2, status: built,
          desc: "공지, 시상안 원문, 교안, 양식"}
       - {id: me, name: 내 정보, path: /me, roles: {main: all, manager: self, agent: self}, phase: 1, status: built,
          desc: "비밀번호 변경, 알림 설정, 소속"}

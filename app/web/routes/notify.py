@@ -11,6 +11,7 @@
 | 교육 기한 | 설계사, 관리자 | education.due_soon | 본인. 관리자는 범위 안 팀원의 과정별 사람 수 |
 | 명함 승인 대기 | card_approver 인 메인 관리자와 관리자 | card.pending_count | 명함 승인 화면과 같은 범위와 본인 빼기 |
 | 명함 권한 요청 | 메인 관리자 | card_grant.pending_requests | 조직장과 대리 화면과 같다 |
+| 새 공지 | 공지의 대상 안인 사람 | board.recent_notices | 공지와 자료실과 같은 보는 사람 규칙. 최근 board.NOTICE_DAYS 일. 올린 사람은 뺀다 |
 
 - 기준일은 프로모션 화면과 같은 pm.ref_date(자료 기준 달)이다. 교육 기한도 같은 기준일로 따진다(가정).
 - 알림 글에는 고객 이름, 연락처, 시상 금액을 넣지 않는다. 구간 근접에는 본인의 남은 실적만 적는다.
@@ -24,7 +25,7 @@ import re
 import sqlite3
 import threading
 import time
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -33,6 +34,7 @@ from app import db
 from app.engine import education as edu
 from app.engine import promotion as pm
 from app.org import card_grant as cg
+from app.web import board as bd
 from app.web import menu
 from app.web.deps import _cards, get_con, guard, page, templates
 from app.web.routes import card
@@ -45,8 +47,9 @@ DUE_DAYS = 3                 # docs/09 6장: 프로모션 마감 3일 전과 하
 BADGE_TTL = 60               # 종 아이콘의 숫자에 쓰는 목록을 담아 두는 초
 KEY_RE = re.compile(r"^[a-z_]+:[0-9A-Za-z:_\-]{1,80}$")
 KIND_KO = {"promo_new": "새 프로모션", "promo_due": "마감 임박", "tier_near": "구간 근접", "edu_due": "교육 기한",
-           "card_pending": "명함 승인 대기", "card_grant": "명함 권한 요청"}
-TONE = {"promo_new": "blue", "promo_due": "bad", "tier_near": "good", "edu_due": "warn", "card_pending": "warn", "card_grant": "warn"}
+           "card_pending": "명함 승인 대기", "card_grant": "명함 권한 요청", "board_new": "새 공지"}
+TONE = {"promo_new": "blue", "promo_due": "bad", "tier_near": "good", "edu_due": "warn", "card_pending": "warn", "card_grant": "warn",
+        "board_new": "blue"}
 
 
 # ---------------------------------------------------------------- 표
@@ -182,11 +185,25 @@ def _approval_notes(con, ctx, ref: date, light: bool) -> list:
     return out
 
 
+def _board_notes(con, ctx) -> list:
+    """새 공지. 공지와 자료실의 보는 사람 규칙을 그대로 쓴다. 날짜는 올린 날이고, 최근 NOTICE_DAYS 일은 오늘부터 센다."""
+    since = (date.today() - timedelta(days=bd.NOTICE_DAYS)).isoformat()
+    out = []
+    for p in bd.recent_notices(con, ctx, since):
+        body = re.sub(r"\s+", " ", p["body"] or "").strip()
+        body = (body[:60] + "…") if len(body) > 60 else body
+        if p["n_files"]:
+            body = (body + " · " if body else "") + f"첨부 {p['n_files']}개"
+        out.append(_note("board_new", p["post_id"], p["title"], body or "공지와 자료실에서 봅니다.", p["posted_at"][:10],
+                         _link(ctx, "/board", f"?post={p['post_id']}#post")))
+    return out
+
+
 def collect(con, ctx, light: bool = False) -> list:
     """그 사람의 알림 전부. 읽음 여부는 붙이지 않는다. 최근 것부터."""
     ref = pm.ref_date(ctx["ym"])
-    out = _promo_notes(con, ctx, ref) + _edu_notes(con, ctx, ref) + _approval_notes(con, ctx, ref, light)
-    order = {"card_grant": 0, "card_pending": 0, "promo_due": 1, "edu_due": 2, "tier_near": 3, "promo_new": 4}
+    out = _promo_notes(con, ctx, ref) + _edu_notes(con, ctx, ref) + _approval_notes(con, ctx, ref, light) + _board_notes(con, ctx)
+    order = {"card_grant": 0, "card_pending": 0, "promo_due": 1, "edu_due": 2, "board_new": 3, "tier_near": 4, "promo_new": 5}
     out.sort(key=lambda n: order[n["kind"]])
     out.sort(key=lambda n: n["at"], reverse=True)               # 날짜가 같으면 승인 대기, 마감 임박, 교육 기한 순
     seen, uniq = set(), []
