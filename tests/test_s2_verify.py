@@ -2,7 +2,8 @@
 
 보는 것
 - 숫자 대조: 같은 조직과 같은 달의 인정보험료와 순건수가 홈, 기간별 업적, 구분별 집계, 조직 비교, 팀원 현황에서 같다.
-  같은 사람의 숫자가 메인 관리자의 팀원 현황과 랭킹에서도 같다. 프로모션 달성 현황의 같은 지표도 같은지 본다.
+  같은 사람의 숫자가 메인 관리자의 팀원 현황과 랭킹에서도 같다. 프로모션 달성 현황은 D-08 가정대로 보험사 기준이라
+  업적 집계와 다를 수 있고, 그 차이가 basis 규칙으로 설명되며 화면에 엔진의 기준 안내가 보이는지 본다.
 - 교육 숫자 대조: 같은 사람과 같은 과정의 기한 상태가 팀 교육 진척도, 홈, 알림함, 일정에서 같다.
 - 권한: S2 의 POST 주소가 CSRF 토큰 없이 거부된다. 범위 밖 조직과 과정을 직접 열면 막힌다. 퇴사자 규칙 D-42 가 S2 화면에서도 지켜진다.
 - 첨부: 꼴을 속인 파일과 받지 않는 꼴을 막고, 내려받기 머리글이 맞다.
@@ -23,6 +24,8 @@ from fastapi.testclient import TestClient
 
 from app import db
 from app.engine import education as edu
+from app.engine import orgs as org_engine
+from app.engine import persist
 from app.engine import promotion as pm
 from app.web import auth
 from app.web.routes import notify
@@ -178,39 +181,107 @@ def test_person_same_on_main_team_members_and_main_ranking(env):
     assert len(set(seen.values())) == 1, sorted(seen)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "프로모션 달성 현황의 인정보험료와 건수는 계약일자에 든 계약 가운데 지금 성립 상태인 것을 센다(app/engine/promotion.py _values, COUNTED). "
-    "업적 집계는 성립한 달에 더하고 철회한 달에 뺀다(app/engine/results.py). 같은 달 전 보험사 인정보험료 프로모션을 만들면 "
-    "같은 사람의 같은 달 숫자가 기간별 업적과 다르다. 기준일은 D-08 이라 돈 계산 기준이다. calc-engine 과 대표님 결정이 필요하다"))
-def test_promo_progress_same_metric_matches_period(env):
-    con, mgr, ym = env["con"], env["mgr"], env["ym"]
+def _month_window(ym):
     y, m = int(ym[:4]), int(ym[4:])
     first = date(y, m, 1)
-    last = (first.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+    return first, (first.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+
+
+def _basis_on_screen(html):
+    m = re.search(r'data-note="basis"[^>]*>(.*?)</p>', html, re.S)
+    return text(m.group(1)) if m else None
+
+
+def test_promo_progress_differs_from_period_only_by_basis_rule_and_shows_basis_note(env):
+    """D-08 은 제안대로 정해졌다(가정). 프로모션은 보험사 기준이라 업적 집계와 다를 수 있고, 그때 화면에 기준 안내가 보인다.
+
+    - 새 프로모션의 기준일 기본값은 영수일자다. 영수일자가 빈 계약은 계약일자로 센다.
+    - 차이는 basis 규칙으로 모두 설명된다. 달성 현황 값 = 기준일(영수일자, 없으면 계약일자)이 기간 안이고 성립 상태인 계약의 합.
+      기간별 업적 값 = 성립한 달에 더하고 철회한 달에 뺀 합. 둘의 차이는 철회 계약과 기준일이 다른 달인 계약에서만 온다.
+    - 차이가 있는 화면(관리자의 팀원 현황, 설계사의 내 현황)에 엔진의 basis 글이 그대로 보인다.
+    """
+    con, mgr, ym = env["con"], env["mgr"], env["ym"]
+    first, last = _month_window(ym)
+    prev_day = (first - timedelta(days=3)).isoformat()
+    # 영수일자 규칙도 차이를 만들도록 범위 안 두 계약의 영수일자를 바꾼다. 하나는 기간 밖으로, 하나는 기간 안으로
+    out_c = con.execute(f"""SELECT contract_id, agent_id FROM contract WHERE agent_id IN ({','.join('?' * len(env['inside']))})
+                            AND status='inforce' AND contract_date BETWEEN ? AND ? ORDER BY contract_id LIMIT 1""",
+                        (*env["inside"], first.isoformat(), last.isoformat())).fetchone()
+    in_c = con.execute(f"""SELECT contract_id, agent_id FROM contract WHERE agent_id IN ({','.join('?' * len(env['inside']))})
+                           AND status='inforce' AND contract_date < ? ORDER BY contract_date DESC, contract_id LIMIT 1""",
+                       (*env["inside"], first.isoformat())).fetchone()
+    assert out_c and in_c, "영수일자를 바꿀 계약"
+    con.execute("UPDATE contract SET receipt_date=? WHERE contract_id=?", (prev_day, out_c["contract_id"]))
+    con.execute("UPDATE contract SET receipt_date=? WHERE contract_id=?", ((first + timedelta(days=1)).isoformat(), in_c["contract_id"]))
+    con.commit()
     pid = pm.create(con, period_ym=ym, name="검증용 전 보험사 인정보험료", kind="travel", metric="converted_premium",
                     windows=[("한 달", first.isoformat(), last.isoformat())], tiers=[(1, "fixed", 1, "검증")], by="verifier", publish=True)
+    p = pm._load(con, pid)
+    assert p["date_basis"] == pm.DEFAULT_DATE_BASIS == "receipt_date", "기준일 기본값"
+    note = pm.basis_note(p)
+    for word in ("영수일자", "계약일자", "성립", "철회", "업적 집계와 다를 수 있습니다"):
+        assert word in note, word
+
     boss = login(env, mgr["code"])
     promo = boss.get(f"/promo/progress?p={pid}").text
     period = boss.get("/perf/period").text
-    names = {r["name"]: r["agent_id"] for r in con.execute("SELECT agent_id, name FROM agent")}
-    differ = 0
-    checked = 0
+    names = {}
+    for r in con.execute("SELECT agent_id, name FROM agent"):
+        names.setdefault(r["name"], []).append(r["agent_id"])
+    a_in = env["inside"]
+    q = ",".join("?" * len(a_in))
+    one = lambda sql, *args: {r[0]: float(r[1] or 0) for r in con.execute(sql, (*a_in, *args))}
+    counted = ",".join(f"'{s}'" for s in pm.COUNTED)
+    basis_day = "COALESCE(receipt_date, contract_date)"
+    f, t = first.isoformat(), last.isoformat()
+    rule = one(f"SELECT agent_id, SUM(converted_premium) FROM contract WHERE agent_id IN ({q}) AND status IN ({counted}) AND {basis_day} BETWEEN ? AND ? GROUP BY agent_id", f, t)
+    # 차이를 만드는 네 가지
+    w_added = one(f"SELECT agent_id, SUM(converted_premium) FROM contract WHERE agent_id IN ({q}) AND status='withdrawn' AND contract_date BETWEEN ? AND ? GROUP BY agent_id", f, t)
+    w_taken = one(f"SELECT agent_id, SUM(converted_premium) FROM contract WHERE agent_id IN ({q}) AND status='withdrawn' AND withdrawal_date BETWEEN ? AND ? GROUP BY agent_id", f, t)
+    day_out = one(f"""SELECT agent_id, SUM(converted_premium) FROM contract WHERE agent_id IN ({q}) AND status IN ({counted})
+                      AND contract_date BETWEEN ? AND ? AND NOT ({basis_day} BETWEEN ? AND ?) GROUP BY agent_id""", f, t, f, t)
+    day_in = one(f"""SELECT agent_id, SUM(converted_premium) FROM contract WHERE agent_id IN ({q}) AND status IN ({counted})
+                     AND NOT (contract_date BETWEEN ? AND ?) AND {basis_day} BETWEEN ? AND ? GROUP BY agent_id""", f, t, f, t)
+    engine = pm.progress(con, p, a_in, pm.ref_date(ym))
+    checked, differ, why = 0, [], set()
     for r in rows(period):
-        if 'data-agent="' not in r:
+        m = re.search(r'data-agent="(\d+)"', r)
+        if not m or int(m.group(1)) not in a_in:
             continue
-        aid = int(re.search(r'data-agent="(\d+)"', r).group(1))
-        if aid not in env["inside"]:
+        aid = int(m.group(1))
+        name = next(n for n, ids in names.items() if aid in ids)
+        if len(names[name]) > 1:
             continue
-        name = next(n for n, a in names.items() if a == aid)
         pr = next((x for x in rows(promo) if f'<td class="strong">{name}<' in x), None)
         if pr is None:
             continue
         cells = [text(x) for x in re.findall(r"<td[^>]*>(.*?)</td>", pr, re.S)]
-        value = num(cells[2])                          # 성명, 소속, 지표 칸
+        on_promo, on_period = num(cells[2]) or 0, col(r, "premium") or 0                # 성명, 소속, 지표 칸
         checked += 1
-        differ += (value or 0) != (col(r, "premium") or 0)
+        assert abs(on_promo - rule.get(aid, 0)) < 1, ("달성 현황 값이 basis 규칙과 다르다", checked)
+        assert abs(on_promo - engine[aid]["value"]) < 1, ("달성 현황 값이 엔진과 다르다", checked)
+        parts = {"철회 계약의 성립 달": w_added.get(aid, 0), "철회한 달": -w_taken.get(aid, 0),
+                 "기준일이 기간 밖": day_out.get(aid, 0), "기준일만 기간 안": -day_in.get(aid, 0)}
+        gap = on_period - on_promo
+        assert abs(gap - sum(parts.values())) < 1, ("차이가 basis 규칙으로 설명되지 않는다", checked)
+        if abs(gap) >= 1:
+            differ.append(aid)
+            why |= {k for k, v in parts.items() if abs(v) >= 1}
     assert checked >= 3, "대조한 사람 수"
-    assert differ == 0, f"{checked}명 가운데 {differ}명이 다르다"
+    assert differ, "샘플에서 차이가 하나도 없으면 이 시험은 뜻이 없다"
+    assert {"기준일이 기간 밖", "기준일만 기간 안"} <= why, "영수일자 규칙이 차이에 드러나야 한다"
+    assert why & {"철회 계약의 성립 달", "철회한 달"}, "철회 제외 규칙이 차이에 드러나야 한다"
+
+    # 차이가 있는 화면에 엔진의 basis 글이 그대로 보인다
+    assert all(engine[a]["basis"] == note for a in a_in)
+    shown = _basis_on_screen(promo)
+    assert shown and note in shown, "관리자 팀원 달성 현황의 기준 안내"
+    me = login(env, code_of(con, differ[0]))
+    mine = me.get("/promo/progress").text
+    sec = re.search(r"<section[^>]*>(?:(?!</section>).)*검증용 전 보험사 인정보험료(?:(?!</section>).)*</section>", mine, re.S)
+    assert sec, "설계사 내 현황의 검증용 프로모션 카드"
+    shown_me = _basis_on_screen(sec.group(0))
+    assert shown_me and note in shown_me, "설계사 내 현황의 기준 안내"
 
 
 # ---------------------------------------------------------------- 교육 숫자 대조
@@ -399,3 +470,302 @@ def test_error_and_redirect_pages_of_logged_in_user_do_not_leak(env):
         r = agent.get(path)
         assert r.status_code in (403, 404), path
         assert name not in r.text, path
+
+
+# ================================================================ S2 닫기 검증 (2026-11-15). 지난 검증 뒤 커밋 40ba9cb 에서 51517b3
+PLAIN = re.compile(r"검증(?:계약자|피보험)\d+")
+
+
+def _synthetic_names(con):
+    """샘플 계약의 이름은 이미 가린 꼴이라 가림을 가려낼 수 없다. 시험 DB 에서만 알아볼 수 있는 가짜 이름을 넣는다."""
+    con.execute("UPDATE contract SET policyholder_name='검증계약자'||contract_id, insured_name='검증피보험'||contract_id")
+    con.commit()
+
+
+def _upper_head(con, org_id):
+    """그 조직의 바로 위 조직장(본부장)의 사번."""
+    r = con.execute("""SELECT a.internal_code FROM org_unit o JOIN org_manager m ON m.org_id=o.parent_id AND m.effective_to IS NULL
+                       JOIN agent a ON a.agent_id=m.agent_id WHERE o.org_id=?""", (org_id,)).fetchone()
+    return r[0] if r else None
+
+
+# ---------------------------------------------------------------- 숫자 대조: 같은 사람, 같은 달, 여섯 화면
+def test_every_person_same_on_home_summary_team_period_ranking(env):
+    """지점장 범위 안 설계사 모두. 본인 홈과 실적 요약, 관리자의 팀원 현황, 기간별 업적, 랭킹, 메인 관리자의 랭킹에서
+    이번 달 인정보험료가 같고, 순건수는 실적 요약, 팀원 현황, 기간별 업적에서 같다. 홈의 내 순위는 메인 관리자 랭킹의 자리와 같다."""
+    con = env["con"]
+    boss, admin = login(env, env["mgr"]["code"]), login(env, "admin")
+    team = [r for r in rows(boss.get("/team/members").text) if 'data-col="code"' in r]
+    period = [r for r in rows(boss.get("/perf/period").text) if 'data-agent="' in r]
+    rk_boss = [r for r in rows(boss.get("/perf/ranking").text) if 'data-agent="' in r]
+    rk_all = [r for r in rows(admin.get("/perf/ranking").text) if 'data-agent="' in r]
+    bad, n = [], 0
+    for aid in env["inside"]:
+        code = code_of(con, aid)
+        me = login(env, code)
+        home = text(me.get("/").text)
+        m = re.search(r"이번 달 인정보험료 ([\d,\-]+) 원", home)
+        rank = re.search(r"내 순위 (\d+) 위", home)
+        summ = me.get("/my/summary").text
+        t = next((r for r in team if f'data-col="code">{code}<' in r), "")
+        p = next((r for r in period if f'data-agent="{aid}"' in r), "")
+        rb = next((r for r in rk_boss if f'data-agent="{aid}"' in r), "")
+        ra = next((i, r) for i, r in enumerate(rk_all) if f'data-agent="{aid}"' in r)
+        premium = {"홈": num(m.group(1)) if m else None, "실적 요약": col(summ, "premium"), "팀원 현황": col(t, "premium"),
+                   "기간별 업적": col(p, "premium"), "랭킹 관리자": col(rb, "value"), "랭킹 메인": col(ra[1], "value")}
+        net = {"실적 요약": col(summ, "net"), "팀원 현황": col(t, "net"), "기간별 업적": col(p, "net")}
+        rank_rk = num(text(re.search(r"<td[^>]*>(.*?)</td>", ra[1], re.S).group(1)))
+        n += 1
+        if None in premium.values() or len(set(premium.values())) != 1:
+            bad.append(("인정보험료", n, sorted(k for k, v in premium.items() if v != premium["팀원 현황"])))
+        if len(set(net.values())) != 1:
+            bad.append(("순건수", n, sorted(net)))
+        if not rank or int(rank.group(1)) != rank_rk:
+            bad.append(("순위", n))
+    assert n >= 5
+    assert not bad, bad                                                  # 사람은 순번으로만 낸다
+
+
+# ---------------------------------------------------------------- 유지율: 기존 운영 도구와 같은 계산
+def test_persistency_screens_equal_persist_rate(env):
+    """유지율 화면의 사람별과 범위 전체, 조직을 고른 화면, 내 유지율이 persist.rate 와 같다. 기존 운영 도구(app/ui.py)는 조직마다
+    persist.rate(orgs.members(조직)) 를 쓴다."""
+    con, ym = env["con"], env["ym"]
+    fmt = lambda r, d: f"{r * 100:.1f}%" if d else "자료 없음"
+
+    def hero(html, kind):
+        seg = html[html.find(f'<div class="card" data-kind="{kind}">'):][:1500]
+        m = re.search(r'<div class="mid">([\d.]+)<span class="unit">%', seg)
+        return f"{m.group(1)}%" if m else ("자료 없음" if "자료 없음" in seg else None)
+
+    bad, n = [], 0
+    for who in ("admin", env["mgr"]["code"]):
+        c = login(env, who)
+        html = c.get("/perf/persistency").text
+        for aid, tr in re.findall(r'<tr data-agent="(\d+)">(.*?)</tr>', html, re.S):
+            for kind in ("p13", "p25"):
+                r, _, d = persist.rate(con, [int(aid)], kind, ym)
+                n += 1
+                if text(re.search(rf'data-kind="{kind}">(.*?)</td>', tr).group(1)) != fmt(r, d):
+                    bad.append((who, "사람별", kind))
+        orgs_ = [r[0] for r in con.execute("SELECT org_id FROM org_unit")] if who == "admin" else sorted(env["mctx"]["org_ids"])
+        for o in orgs_:
+            h = c.get(f"/perf/persistency?org={o}").text
+            for kind in ("p13", "p25"):
+                r, _, d = persist.rate(con, org_engine.members(con, o, ym), kind, ym)
+                n += 1
+                if hero(h, kind) != fmt(r, d):
+                    bad.append((who, "조직", o, kind))
+    for aid in env["inside"][:3]:
+        h = login(env, code_of(con, aid)).get("/my/persistency").text
+        for kind in ("p13", "p25"):
+            r, _, d = persist.rate(con, [aid], kind, ym)
+            n += 1
+            if hero(h, kind) != fmt(r, d):
+                bad.append(("내 유지율", kind))
+    assert n > 50
+    assert not bad, bad
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "그 달 중간 퇴사자가 있으면 같은 조직, 같은 달의 13회차 유지율이 웹 유지율 화면과 기존 운영 도구에서 다르다. "
+    "웹은 app/web/routes/persistency.py perf_persistency 가 perf.pick_org(app/web/routes/perf.py 56-69행)로 그 달 소속 이력이 있는 사람을 "
+    "모두 넣어 퇴사자의 유지율을 센다. 기존 도구(app/ui.py 262행)와 인증 판정은 certification.org_members, 곧 orgs.members(active_only) 로 "
+    "재직 설계사만 센다. D-42 는 실적 합계만 정했고 유지율은 정하지 않았다. 어느 쪽에 맞출지 정한 뒤 calc-engine 또는 web-screen 이 고친다"))
+def test_persistency_org_rate_same_as_legacy_with_leaver(env):
+    con, ym, mgr = env["con"], env["ym"], env["mgr"]
+    leaver = next(a for a in env["inside"] if persist.rate(con, [a], "p13", ym)[2])
+    con.execute("UPDATE agent SET status='terminated', termination_date=? WHERE agent_id=?", (f"{ym[:4]}-{ym[4:]}-15", leaver))
+    con.execute("UPDATE agent_org_history SET effective_to=? WHERE agent_id=? AND effective_to IS NULL", (ym, leaver))
+    con.commit()
+    html = login(env, "admin").get(f"/perf/persistency?org={mgr['org_id']}").text
+    seg = html[html.find('<div class="card" data-kind="p13">'):][:1500]
+    shown = re.search(r'<div class="mid">([\d.]+)<span class="unit">%', seg).group(1)
+    legacy = persist.rate(con, org_engine.members(con, mgr["org_id"], ym), "p13", ym)[0]
+    assert shown == f"{legacy * 100:.1f}"
+
+
+# ---------------------------------------------------------------- 13회차 도래: 일정, 알림함, 내 유지율
+def test_inst13_same_on_calendar_notifications_and_my_persistency(env):
+    """이번 주에 13회차가 오는 계약을 만든다. 알림함의 이번 주 건수, 일정의 이번 주 날짜별 건수 합, 내 유지율의 그 달 건수,
+    일정의 그 달 건수가 같다. 관리자는 범위 안 합이다."""
+    con = env["con"]
+    today = date.today()
+    start = today - timedelta(days=(today.weekday() + 1) % 7)
+    end = start + timedelta(days=6)
+    who = env["inside"][0]
+    cids = [r[0] for r in con.execute("SELECT contract_id FROM contract WHERE agent_id=? AND status='inforce' ORDER BY contract_id LIMIT 2", (who,))]
+    for i, cid in enumerate(cids):
+        day = start + timedelta(days=i * 2)
+        con.execute("UPDATE contract SET contract_date=?, payment_mode='monthly' WHERE contract_id=?", (day.replace(year=day.year - 1).isoformat(), cid))
+    con.commit()
+
+    def week_on_calendar(c):
+        tot = 0
+        for m in sorted({start.strftime("%Y-%m"), end.strftime("%Y-%m")}):
+            for blk in re.split(r'<div class="cal-date', c.get(f"/calendar?m={m}&view=list").text)[1:]:
+                md = re.match(r'[^>]*>(\d+)월 (\d+)일', blk)
+                if md and start <= date(int(m[:4]), int(md.group(1)), int(md.group(2))) <= end:
+                    tot += sum(int(x) for x in re.findall(r"13회차 도래 (\d+)건</", blk))
+        return tot
+
+    for login_id in (code_of(con, who), env["mgr"]["code"]):
+        c = login(env, login_id)
+        note = re.search(r"13회차 도래 (\d+)건\(이번 주\)", c.get("/notifications").text)
+        on_cal = week_on_calendar(c)
+        assert on_cal >= len(cids), login_id == env["mgr"]["code"]
+        assert note and int(note.group(1)) == on_cal, ("알림함과 일정", "manager" if login_id == env["mgr"]["code"] else "agent")
+    me = login(env, code_of(con, who))
+    mine = me.get("/my/persistency").text
+    ym_now = today.strftime("%Y%m")
+    card = re.search(rf'data-ym="{ym_now}"><div class="cap"[^>]*>[^<]*</div><div class="mid">(\d+)<', mine)
+    month = sum(int(x) for x in re.findall(r"13회차 도래 (\d+)건</", me.get(f"/calendar?m={today.strftime('%Y-%m')}&view=list").text))
+    assert card and int(card.group(1)) == month, "내 유지율과 일정의 이번 달 13회차 도래"
+
+
+# ---------------------------------------------------------------- 교육 숫자: 네 화면
+def test_education_soon_count_same_on_home_team_notifications_calendar(env):
+    """오늘에서 사흘 뒤가 기한인 필수 과정. 관리자 홈의 교육 기한 임박 건수(늘어난 만큼), 팀 교육 진척도의 임박, 알림함, 일정이 같다."""
+    con = env["con"]
+    boss = login(env, env["mgr"]["code"])
+    home_n = lambda: int((re.search(r"교육 기한 임박 (\d+)건", text(boss.get("/").text)) or [0, 0])[1])
+    before = home_n()
+    due = date.today() + timedelta(days=3)
+    cid = edu.save_course(con, by="verifier", code="VF-SOON", name="검증용 임박 과정", kind="compliance", required=True,
+                          target_role="fc", deadline_rule="fixed", deadline_date=due.isoformat())
+    con.commit()
+    notify.clear_cache()
+    seen = {"홈": home_n() - before}
+    team = text(boss.get(f"/team/education?course={cid}").text)
+    seen["팀 교육 진척도"] = int(re.search(r"임박 (\d+) 건", team).group(1))
+    m = re.search(r"검증용 임박 과정 기한 임박 팀원 (\d+)명", text(boss.get("/notifications").text))
+    seen["알림함"] = int(m.group(1)) if m else 0
+    cal = text(boss.get(f"/calendar?m={due.strftime('%Y-%m')}&view=list").text)
+    m = re.search(r"검증용 임박 과정 기한 미수료 (\d+)명", cal)
+    seen["일정"] = int(m.group(1)) if m else 0
+    assert seen["팀 교육 진척도"] > 0
+    assert len(set(seen.values())) == 1, sorted(seen.items())
+
+
+# ---------------------------------------------------------------- 계약 원장 D-05
+def test_contract_names_by_role_on_list_detail_and_csv(env):
+    """목록과 CSV 에는 누구에게도 이름 원문이 없다. 상세는 담당 설계사와 직속 관리자만 원문, 위 조직 관리자는 가림,
+    다른 지점 관리자와 설계사는 403, 메인 관리자는 사유를 적은 뒤에만 원문이다."""
+    con, mgr = env["con"], env["mgr"]
+    _synthetic_names(con)
+    own = env["inside"][0]
+    cid = con.execute("SELECT contract_id FROM contract WHERE agent_id=? ORDER BY contract_id DESC LIMIT 1", (own,)).fetchone()[0]
+    other_branch_head = con.execute("""SELECT a.internal_code FROM org_manager m JOIN agent a ON a.agent_id=m.agent_id JOIN org_unit o ON o.org_id=m.org_id
+                                       WHERE o.level='branch' AND m.org_id<>? AND m.effective_to IS NULL ORDER BY m.org_id LIMIT 1""", (mgr["org_id"],)).fetchone()[0]
+    upper = _upper_head(con, mgr["org_id"])
+    expect = {code_of(con, own): "shown", mgr["code"]: "shown", upper: "masked", "admin": "masked",
+              other_branch_head: 403, code_of(con, env["inside"][1]): 403}
+    for who, want in expect.items():
+        c = login(env, who)
+        lst = c.get("/perf/contracts?ym=all")
+        csv_ = c.get("/perf/contracts?export=csv&ym=all")
+        assert lst.status_code == 200 and not PLAIN.search(lst.text), ("목록", want)
+        assert csv_.status_code == 200 and not PLAIN.search(csv_.content.decode("utf-8-sig"))
+        assert lst.headers["cache-control"] == "no-store" and csv_.headers["cache-control"] == "no-store"
+        r = c.get(f"/perf/contracts?id={cid}")
+        if want == 403:
+            assert r.status_code == 403 and not PLAIN.search(r.text)
+            continue
+        assert re.search(r'data-names="(\w+)"', r.text).group(1) == want
+        assert bool(PLAIN.search(r.text)) == (want == "shown")
+    admin = login(env, "admin")
+    r = admin.post("/perf/contracts", data={"action": "reveal", "id": str(cid), "reason": "검증 사유입니다"})
+    assert r.status_code == 200 and PLAIN.search(r.text) and r.headers["cache-control"] == "no-store"
+    assert not PLAIN.search(admin.get(f"/perf/contracts?id={cid}").text), "사유는 한 번만 쓴다"
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "app/web/templates/perf_contracts.html 15행의 증권번호 칸은 <input class=\"sm\" type=\"search\"> 인데 app/web/static/app.css 201행의 "
+    "48픽셀 규칙은 input[type=text].sm 에만 걸린다. 휴대폰에서 테두리 없는 21픽셀 칸으로 보인다. web-screen 이 규칙에 type=search 를 더하거나 칸을 type=text 로 바꾼다"))
+def test_contract_search_box_is_touch_size():
+    """계약 원장의 증권번호 칸은 type=search 이고 class sm 이다. 휴대폰 390 폭에서 높이가 21픽셀로 보였다(사진 admin_390_perf_contracts.png)."""
+    html = (pathlib.Path(__file__).resolve().parents[1] / "app/web/templates/perf_contracts.html").read_text()
+    css = (pathlib.Path(__file__).resolve().parents[1] / "app/web/static/app.css").read_text()
+    kind = re.search(r'<input class="sm" type="(\w+)" name="q"', html)
+    assert kind
+    rules = re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+    sized = [sel for sel, body in rules if re.search(r"(?:^|[;\s])(?:min-)?height:\s*4[4-9]px", body)
+             and any(s.strip() in (f"input[type={kind.group(1)}].sm", f"input[type={kind.group(1)}]", "input.sm", ".sm")
+                     or (f"type={kind.group(1)}" in s and "input" in s) for s in sel.split(","))]
+    assert sized, f"input[type={kind.group(1)}].sm 에 48픽셀 높이 규칙이 없다"
+
+
+# ---------------------------------------------------------------- 새 POST 의 CSRF 와 역할
+def test_new_posts_refuse_without_csrf_and_for_other_roles(env):
+    con = env["con"]
+    p = pm.ended(con, ref=date.today())[0]
+    tier = con.execute("SELECT tier_no FROM promotion_tier WHERE promo_id=? AND reward_kind='fixed' LIMIT 1", (p["promo_id"],)).fetchone()
+    cid = con.execute("SELECT contract_id FROM contract WHERE agent_id=? LIMIT 1", (env["inside"][0],)).fetchone()[0]
+    posts = (("/perf/contracts", {"action": "reveal", "id": str(cid), "reason": "토큰 없는 사유"}),
+             ("/promo/tiers", {"action": "original", "promo_id": str(p["promo_id"]), f"o_tier_{tier[0] if tier else 1}": "1"}),
+             ("/promo/archive", {"action": "confirm", "promo_id": str(p["promo_id"]), "ym": p["period_ym"], "agree": "yes"}))
+    admin = login(env, "admin")
+    views = con.execute("SELECT COUNT(*) FROM audit_log WHERE action='contract_name_view'").fetchone()[0]
+    for path, data in posts:
+        assert admin.post(path, data=data, csrf=False).status_code == 403, path
+    for who in (env["mgr"]["code"], code_of(con, env["inside"][0])):
+        c = login(env, who)
+        for path, data in posts:
+            assert c.post(path, data=data).status_code == 403, (path, who == env["mgr"]["code"])
+    assert con.execute("SELECT COUNT(*) FROM audit_log WHERE action='contract_name_view'").fetchone()[0] == views
+    assert pm.confirmation(con, p["promo_id"]) is None
+
+
+def test_confirmed_results_stay_on_every_role_screen(env):
+    """확정한 뒤 원장이 바뀌어도 메인 관리자, 관리자, 설계사의 지난 프로모션 화면 값은 확정한 값이다. 원안을 고쳐도 그대로다."""
+    con = env["con"]
+    p = next(x for x in pm.ended(con, ref=date.today()) if x["kind"] != "rate")
+    pid, ym = p["promo_id"], p["period_ym"]
+    admin = login(env, "admin")
+    assert admin.post("/promo/archive", data={"action": "confirm", "promo_id": str(pid), "ym": ym, "agree": "yes"}).status_code == 303
+    head = pm.confirmation(con, pid)
+    stored = {r["agent_id"]: r["value"] for r in con.execute("SELECT agent_id, value FROM promotion_result WHERE confirm_id=?", (head["confirm_id"],))}
+    f, t = p["date_from"], p["date_to"]
+    con.execute("UPDATE contract SET status='withdrawn', withdrawal_date=? WHERE status='inforce' AND contract_date BETWEEN ? AND ?", (t, f, t))
+    con.commit()
+    tiers = [x["tier_no"] for x in p["tiers"] if x["reward_kind"] == "fixed"]
+    if tiers:
+        assert admin.post("/promo/tiers", data={"action": "original", "promo_id": str(pid), f"o_tier_{tiers[0]}": "1"}).status_code == 303
+    fresh = pm.progress(con, pm._load(con, pid), list(stored), date.today())
+    assert any(abs(fresh[a]["value"] - v) > 0.5 for a, v in stored.items()), "원장을 바꾸면 다시 계산한 값은 달라져야 뜻이 있다"
+    url = f"/promo/archive?ym={ym}&p={pid}"
+    names = {r[0]: r[1] for r in con.execute("SELECT agent_id, name FROM agent")}
+    for who in ("admin", env["mgr"]["code"]):
+        html = login(env, who).get(url).text
+        for a, v in stored.items():
+            tr = next((r for r in rows(html) if f'<td class="strong">{names[a]}<' in r), None)
+            if tr is not None:
+                assert f"{int(round(v)):,}" in tr, ("확정 값", "main" if who == "admin" else "manager")
+    me = next(a for a in env["inside"] if stored.get(a))
+    html = login(env, code_of(con, me)).get(f"/promo/archive?ym={ym}").text
+    assert f"{int(round(stored[me])):,}" in html, "설계사 본인 화면의 확정 값"
+    after = {x["agent_id"]: x["value"] for x in pm.final_results(con, pm._load(con, pid), list(stored))["rows"]}
+    assert after == stored
+
+
+# ---------------------------------------------------------------- D-17, D-42, no-store 훑기
+def test_new_screens_no_store_no_commission_and_leaver_rules(env):
+    con, ym = env["con"], env["ym"]
+    pages = {"admin": ("/perf/contracts", "/perf/persistency", "/calendar", "/promo/archive"),
+             env["mgr"]["code"]: ("/perf/contracts", "/perf/persistency", "/my/persistency", "/calendar", "/promo/archive"),
+             code_of(con, env["inside"][0]): ("/perf/contracts", "/my/persistency", "/calendar", "/promo/archive")}
+    for who, paths in pages.items():
+        c = login(env, who)
+        for path in paths:
+            r = c.get(path)
+            assert r.status_code == 200 and r.headers["cache-control"] == "no-store", path
+            if path in ("/perf/contracts", "/perf/persistency", "/my/persistency"):
+                assert not re.search(r"수수료\s*[\d,]+|시상\s*금액\s*[\d,]+", text(r.text)), path
+    # D-42: 그 달 중간 퇴사자는 계약 원장의 관리자 범위에는 남고(조직 합계와 같은 범위), 일정의 13회차 도래 범위에는 남는다
+    leaver = env["inside"][0]
+    n_before = con.execute("SELECT COUNT(*) FROM contract WHERE agent_id=?", (leaver,)).fetchone()[0]
+    con.execute("UPDATE agent SET status='terminated', termination_date=? WHERE agent_id=?", (f"{ym[:4]}-{ym[4:]}-15", leaver))
+    con.execute("UPDATE agent_org_history SET effective_to=? WHERE agent_id=? AND effective_to IS NULL", (ym, leaver))
+    con.commit()
+    body = login(env, env["mgr"]["code"]).get("/perf/contracts?export=csv&ym=all").content.decode("utf-8-sig")
+    assert body.count(f",{code_of(con, leaver)},") == n_before
