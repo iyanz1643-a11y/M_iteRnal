@@ -465,3 +465,23 @@ a.btn.primary{background:var(--blue);color:#fff}a.btn.second{background:var(--ca
 li.strong-note{color:var(--ink);font-weight:600}
 #main-tools,#removal,#rm-confirm,#badges{scroll-margin-top:72px}
 @media (max-width:760px){.confirm-acts button.danger{flex:1 1 100%}}
+
+/* ---------- 지난 프로모션의 무르기, 달성자 명단, 13회차 판정과 구간 입력의 창별 구간표. S3 확정 기능 */
+.revoked-note{margin-top:10px}
+.revoke-reason{margin-top:8px;padding:10px 14px;border-radius:14px;background:rgba(255,159,10,.14);color:var(--ink);font-size:14px;line-height:1.5;white-space:normal;word-break:keep-all}
+.i13-mine{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+.i13-contracts{margin-top:6px;font-weight:400}
+.i13-contracts summary{white-space:nowrap;cursor:pointer;color:var(--blue);font-size:14px;font-weight:600;padding:6px 0}
+table.i13-list{width:auto;font-size:14px;margin-top:4px}
+table.i13-list th,table.i13-list td{padding:6px 16px 6px 0}
+table.i13-list tr:last-child td{border-bottom:0}
+td.strong .i13-contracts{white-space:normal}
+.toggle-line{display:flex;gap:10px;align-items:center;min-height:48px;font-weight:600;word-break:keep-all;cursor:pointer}
+.toggle-line input{width:22px;height:22px;flex:none}
+.toggle-line input:disabled+*,.toggle-line:has(input:disabled){color:var(--faint);cursor:not-allowed}
+.wt-tables{display:grid;gap:10px;margin-top:12px}
+details.wt{background:var(--bg);border-radius:16px;padding:4px 16px}
+details.wt summary{cursor:pointer;font-weight:600;padding:13px 0;line-height:22px}
+details.wt.off{opacity:.5}
+details.wt[open]{padding-bottom:12px}
+#roster,#inst13,#inst13-confirm,#revoke,#history,#window-tiers{scroll-margin-top:72px}

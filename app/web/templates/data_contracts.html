@@ -16,7 +16,7 @@
   <div class="card"><div class="k"><span class="dot warn"></span>경고</div><div class="mid">{{ b.warn }}<span class="unit">건</span></div></div>
   <div class="card"><div class="k">뒤따른 작업</div><div class="mid">{{ result.follow|length }}<span class="unit">개</span></div><div class="cap">업적 run, 랭킹 run</div></div>
 </div>
-<p class="cap"><a href="/data/batches?id={{ b.batch_id }}">적재 결과 보기</a> · <a href="/data/quality?batch={{ b.batch_id }}">품질 문제 보기</a> · <a href="/data/jobs">작업 상태 보기</a>. 실적 화면의 숫자는 워커가 업적 run 을 마친 뒤 바뀝니다.</p>
+<p class="cap"><a href="/data/batches?id={{ b.batch_id }}">적재 결과 보기</a> · <a href="/data/quality?batch={{ b.batch_id }}">품질 문제 보기</a> · <a href="/data/jobs">작업 상태 보기</a>. 홈과 팀원 현황의 숫자는 워커가 업적 run 을 마친 뒤 바뀝니다.</p>
 {% endif %}{% endif %}
 
 {% if preview %}{% set p = preview %}

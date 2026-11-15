@@ -4,6 +4,10 @@
   D-21 제안대로 원안은 메인 관리자에게만 넘긴다. 설계사와 관리자에게는 줄에서 원안 칸을 떼고 넘긴다.
 - 지난 프로모션(/promo/archive)은 pm.past 로 낸 마감 전 예상이다. 설계사는 본인 줄만, 관리자는 범위 안 사람의 달성 여부만 본다.
   D-17 에 따라 관리자 화면으로는 금액과 보상 글을 넘기지 않는다. 메인 관리자는 전부 본다.
+  메인 관리자는 결과 확정, 확정 무르기(D-50 가정), 13회차 판정 확정을 한다. 모두 경고와 확인 단계를 거친다.
+  확정 이력과 무른 사유는 메인 관리자에게만 넘긴다. 순위는 엔진이 재직자 전체에서 매긴 값이다.
+  여행과 물품 시상은 pm.travel_roster 로 달성자 명단을 낸다. D-20 가정대로 관리자는 본인과 직속 팀원, 설계사는 본인만 본다.
+  13회차 조건이 붙은 프로모션은 pm.inst13_results 로 지급, 환수, 판정 전을 보인다. 관리자에게는 금액 칸을 떼고 넘긴다 (D-17).
 - 조직 부문 시상(/promo/org-awards)의 순위별 시상 내용은 D-45 제안대로(가정) 모두에게 공개하는 상품표다.
   규칙은 app/web/awards.py 한 곳이고 명예의전당과 같다. 합계는 만들지 않는다.
 """
@@ -98,7 +102,17 @@ def promo_compare(request: Request, cat: str | None = None, ctx: dict = Depends(
 # ---------------------------------------------------------------- 지난 프로모션과 결과 확정
 HIDDEN_FOR_MANAGER = ("amount", "reward", "r", "original_amount")   # D-17: 관리자에게 팀원의 시상 금액과 보상 글을 넘기지 않는다
 HIDDEN_ORIGINAL = ("original_amount",)                               # D-21: 원안 금액은 메인 관리자에게만
-CONFIRM_WARN = "확정하면 되돌릴 수 없습니다. 지금의 사람별 결과가 그대로 남고, 그 뒤에 계약이 바뀌어도 이 프로모션의 결과는 다시 계산하지 않습니다."
+CONFIRM_WARN = ("확정하면 지금의 사람별 결과와 순위가 그대로 남고, 그 뒤에 계약이 바뀌어도 이 프로모션의 결과는 다시 계산하지 않습니다. "
+                "무르기는 메인 관리자가 사유를 적어야만 할 수 있고 무른 기록도 남습니다.")
+REVOKE_WARN = ("무르면 이 확정은 지우지 않고 무른 기록으로 남습니다. 화면은 다시 계산한 마감 전 예상으로 돌아가고 다시 확정할 수 있습니다. "
+               "이 확정에 달린 13회차 판정도 함께 보이지 않습니다.")
+REVOKE_ASSUMPTION = "확정 무르기는 D-50 제안대로 둔 가정입니다."
+ROSTER_ASSUMPTION = "명단을 보는 범위는 D-20 제안대로 둔 가정입니다."
+INST13_ASSUMPTION = "13회차 미유지 처리는 D-59 제안대로 둔 가정입니다."
+# 13회차 판정에서 관리자에게 넘기지 않는 칸 (D-17). 메인 관리자가 아니면 원안 금액도 넘기지 않는다 (D-21)
+I13_MONEY = ("amount", "amount_kept", "original_amount", "original_amount_kept", "clawback_amount", "reward_kept")
+I13_ORIGINAL = ("original_amount", "original_amount_kept")
+I13_CONTRACT_KEEP = ("policy_tail", "due_date", "judgement", "judgement_ko")    # 계약 목록은 증권번호 끝 네 자리, 도래일, 판정만
 
 
 def _who_name(con, login_id) -> str | None:
@@ -108,65 +122,130 @@ def _who_name(con, login_id) -> str | None:
     return (r["display_name"] if r and r["display_name"] else login_id)
 
 
+def _end_ym(p) -> str:
+    return p["date_to"][:4] + p["date_to"][5:7]
+
+
+def _inst13_view(con, p, ids, today, *, money: bool, original: bool) -> dict:
+    """13회차 판정을 화면에 넘길 꼴로. 금액을 볼 수 없는 사람에게는 금액 칸을 떼고 넘긴다. 계약은 세 칸만 남긴다."""
+    res = pm.inst13_results(con, p, ids, today)
+    drop = set() if money else set(I13_MONEY)
+    if not original:
+        drop |= set(I13_ORIGINAL)
+    rows = []
+    for x in res["rows"]:
+        y = {k: v for k, v in x.items() if k not in drop and k != "contracts"}
+        y["contracts"] = [{k: c.get(k) for k in I13_CONTRACT_KEEP} for c in x["contracts"]]
+        rows.append(y)
+    summary = {k: v for k, v in res["summary"].items() if money or k not in ("amount", "amount_kept", "clawback_amount")}
+    ready = sum(1 for x in res["rows"] if x["settlement"] == "estimate" and x["decision"] != "pending")
+    return {"available": res["available"], "note": res["note"], "judge_note": res["judge_note"], "rows": rows, "summary": summary, "ready": ready,
+            "money": money}
+
+
 @router.get("/promo/archive", response_class=HTMLResponse)
 def promo_archive(request: Request, ym: str | None = None, p: int | None = None, view: str | None = None, confirm: int | None = None,
-                  msg: str | None = None, err: str | None = None, ctx: dict = Depends(guard), con=Depends(get_con)):
+                  revoke: int | None = None, inst13: int | None = None, msg: str | None = None, err: str | None = None,
+                  ctx: dict = Depends(guard), con=Depends(get_con)):
     today = date.today()
     months = sorted({x["period_ym"] for x in pm.ended(con, ref=today)}, reverse=True)
     sel_ym = ym if ym in months else (months[0] if months else None)
     role = ctx["role"]
+    is_main = role == "main"
     mine = role == "agent" or (role == "manager" and view == "me")
     if mine:
         ids = [ctx["agent_id"]] if ctx["agent_id"] else []
     else:
         ids = [a["agent_id"] for a in _scope_agents(con, ctx)]
     results = pm.past(con, ids, ym=sel_ym, ref=today) if sel_ym and ids else []
-    show_amount = role == "main" or mine
-    for res in results:
+    show_amount = is_main or mine
+    for i, res in enumerate(results):
+        promo = res["promo"]
+        kind_reward = pm.in_kind(promo)
+        if kind_reward and not is_main and not mine:            # D-20 가정: 여행과 물품의 달성 여부는 본인, 직속 관리자, 메인 관리자만
+            res = results[i] = pm.final_results(con, promo, pm.roster_viewable(con, ctx, ids, _end_ym(promo)), today)
+        res["in_kind"] = kind_reward
         if mine:                                                # 본인 줄만 남긴다
             res["rows"] = [x for x in res["rows"] if x["agent_id"] == ctx["agent_id"]]
         if not show_amount:
             hidden, hidden_sum = HIDDEN_FOR_MANAGER, ("amount", "original_amount")
         else:
-            hidden = hidden_sum = HIDDEN_ORIGINAL if role != "main" else ()
+            hidden = hidden_sum = HIDDEN_ORIGINAL if not is_main else ()
         res["rows"] = [{k: v for k, v in x.items() if k not in hidden} for x in res["rows"]]
         res["summary"] = {k: v for k, v in res["summary"].items() if k not in hidden_sum}
-        res["period_text"] = _period_text(res["promo"])
+        if res["revoked"] and not is_main:                      # 무른 사유와 무른 사람은 메인 관리자에게만
+            res["revoked"] = {k: v for k, v in res["revoked"].items() if k not in ("reason", "revoked_by")}
+        res["period_text"] = _period_text(promo)
         res["confirmed_name"] = _who_name(con, res["confirmed_by"])
+        if mine and promo["inst13"]:
+            res["i13"] = _inst13_view(con, promo, ids, today, money=True, original=False)
     sel = None
     if not mine and results:
         sel = next((x for x in results if x["promo"]["promo_id"] == p), results[0])
-    ask = sel if (role == "main" and sel and confirm == sel["promo"]["promo_id"] and sel["settlement"] == "estimate") else None
+    history, roster = [], None
+    if sel:
+        promo = sel["promo"]
+        if is_main:
+            sel["revoked_name"] = _who_name(con, (sel["revoked"] or {}).get("revoked_by"))
+            history = [{**h, "confirmed_name": _who_name(con, h["confirmed_by"]), "revoked_name": _who_name(con, h["revoked_by"])}
+                       for h in pm.confirm_history(con, promo["promo_id"])]
+        if sel["in_kind"]:
+            roster = pm.travel_roster(con, promo, ctx, ids, today)
+        if promo["inst13"]:
+            seen = [x["agent_id"] for x in sel["rows"]]          # 범위 안이고 이 화면이 보여 주는 사람만. 여행과 물품이면 D-20 범위다
+            sel["i13"] = _inst13_view(con, promo, seen, today, money=is_main, original=is_main)
+    sid = sel["promo"]["promo_id"] if sel else None
+    ask = sel if (is_main and sel and confirm == sid and sel["settlement"] == "estimate") else None
+    ask_revoke = sel if (is_main and sel and revoke == sid and sel["settlement"] == "confirmed") else None
+    ask13 = sel if (is_main and sel and inst13 == sid and sel.get("i13") and sel["i13"]["available"] and sel["i13"]["ready"]) else None
     n_done = sum(1 for x in results if x["settlement"] == "confirmed")
     return page(request, ctx, "promo_archive.html", months=months, sel_ym=sel_ym, results=results, sel=sel, mine=mine, ask=ask, msg=msg, err=err,
-                show_amount=show_amount, can_confirm=role == "main", today=today.isoformat(), n_done=n_done, n_open=len(results) - n_done,
-                SETTLE_KO=pm.SETTLE_KO, confirm_warn=CONFIRM_WARN)
+                ask_revoke=ask_revoke, ask13=ask13, history=history, roster=roster, is_main=is_main,
+                show_amount=show_amount, can_confirm=is_main, today=today.isoformat(), n_done=n_done, n_open=len(results) - n_done,
+                SETTLE_KO=pm.SETTLE_KO, confirm_warn=CONFIRM_WARN, revoke_warn=REVOKE_WARN, revoke_min=pm.REVOKE_MIN,
+                revoke_assumption=REVOKE_ASSUMPTION, roster_assumption=ROSTER_ASSUMPTION, inst13_assumption=INST13_ASSUMPTION)
+
+
+ARCHIVE_ACTIONS = ("confirm", "revoke", "inst13")
 
 
 @router.post("/promo/archive")
 async def promo_archive_confirm(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
-    """결과 확정. 메인 관리자만 한다. 확인 칸(agree=yes)이 없으면 확정하지 않는다. pm.confirm_results 가 계정 표에서 다시 확인한다."""
+    """결과 확정, 확정 무르기, 13회차 판정 확정. 모두 메인 관리자만 한다. 확인 칸(agree=yes)이 없으면 하지 않는다.
+    무르기는 사유를 pm.REVOKE_MIN 자 이상 적어야 한다. 엔진(pm.confirm_results, revoke_confirmation, confirm_inst13)이 계정 표에서 다시 확인한다."""
     f = await request.form()
+    action = f.get("action")
     if ctx["role"] != "main":
-        auth.log(con, ctx["login_id"], "access_denied", "/promo/archive confirm")
-        raise HTTPException(403, "메인 관리자만 결과를 확정합니다.")
+        auth.log(con, ctx["login_id"], "access_denied", f"/promo/archive {action if action in ARCHIVE_ACTIONS else 'post'}")
+        raise HTTPException(403, "메인 관리자만 결과를 확정하거나 무릅니다.")
     raw = str(f.get("promo_id") or "")
-    if f.get("action") != "confirm" or not raw.isdigit():
+    if action not in ARCHIVE_ACTIONS or not raw.isdigit():
         raise HTTPException(400, "처리할 수 없는 요청입니다.")
     pid = int(raw)
     ym = str(f.get("ym") or "")
     back = f"/promo/archive?{'ym=' + quote(ym) + '&' if ym.isdigit() else ''}p={pid}"
+    step = {"confirm": ("confirm", "confirm"), "revoke": ("revoke", "revoke"), "inst13": ("inst13", "inst13-confirm")}[action]
+    again = f"{back}&{step[0]}={pid}"
     if f.get("agree") != "yes":
-        return RedirectResponse(f"{back}&confirm={pid}&err={quote('되돌릴 수 없다는 것을 확인하는 칸에 표시해야 확정합니다.')}#confirm", status_code=303)
+        word = {"confirm": "확정합니다", "revoke": "무릅니다", "inst13": "남깁니다"}[action]
+        return RedirectResponse(f"{again}&err={quote('확인하는 칸에 표시해야 ' + word + '.')}#{step[1]}", status_code=303)
     try:
-        res = pm.confirm_results(con, pid, ctx, ref=date.today())
+        if action == "confirm":
+            res = pm.confirm_results(con, pid, ctx, ref=date.today())
+            done = f"결과 {res['summary']['n']}명을 확정했습니다."
+        elif action == "revoke":
+            pm.revoke_confirmation(con, pid, ctx, str(f.get("reason") or ""))
+            done = "확정을 물렀습니다. 지금은 다시 계산한 마감 전 예상이 보입니다."
+        else:
+            res = pm.confirm_inst13(con, pid, ctx, ref=date.today())
+            done = f"13회차 판정 {res['n_new']}명을 남겼습니다." + (f" 판정 전 {res['summary']['pending']}명은 다음에 남깁니다." if res["summary"]["pending"] else "")
     except PermissionError as e:
-        auth.log(con, ctx["login_id"], "access_denied", "/promo/archive confirm")
+        auth.log(con, ctx["login_id"], "access_denied", f"/promo/archive {action}")
         raise HTTPException(403, str(e)) from e
     except ValueError as e:
-        return RedirectResponse(f"{back}&err={quote(str(e))}", status_code=303)
-    done = quote(f"결과 {res['summary']['n']}명을 확정했습니다.")
-    return RedirectResponse(f"{back}&msg={done}", status_code=303)
+        target = f"{again}&err={quote(str(e))}#{step[1]}" if action == "revoke" else f"{back}&err={quote(str(e))}"
+        return RedirectResponse(target, status_code=303)
+    return RedirectResponse(f"{back}&msg={quote(done)}" + ("#inst13" if action == "inst13" else ""), status_code=303)
 
 
 @router.get("/promo/publish", response_class=HTMLResponse)
@@ -204,17 +283,30 @@ async def promo_publish_action(request: Request, ctx: dict = Depends(guard), con
     return RedirectResponse(f"/promo/publish?msg={quote(msg)}", status_code=303)
 
 
+WINDOW_SEQS = (1, 2, 3)                        # 입력 폼의 기간 창 수
+TIER_ROWS = range(1, 7)                         # 구간표 한 장의 줄 수
+WINDOW_TIERS_NOTE = ("창별 구간표는 창이 둘 이상이고 결합 규칙이 창마다 달성일 때만 고를 수 있습니다. 창마다 닿은 구간 가운데 낮은 쪽을 적용하고, "
+                     "보상은 위의 공통 구간표에서 읽습니다. 공통 구간표를 비우면 마지막 창의 구간표에서 읽습니다. 모든 표의 구간 수가 같아야 합니다.")
+WINDOW_TIERS_ASSUMPTION = "보상을 읽는 표는 D-60 제안대로 둔 가정입니다."
+INST13_FORM_NOTE = "켜면 13회차까지 유지한 계약만 인정합니다. 지급 시점에 13회차가 들면 이 칸과 상관없이 13회차 조건이 붙습니다."
+
+
 def _tier_form_defaults(con, ctx, line_id=None, promo_id=None):
     d = {"promo_id": "", "name": "", "kind": "weekly", "insurer_id": None, "insurer_name": "", "sector": "", "caution": "", "target_note": "",
          "metric": "premium_monthly", "date_basis": pm.DEFAULT_DATE_BASIS, "cap": "", "categories": [], "combine_rule": "", "pay_timing": "",
-         "windows": [("", "", "")] * 3, "tiers": [("", "fixed", "", "")] * 6, "rates": [], "source_line_id": "", "origin": None, "status": None}
+         "windows": [("", "", "")] * 3, "tiers": [("", "fixed", "", "")] * 6, "rates": [], "source_line_id": "", "origin": None, "status": None,
+         "window_tiers": {seq: [("", "fixed", "", "")] * 6 for seq in WINDOW_SEQS}, "window_mode": False, "inst13_required": False, "inst13_from_timing": False}
     num = lambda v: "" if v is None else f"{v:g}"
+    row = lambda t: (num(t["min_value"]), t["reward_kind"], num(t["reward_value"] * 100 if t["reward_kind"] == "rate" and t["reward_value"] is not None else t["reward_value"]),
+                     t["reward_label"] or "")
     if promo_id:
         p = pm._load(con, promo_id)
         if not p:
             raise HTTPException(404, "없는 프로모션입니다.")
-        tiers = [(num(t["min_value"]), t["reward_kind"], num(t["reward_value"] * 100 if t["reward_kind"] == "rate" and t["reward_value"] is not None else t["reward_value"]),
-                  t["reward_label"] or "") for t in p["tiers"]]
+        tiers = [row(t) for t in p["tiers"] if t.get("window_seq") is None]        # 공통 구간표만. 창별 구간표는 아래 칸에 따로 채운다
+        wt = p.get("window_tiers") or {}
+        d.update(window_mode=bool(wt), inst13_required=bool(p.get("inst13_required")), inst13_from_timing=p["inst13"] and not p.get("inst13_required"),
+                 window_tiers={seq: ([row(t) for t in wt.get(seq, [])] + [("", "fixed", "", "")] * 6)[:6] for seq in WINDOW_SEQS})
         d.update(promo_id=str(promo_id), name=p["name"], kind=p["kind"], insurer_id=p["insurer_id"], insurer_name=p["insurer_name"] or "", sector=p["sector"] or "",
                  caution=p["caution"] or "", target_note=p["target_note"] or "", metric=p["metric"], date_basis=p["date_basis"], cap=num(p["per_contract_cap"]),
                  categories=p["category_list"], combine_rule=p["combine_rule"] if len(p["windows"]) > 1 else "", pay_timing=p["pay_timing"] or "",
@@ -255,7 +347,8 @@ def promo_tiers(request: Request, line: int | None = None, edit: int | None = No
                 ctx: dict = Depends(guard), con=Depends(get_con)):
     d = _tier_form_defaults(con, ctx, line, edit)
     plan = original_rows(pm._load(con, edit)) if edit else None
-    return page(request, ctx, "promo_tiers.html", d=d, err=err, msg=msg, plan=plan,
+    return page(request, ctx, "promo_tiers.html", d=d, err=err, msg=msg, plan=plan, window_seqs=WINDOW_SEQS, wt_note=WINDOW_TIERS_NOTE,
+                wt_assumption=WINDOW_TIERS_ASSUMPTION, inst13_note=INST13_FORM_NOTE,
                 cats=_q(con, "SELECT code, name FROM product_category ORDER BY sort_order"),
                 insurers=_q(con, "SELECT insurer_id, name, sector FROM insurer WHERE active=1 ORDER BY name"))
 
@@ -282,6 +375,18 @@ def _save_original(con, ctx, f) -> RedirectResponse:
     return RedirectResponse(f"/promo/tiers?edit={promo_id}&msg={quote(msg)}#original", status_code=303)
 
 
+def _tier_table(f, prefix, num) -> list:
+    """폼의 구간표 한 장. 기준이 빈 줄은 뺀다. 비율은 퍼센트로 받아 100 으로 나눈다. prefix 는 공통 표 't_', 창별 표 'wt2_' 꼴이다."""
+    rows = [(num(f.get(f"{prefix}min_{i}")), f.get(f"{prefix}kind_{i}", "fixed"), num(f.get(f"{prefix}value_{i}")), f.get(f"{prefix}label_{i}", "").strip())
+            for i in TIER_ROWS if num(f.get(f"{prefix}min_{i}")) is not None]
+    for _m, k, v, lab in rows:
+        if k in ("fixed", "rate") and v is None:
+            raise ValueError("정액과 비율 보상에는 값을 넣어야 합니다.")
+        if k in ("travel", "goods") and not lab:
+            raise ValueError("여행과 물품 보상에는 이름을 넣어야 합니다.")
+    return [(m, k, (v / 100 if k == "rate" else v), lab) for m, k, v, lab in rows]
+
+
 @router.post("/promo/tiers")
 async def promo_tiers_save(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
     f = await request.form()
@@ -291,14 +396,14 @@ async def promo_tiers_save(request: Request, ctx: dict = Depends(guard), con=Dep
     promo_id = int(f["promo_id"]) if f.get("promo_id") else None
     try:
         windows = [(f.get(f"w_label_{i}", "").strip(), f.get(f"w_from_{i}", ""), f.get(f"w_to_{i}", "")) for i in range(1, 4)]
-        tiers = [(num(f.get(f"t_min_{i}")), f.get(f"t_kind_{i}", "fixed"), num(f.get(f"t_value_{i}")), f.get(f"t_label_{i}", "").strip())
-                 for i in range(1, 7) if num(f.get(f"t_min_{i}")) is not None]
-        for _m, k, v, lab in tiers:
-            if k in ("fixed", "rate") and v is None:
-                raise ValueError("정액과 비율 보상에는 값을 넣어야 합니다.")
-            if k in ("travel", "goods") and not lab:
-                raise ValueError("여행과 물품 보상에는 이름을 넣어야 합니다.")
-        tiers = [(m, k, (v / 100 if k == "rate" else v), lab) for m, k, v, lab in tiers]
+        tiers = _tier_table(f, "t_", num)
+        window_mode = f.get("window_mode") == "1"
+        window_tiers = {seq: _tier_table(f, f"wt{seq}_", num) for seq in WINDOW_SEQS} if window_mode else {}
+        window_tiers = {seq: rows for seq, rows in window_tiers.items() if rows}
+        if window_mode and not window_tiers:
+            raise ValueError("창별 구간표를 쓰려면 창마다 구간을 넣어야 합니다.")
+        if window_mode and (f.get("combine_rule") or ("all" if f.get("kind") == "linked" else "")) != "all":
+            raise ValueError("창별 구간표는 결합 규칙이 창마다 달성일 때만 고를 수 있습니다.")
         ins = con.execute("SELECT insurer_id, name FROM insurer WHERE insurer_id=?", (int(f["insurer_id"]),)).fetchone() if f.get("insurer_id") else None
         if not f.get("name", "").strip():
             raise ValueError("이름을 넣어야 합니다.")
@@ -306,7 +411,8 @@ async def promo_tiers_save(request: Request, ctx: dict = Depends(guard), con=Dep
                       insurer_id=ins["insurer_id"] if ins else None, insurer_name=(ins["name"] if ins else f.get("insurer_name", "").strip() or None),
                       sector=f.get("sector") or None, categories=f.getlist("categories"), target_note=f.get("target_note", "").strip() or None,
                       metric=f.get("metric", "premium_monthly"), date_basis=f.get("date_basis") or pm.DEFAULT_DATE_BASIS, per_contract_cap=num(f.get("cap")),
-                      combine_rule=f.get("combine_rule") or None, pay_timing=f.get("pay_timing") or None, caution=f.get("caution", "").strip() or None)
+                      combine_rule=f.get("combine_rule") or None, pay_timing=f.get("pay_timing") or None, caution=f.get("caution", "").strip() or None,
+                      window_tiers=window_tiers, inst13_required=f.get("inst13_required") == "1")
         if promo_id:
             res = pm.update(con, promo_id, **common)
             msg = "고쳤습니다. 바뀐 항목 " + str(len(res["changed"])) + "개를 변경 기록에 남겼습니다." if res["changed"] else "바뀐 것이 없습니다."

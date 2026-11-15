@@ -39,6 +39,10 @@ ACTION_KO = {
     "promotion_withdrawn": "프로모션 회수",
     "promotion_draft": "프로모션 초안으로 돌림",
     "promotion_update": "프로모션 고침",
+    "promotion_original": "프로모션 원안 넣음",
+    "promotion_confirm": "프로모션 결과 확정",
+    "promotion_revoke": "프로모션 확정 무름",
+    "promotion_inst13": "프로모션 13회차 판정 확정",
     "org_award_create": "조직 부문 시상 만듦",
     "org_award_update": "조직 부문 시상 고침",
     "org_award_active": "조직 부문 시상 다시 엶",
@@ -115,7 +119,9 @@ PROMO_FIELD_KO = {
     "name": "이름", "kind": "유형", "insurer_name": "보험사", "sector": "업권", "categories": "구분", "metric": "기준 실적",
     "date_basis": "기준일", "per_contract_cap": "건당 한도", "combine_rule": "결합 규칙", "pay_timing": "지급 시점",
     "target_note": "대상 상품", "caution": "유의사항", "windows": "기간 창", "tiers": "구간",
+    "window_tiers": "창별 구간표", "inst13_required": "13회차 유지 조건",
 }
+_ORIGINAL_KEY = re.compile(r"(tier|rate)(\d+)")
 OP_KO = {"approve": "요청 승인", "reject": "요청 반려", "grant": "권한 켜기", "revoke": "권한 끄기", "request": "권한 요청"}
 FORM_ACTION_KO = {"save": "저장", "withdraw": "내리기", "edit": "고치기 폼", "active": "다시 열기", "inactive": "닫기", "confirm": "확정", "card_request": "명함 승인 권한 요청"}
 
@@ -216,6 +222,15 @@ def target_ko(action: str, target, names: _Names) -> str:
             if name is None:
                 return t
             out = f"프로모션: {name}"
+            if action in ("promotion_confirm", "promotion_inst13"):          # 'pid:N명'. 확정하거나 남긴 사람 수
+                return out + (f" · {fields}" if fields else "")
+            if action == "promotion_revoke":                                  # 'pid:confirm_id'. 사유는 메인 관리자 화면에만 있고 기록에는 길이만 있다
+                return out + (f" · 확정 {fields}번" if fields.isdigit() else "")
+            if action == "promotion_original":                                # 'pid:tier1,rate2'
+                keys = [m.groups() for m in map(_ORIGINAL_KEY.fullmatch, fields.split(",")) if m]
+                if keys:
+                    return out + " · 원안 칸 " + ", ".join(f"{n}구간" if k == "tier" else f"지급률 {n}번" for k, n in keys)
+                return out + (f" · {fields}" if fields else "")
             if fields:
                 out += " · 바뀐 칸 " + ", ".join(PROMO_FIELD_KO.get(f, f) for f in fields.split(","))
             return out
