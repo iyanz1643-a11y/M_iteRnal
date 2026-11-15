@@ -2,7 +2,7 @@
 {% block body %}
 <p class="eyebrow">{{ SCOPES[ctx.scope] }} · 프로모션은 기준일 {{ ref|md }}, 교육 기한은 오늘 {{ edu_ref|md }}로 따집니다</p>
 <h1 class="display">{{ y }}년 {{ mo }}월 일정 {{ n }}건</h1>
-<p class="lede">프로모션 기간과 마감, 교육 차수, 교육 기한을 한곳에서 봅니다.</p>
+<p class="lede">프로모션 기간과 마감, 교육 차수, 교육 기한, 13회차 도래를 한곳에서 봅니다.</p>
 <div class="cal-bar">
   <div class="seg" style="margin:0" aria-label="달 옮기기"><a href="/calendar?m={{ prev_m }}{{ '&view=' ~ view if view }}" aria-label="지난달">‹ 지난달</a>
     <a class="{{ 'on' if this_m == '%04d-%02d'|format(y, mo) }}" href="/calendar{{ '?view=' ~ view if view }}">이번 달</a>
@@ -47,5 +47,5 @@
 {% endfor %}</div>{% endif %}
 </div>
 {% endif %}
-<p class="cap" style="margin-top:20px">13회차 도래는 도래를 내는 계산이 준비되면 넣습니다. 프로모션의 금액과 구간은 예상이며 확정은 보험사 정산을 따릅니다.</p>
+<p class="cap" style="margin-top:20px">13회차 도래는 날짜별 건수만 적습니다. 도래일은 계약일에서 12개월 뒤 같은 날이고, 유지 중인 계약만 세며 일시납은 뺍니다. 프로모션의 금액과 구간은 예상이며 확정은 보험사 정산을 따릅니다.</p>
 {% endblock %}

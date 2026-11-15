@@ -12,10 +12,12 @@
 | 명함 승인 대기 | card_approver 인 메인 관리자와 관리자 | card.pending_count | 명함 승인 화면과 같은 범위와 본인 빼기 |
 | 명함 권한 요청 | 메인 관리자 | card_grant.pending_requests | 조직장과 대리 화면과 같다 |
 | 새 공지 | 공지의 대상 안인 사람 | board.recent_notices | 공지와 자료실과 같은 보는 사람 규칙. 최근 board.NOTICE_DAYS 일. 올린 사람은 뺀다 |
+| 13회차 도래 | 설계사, 관리자 | persist.inst13_due | 본인. 관리자는 범위 안. 이번 주(일요일부터 토요일) 건수 하나만. 계약을 가리키는 것은 넣지 않는다 |
 
 - 프로모션 알림의 기준일은 프로모션 화면과 같은 pm.ref_date(자료 기준 달)이다.
 - 교육 기한은 팀 교육 진척도와 같은 deps.edu_today(오늘)로 따진다. 교육은 실적 자료와 상관없는 날짜 일이다.
 - 알림 글에는 고객 이름, 연락처, 시상 금액을 넣지 않는다. 구간 근접에는 본인의 남은 실적만 적는다.
+- 13회차 도래의 이번 주는 오늘이 든 주이고 일정 화면과 같이 일요일에 시작한다. 메인 관리자에게는 띄우지 않는다.
 - 종 아이콘의 숫자는 base.html 이 notif_badge(ctx) 로 부른다. 만든 알림 목록을 사람마다 BADGE_TTL 초 동안 이 프로세스 안에 담아 두고,
   읽음 표시는 부를 때마다 표에서 새로 읽는다. 종 아이콘은 쓰기가 생기지 않게 명함 권한 요청을 표에서 바로 센다(light).
 """
@@ -33,6 +35,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app import db
 from app.engine import education as edu
+from app.engine import persist as ps
 from app.engine import promotion as pm
 from app.org import card_grant as cg
 from app.web import board as bd
@@ -46,11 +49,11 @@ PATH = "/notifications"
 BEGIN, END = "-- [notifications:begin]", "-- [notifications:end]"
 DUE_DAYS = 3                 # docs/09 6장: 프로모션 마감 3일 전과 하루 전
 BADGE_TTL = 60               # 종 아이콘의 숫자에 쓰는 목록을 담아 두는 초
-KEY_RE = re.compile(r"^[a-z_]+:[0-9A-Za-z:_\-]{1,80}$")
+KEY_RE = re.compile(r"^[a-z][a-z0-9_]*:[0-9A-Za-z:_\-]{1,80}$")
 KIND_KO = {"promo_new": "새 프로모션", "promo_due": "마감 임박", "tier_near": "구간 근접", "edu_due": "교육 기한",
-           "card_pending": "명함 승인 대기", "card_grant": "명함 권한 요청", "board_new": "새 공지"}
+           "card_pending": "명함 승인 대기", "card_grant": "명함 권한 요청", "board_new": "새 공지", "inst13_due": "13회차 도래"}
 TONE = {"promo_new": "blue", "promo_due": "bad", "tier_near": "good", "edu_due": "warn", "card_pending": "warn", "card_grant": "warn",
-        "board_new": "blue"}
+        "board_new": "blue", "inst13_due": "warn"}
 
 
 # ---------------------------------------------------------------- 표
@@ -163,6 +166,30 @@ def _edu_notes(con, ctx) -> list:
     return out
 
 
+def this_week(day: date) -> tuple:
+    """day 가 든 주의 일요일과 토요일. 일정 화면의 한 주와 같다."""
+    start = day - timedelta(days=(day.weekday() + 1) % 7)
+    return start, start + timedelta(days=6)
+
+
+def _due_notes(con, ctx) -> list:
+    """13회차 도래 n건(이번 주). 설계사는 본인, 관리자는 범위 안 사람의 건수 하나만 낸다. 숫자만이다."""
+    if ctx["role"] == "main":
+        return []
+    ids = sorted(ctx["agent_ids"]) if ctx["role"] == "manager" else ([ctx["agent_id"]] if ctx["agent_id"] else [])
+    if not ids:
+        return []
+    today = date.today()
+    first, last = this_week(today)
+    n = ps.inst13_due(con, ids, first, last)["total"]
+    if not n:
+        return []
+    who = "범위 안 팀원과 본인의" if ctx["role"] == "manager" else "내"
+    span = f"{first.month}월 {first.day}일부터 {last.month}월 {last.day}일까지"
+    return [_note("inst13_due", f"{first.isoformat()}:{n}", f"13회차 도래 {n}건(이번 주)", f"{span} {who} 유지 계약에 13회차 납입일이 옵니다.",
+                  today.isoformat(), _link(ctx, "/calendar", f"?m={today.strftime('%Y-%m')}"))]
+
+
 def _approval_notes(con, ctx, ref: date, light: bool) -> list:
     out = []
     if ctx["role"] in ("main", "manager") and ctx.get("card_approver"):
@@ -205,8 +232,9 @@ def _board_notes(con, ctx) -> list:
 def collect(con, ctx, light: bool = False) -> list:
     """그 사람의 알림 전부. 읽음 여부는 붙이지 않는다. 최근 것부터."""
     ref = pm.ref_date(ctx["ym"])
-    out = _promo_notes(con, ctx, ref) + _edu_notes(con, ctx) + _approval_notes(con, ctx, ref, light) + _board_notes(con, ctx)
-    order = {"card_grant": 0, "card_pending": 0, "promo_due": 1, "edu_due": 2, "board_new": 3, "tier_near": 4, "promo_new": 5}
+    out = (_promo_notes(con, ctx, ref) + _edu_notes(con, ctx) + _due_notes(con, ctx) + _approval_notes(con, ctx, ref, light)
+           + _board_notes(con, ctx))
+    order = {"card_grant": 0, "card_pending": 0, "promo_due": 1, "edu_due": 2, "inst13_due": 2, "board_new": 3, "tier_near": 4, "promo_new": 5}
     out.sort(key=lambda n: order[n["kind"]])
     out.sort(key=lambda n: n["at"], reverse=True)               # 날짜가 같으면 승인 대기, 마감 임박, 교육 기한 순
     seen, uniq = set(), []

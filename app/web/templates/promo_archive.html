@@ -1,9 +1,10 @@
 {% extends "base.html" %}{% import "_promo.html" as pr %}
 {% block body %}
 {% set ym_label = (sel_ym[:4] ~ '년 ' ~ (sel_ym[4:]|int) ~ '월') if sel_ym else '' %}
-<p class="eyebrow">{% if sel_ym %}{{ ym_label }} · {% endif %}{{ '본인' if mine else SCOPES[ctx.scope] }} · 기준일 {{ today|md }} · <span class="chip warn">{{ settle_ko }}</span></p>
+<p class="eyebrow">{% if sel_ym %}{{ ym_label }} · {% endif %}{{ '본인' if mine else SCOPES[ctx.scope] }} · 기준일 {{ today|md }}{% if n_done %} · <span class="chip good">{{ SETTLE_KO.confirmed }} {{ n_done }}건</span>{% endif %}{% if n_open %} · <span class="chip warn">{{ SETTLE_KO.estimate }} {{ n_open }}건</span>{% endif %}</p>
 <h1 class="display">지난 프로모션 {{ results|length }}건</h1>
-<p class="lede">끝난 프로모션의 결과입니다. 보험사 정산 전이라 모두 마감 전 예상이며, 확정은 보험사 정산을 따릅니다.{% if not show_amount %} 팀원의 시상 금액은 보이지 않고 달성 여부만 보입니다.{% endif %}</p>
+<p class="lede">끝난 프로모션의 결과입니다. 메인 관리자가 확정하기 전에는 마감 전 예상이고, 확정한 뒤에는 그때의 값이 그대로 남습니다. 지급은 보험사 정산을 따릅니다.{% if not show_amount %} 팀원의 시상 금액은 보이지 않고 달성 여부만 보입니다.{% endif %}</p>
+{% if msg %}<div class="okmsg">{{ msg }}</div>{% endif %}{% if err %}<div class="alert">{{ err }}</div>{% endif %}
 {% if ctx.role == 'manager' %}<div class="seg"><a class="{{ 'on' if not mine }}" href="/promo/archive{{ '?ym=' ~ sel_ym if sel_ym }}">팀원 결과</a><a class="{{ 'on' if mine }}" href="/promo/archive?view=me{{ '&ym=' ~ sel_ym if sel_ym }}">내 결과</a></div>{% endif %}
 {% if months %}<div class="seg" aria-label="달 고르기">{% for m in months %}<a class="{{ 'on' if m == sel_ym }}" href="/promo/archive?ym={{ m }}{{ '&view=me' if mine and ctx.role == 'manager' }}">{{ m[:4] }}년 {{ m[4:]|int }}월</a>{% endfor %}</div>{% endif %}
 {% if not results %}<div class="card" style="margin-top:32px"><div class="k">끝난 프로모션이 없습니다</div><div class="cap">프로모션의 모든 기간이 끝나면 여기에 결과가 보관됩니다.</div></div>{% endif %}
@@ -15,14 +16,15 @@
   <div class="pcard-head"><div><div class="eyebrow" style="margin:0">{{ p.insurer_name or '전 보험사' }} · {{ p.kind_ko }}</div><div class="pcard-title">{{ p.name }}</div>
     <div class="cap" style="margin-top:4px">{{ res.period_text }}{% if p.timing_ko %} · {{ p.timing_ko }} 지급{% endif %}</div></div>
     {% if x %}<span class="chip {{ 'good' if x.outcome == 'achieved' else '' }}">{{ x.outcome_ko }}</span>{% endif %}</div>
+  <div class="cap" style="margin:0 0 10px"><span class="chip {{ 'good' if res.settlement == 'confirmed' else 'warn' }}">{{ res.settlement_ko }}</span>{% if res.settlement == 'confirmed' %} {{ res.confirmed_at|when }} 확정{% endif %}</div>
   {% if not x %}<div class="cap">이 프로모션의 달성 대상이 아닙니다. 재직 중인 설계사만 셉니다.</div>
   {% else %}
   <div class="grid g3 keep">
     <div><div class="k">{{ p.metric_ko }}</div><div class="mid">{{ pr.val(x.value, p) }}</div></div>
     <div><div class="k">구간</div><div class="mid">{% if x.tier_no %}{{ x.tier_no }}<span class="unit">구간</span>{% else %}-{% endif %}</div></div>
-    <div><div class="k">예상 시상</div><div class="mid">{% if x.amount is not none %}{{ x.amount|won }}<span class="unit">원</span>{% elif x.reward %}<span class="arc-word">{{ x.reward }}</span>{% else %}-{% endif %}</div></div>
+    <div><div class="k">{{ '확정 시상' if x.settlement == 'confirmed' else '예상 시상' }}</div><div class="mid">{% if x.amount is not none %}{{ x.amount|won }}<span class="unit">원</span>{% elif x.reward %}<span class="arc-word">{{ x.reward }}</span>{% else %}-{% endif %}</div></div>
   </div>
-  <div class="cap">{{ x.settlement_ko }}입니다. 확정은 보험사 정산을 따릅니다.</div>
+  <div class="cap">{% if x.settlement == 'confirmed' %}메인 관리자가 확정한 결과입니다. 지급은 보험사 정산을 따릅니다.{% else %}마감 전 예상입니다. 확정은 메인 관리자가 하고, 지급은 보험사 정산을 따릅니다.{% endif %}</div>
   {% endif %}
 </section>
 {% endfor %}
@@ -35,29 +37,45 @@
   <div class="card"><div class="k">프로모션</div><div class="mid">{{ results|length }}<span class="unit">건</span></div><div class="cap">{{ ym_label }}에 걸친 것</div></div>
   <div class="card"><div class="k"><span class="dot"></span>달성</div><div class="mid">{{ tot_a }}<span class="unit">건</span></div><div class="cap">사람과 프로모션의 짝</div></div>
   <div class="card"><div class="k"><span class="dot off"></span>미달성</div><div class="mid">{{ tot_n - tot_a }}<span class="unit">건</span></div><div class="cap">재직 중인 대상만</div></div>
-  {% if show_amount %}<div class="card"><div class="k">예상 시상 합계</div><div class="mid">{{ (results|sum(attribute='summary.amount'))|won }}<span class="unit">원</span></div><div class="cap">{{ settle_ko }}</div></div>
-  {% else %}<div class="card"><div class="k">달성률</div><div class="mid">{{ ((tot_a / tot_n * 100) if tot_n else 0)|round|int }}<span class="unit">%</span></div><div class="cap">{{ settle_ko }}</div></div>{% endif %}
+  {% set mix = (SETTLE_KO.confirmed ~ ' ' ~ n_done ~ '건' if n_done else '') ~ (' · ' if n_done and n_open else '') ~ (SETTLE_KO.estimate ~ ' ' ~ n_open ~ '건' if n_open else '') %}
+  {% if show_amount %}<div class="card"><div class="k">{{ '확정 시상 합계' if not n_open else '예상 시상 합계' }}</div><div class="mid">{{ (results|sum(attribute='summary.amount'))|won }}<span class="unit">원</span></div><div class="cap">{{ mix }}</div></div>
+  {% else %}<div class="card"><div class="k">달성률</div><div class="mid">{{ ((tot_a / tot_n * 100) if tot_n else 0)|round|int }}<span class="unit">%</span></div><div class="cap">{{ mix }}</div></div>{% endif %}
 </div>
 <h2 class="sec">프로모션별 결과</h2>
-<div class="seg">{% for res in results %}<a class="{{ 'on' if res.promo.promo_id == sel.promo.promo_id }}" href="/promo/archive?ym={{ sel_ym }}&p={{ res.promo.promo_id }}">{{ res.promo.name }} · {{ res.summary.achieved }}/{{ res.summary.n }}</a>{% endfor %}</div>
+<div class="seg">{% for res in results %}<a class="{{ 'on' if res.promo.promo_id == sel.promo.promo_id }}" href="/promo/archive?ym={{ sel_ym }}&p={{ res.promo.promo_id }}">{{ res.promo.name }} · {{ res.summary.achieved }}/{{ res.summary.n }}{% if res.settlement == 'confirmed' %} · 확정{% endif %}</a>{% endfor %}</div>
 {% set p = sel.promo %}
 <div class="card" style="margin-top:16px">
   <div class="pcard-head"><div><div class="eyebrow" style="margin:0">{{ p.insurer_name or '전 보험사' }} · {{ p.kind_ko }}</div><div class="pcard-title">{{ p.name }}</div>
     <div class="cap" style="margin-top:4px">{{ sel.period_text }}{% if p.timing_ko %} · {{ p.timing_ko }} 지급{% endif %}</div></div>
-    <span class="chip warn">{{ sel.settlement_ko }}</span></div>
-  <div class="cap">대상 {{ sel.summary.n }}명 · 달성 {{ sel.summary.achieved }}명 · 미달성 {{ sel.summary.missed }}명{% if show_amount %} · 예상 시상 {{ sel.summary.amount|won }}원{% endif %}</div>
+    <span class="chip {{ 'good' if sel.settlement == 'confirmed' else 'warn' }}" data-settlement="{{ sel.settlement }}">{{ sel.settlement_ko }}</span></div>
+  {% set word = '확정 시상' if sel.settlement == 'confirmed' else '예상 시상' %}
+  <div class="cap">대상 {{ sel.summary.n }}명 · 달성 {{ sel.summary.achieved }}명 · 미달성 {{ sel.summary.missed }}명{% if show_amount %} · {{ word }} {{ sel.summary.amount|won }}원{% endif %}{% if can_confirm %} · 원안 기준 {% if sel.summary.original_amount is not none %}{{ sel.summary.original_amount|won }}원{% else %}{{ pm.MISSING_ORIGINAL }}{% endif %}{% endif %}</div>
+  {% if sel.settlement == 'confirmed' %}<div class="cap confirmed-by"><span class="dot"></span>{{ sel.confirmed_name }} 님이 {{ sel.confirmed_at|when }}에 확정했습니다. 그 뒤로는 다시 계산하지 않고 확정한 값을 보여 줍니다.</div>
+  {% elif can_confirm and not ask %}<div class="confirm-acts" style="margin-top:14px"><a class="pill" href="/promo/archive?ym={{ sel_ym }}&p={{ sel.promo.promo_id }}&confirm={{ sel.promo.promo_id }}#confirm">결과 확정</a>
+    <span class="cap" style="margin:0">확정하기 전에 경고와 확인 단계를 거칩니다</span></div>{% endif %}
 </div>
+{% if ask %}
+<div class="card confirm-box" id="confirm" style="margin-top:16px"><div class="k" style="color:var(--red)">결과 확정 · 되돌릴 수 없습니다</div>
+  <div class="confirm-title">{{ ask.promo.name }}의 결과 {{ ask.summary.n }}명을 확정할까요</div>
+  <p class="cap" style="margin:0">{{ confirm_warn }} 확정하는 때의 재직자 모두가 대상이며, 이 화면의 범위보다 넓을 수 있습니다.</p>
+  <form method="post" action="/promo/archive"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="action" value="confirm"><input type="hidden" name="promo_id" value="{{ ask.promo.promo_id }}"><input type="hidden" name="ym" value="{{ sel_ym }}">
+    <label class="confirm-check"><input type="checkbox" name="agree" value="yes" required>확정하면 무를 수 없다는 것을 확인했습니다</label>
+    <div class="confirm-acts"><button class="danger" type="submit">되돌릴 수 없음을 알고 확정합니다</button>
+      <a class="pill quiet" href="/promo/archive?ym={{ sel_ym }}&p={{ ask.promo.promo_id }}">그만두기</a></div>
+  </form></div>
+{% endif %}
 <div class="card tablecard" style="margin-top:16px"><table>
-<tr><th>성명</th><th class="hide-sm">소속</th><th class="num">{{ p.metric_ko }}</th><th class="hide-sm">구간</th><th>결과</th>{% if show_amount %}<th class="num hide-sm">예상 시상</th>{% endif %}</tr>
+<tr><th>성명</th><th class="hide-sm">소속</th><th class="num">{{ p.metric_ko }}</th><th class="hide-sm">구간</th><th>결과</th>{% if show_amount %}<th class="num hide-sm">{{ word }}</th>{% endif %}</tr>
 {% for x in sel.rows %}
-<tr><td class="strong">{{ x.name or x.code or '-' }}<div class="sm-sub"><span>{% if x.tier_no %}{{ x.tier_no }}구간{% endif %}{% if show_amount and x.amount is not none %} · 예상 {{ x.amount|won }}원{% endif %}</span></div></td>
+<tr><td class="strong">{{ x.name or x.code or '-' }}<div class="sm-sub"><span>{% if x.tier_no %}{{ x.tier_no }}구간{% endif %}{% if show_amount and x.amount is not none %} · {{ word[:2] }} {{ x.amount|won }}원{% endif %}</span></div></td>
 <td class="hide-sm">{{ x.org or '-' }}</td><td class="num">{{ pr.val(x.value, p) }}</td>
 <td class="hide-sm">{% if x.tier_no %}<span class="chip good">{{ x.tier_no }}구간</span>{% else %}-{% endif %}</td>
 <td><span class="chip {{ 'good' if x.outcome == 'achieved' }}">{{ x.outcome_ko }}</span></td>
-{% if show_amount %}<td class="num hide-sm">{% if x.amount is not none %}예상 {{ x.amount|won }}원{% elif x.reward %}{{ x.reward }}{% else %}-{% endif %}</td>{% endif %}</tr>
+{% if show_amount %}<td class="num hide-sm">{% if x.amount is not none %}{{ word[:2] }} {{ x.amount|won }}원{% elif x.reward %}{{ x.reward }}{% else %}-{% endif %}</td>{% endif %}</tr>
 {% else %}<tr><td colspan="6" class="cap">대상이 없습니다.</td></tr>{% endfor %}
 </table></div>
 {% endif %}
 {% endif %}
-<p class="cap" style="margin-top:24px">결과는 달성 현황과 같은 계산으로 냅니다. 성립한 계약만 세고, 그 달 중간에 퇴사한 사람은 달성 대상에서 뺍니다. 결과는 {{ settle_ko }}이며 확정 기능은 다음 단계에서 붙습니다.</p>
+<p class="cap" style="margin-top:24px">결과는 달성 현황과 같은 계산으로 냅니다. 성립한 계약만 세고, 그 달 중간에 퇴사한 사람은 달성 대상에서 뺍니다. 확정 전에는 마감 전 예상이고, 메인 관리자가 확정하면 그때의 값이 남습니다. 지급은 보험사 정산을 따릅니다.</p>
 {% endblock %}

@@ -1,0 +1,31 @@
+{% extends "base.html" %}{% import "_perf.html" as pf %}{% import "_persist.html" as px %}
+{% block body %}
+<p class="eyebrow">{{ ym|ymko }} 기준 · {{ SCOPES[ctx.scope] }}{% if sel %} · {{ sel.name }}{% endif %}</p>
+<h1 class="display">유지율</h1>
+<p class="lede">13회차와 25회차 유지율을 업권, 보험사, 사람으로 나눠 봅니다. 위험 계약은 건수와 증권번호 끝 네 자리만 보입니다.</p>
+{{ pf.pick_form(path, f, yms, ym, orgs, sel) }}
+{{ px.stamp_line(stamps) }}
+
+{{ px.heroes(k) }}
+
+<h2 class="sec">업권별</h2>
+{{ px.split_table(sectors, '업권') }}
+
+<h2 class="sec">보험사별</h2>
+{{ px.split_table(insurers, '보험사') }}
+
+<h2 class="sec">사람별</h2>
+{% if people %}
+<div class="card tablecard"><table>
+<tr><th>성명</th><th class="hide-sm">사번</th><th class="num">13회차</th><th class="num">25회차</th><th class="hide-sm hide-md">대상</th></tr>
+{% for p in people %}<tr data-agent="{{ p.agent_id }}"><td class="strong">{{ p.name or p.code or '-' }}<div class="sm-sub"><span>13회차 {{ px.count(p.p13) }}</span></div></td>
+<td class="hide-sm">{{ p.code or '-' }}</td><td class="num" data-kind="p13">{{ px.pct_text(p.p13) }}</td><td class="num" data-kind="p25">{{ px.pct_text(p.p25) }}</td>
+<td class="hide-sm hide-md cap">13회차 {{ px.count(p.p13) }} · 25회차 {{ px.count(p.p25) }}</td></tr>{% endfor %}
+</table></div>
+<p class="cap">{{ people|length }}명 가운데 {{ with_data }}명에게 유지율 자료가 있습니다. 대상 계약이 없는 사람은 자료 없음으로 적습니다.</p>
+{% else %}<div class="card"><div class="k">이 범위에 유지율을 볼 사람이 없습니다</div></div>{% endif %}
+
+<h2 class="sec">위험 계약 {{ risk.total }}건</h2>
+{{ px.risk_block(risk, '이 범위에 미납, 실효 위험, 최근 실효 계약이 없습니다') }}
+<p class="cap" style="margin-top:20px">{{ rates.note }} 13회차 도래 날짜는 <a href="/calendar">일정</a>에서 봅니다. 이 화면에는 보험료와 수수료 금액이 없습니다.</p>
+{% endblock %}

@@ -1,0 +1,55 @@
+{# 유지율과 내 유지율이 함께 쓰는 조각. 값은 persist 엔진 것 그대로이고, 비율이 None 이면 0% 가 아니라 자료 없음이다.
+   유지율에 좋고 나쁨의 기준을 정한 결정이 없어 비율에 상태 색을 입히지 않는다 #}
+{% import "_ui.html" as ui %}
+{% macro pct(cell) %}{% if cell is none or cell.rate is none %}<span class="na">자료 없음</span>{% else %}{{ '%.1f'|format(cell.rate * 100) }}<span class="unit">%</span>{% endif %}{% endmacro %}
+
+{% macro pct_text(cell) %}{% if cell is none or cell.rate is none %}자료 없음{% else %}{{ '%.1f'|format(cell.rate * 100) }}%{% endif %}{% endmacro %}
+
+{% macro count(cell) %}{% if cell is none or not cell.total %}대상 없음{% else %}유지 {{ cell.kept }} / 대상 {{ cell.total }}건{% endif %}{% endmacro %}
+
+{% macro stamp_line(stamps, with_contract=true) %}
+<p class="cap perf-fresh"><span class="dot {{ '' if stamps.persistency else 'off' }}"></span>{% if stamps.persistency %}유지율은 {{ stamps.persistency|when }}에 실은 유지율 현황 기준입니다.{% else %}아직 실은 유지율 현황이 없습니다.{% endif %}
+{% if with_contract %} 위험 계약과 13회차 도래는 {% if stamps.contract %}{{ stamps.contract|when }} 계약 적재 기준입니다.{% else %}적재한 계약 자료가 없어 셀 수 없습니다.{% endif %}{% endif %}</p>
+{% endmacro %}
+
+{# 13회차와 25회차 큰 숫자 두 장. 자료가 없으면 고리를 그리지 않는다 #}
+{% macro heroes(k) %}
+<div class="grid g2" style="margin-top:24px">{% for kind in ('p13', 'p25') %}{% set c = k[kind] %}
+  <div class="card" data-kind="{{ kind }}">{% if c.rate is none %}
+    <div class="k"><span class="dot off"></span>{{ c.kind_ko }} 유지율</div><div class="big na">자료 없음</div>
+    <div class="cap">{% if c.period_ym %}{{ c.period_ym|ymko }} 자료에 대상 계약이 없습니다{% else %}이 기준 월까지 실은 {{ c.kind_ko }} 자료가 없습니다{% endif %}</div>
+  {% else %}<div class="ringbox">{{ ui.ring(c.rate * 100, c.kind_ko ~ ' 유지율', color='var(--blue)') }}
+    <div><div class="k">{{ c.kind_ko }} 유지율</div><div class="mid">{{ pct(c) }}</div><div class="cap">{{ count(c) }} · {{ c.period_ym|ymko }} 자료</div></div></div>
+  {% endif %}</div>{% endfor %}
+</div>
+{% endmacro %}
+
+{# 업권별과 보험사별 표. 13회차와 25회차를 나란히 #}
+{% macro split_table(rows, head) %}
+{% if rows %}<div class="card tablecard"><table>
+<tr><th>{{ head }}</th><th class="num">13회차</th><th class="num">25회차</th><th class="hide-sm">대상</th></tr>
+{% for r in rows %}<tr><td class="strong">{{ r.label }}<div class="sm-sub"><span>13회차 {{ count(r.p13) }}</span><span>25회차 {{ count(r.p25) }}</span></div></td>
+<td class="num" data-kind="p13">{{ pct_text(r.p13) }}</td><td class="num" data-kind="p25">{{ pct_text(r.p25) }}</td>
+<td class="hide-sm cap">13회차 {{ count(r.p13) }} · 25회차 {{ count(r.p25) }}</td></tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">나눠 볼 자료가 없습니다</div><div class="cap">유지율 현황이 실리면 여기에 나뉘어 보입니다.</div></div>{% endif %}
+{% endmacro %}
+
+{# 위험 계약. 건수 카드와 목록. 목록에는 증권번호 끝 네 자리와 단계만 둔다 (D-05) #}
+{% macro risk_block(risk, empty_text) %}
+<div class="grid g4 keep">
+  <div class="card"><div class="k"><span class="dot bad"></span>실효 위험</div><div class="mid">{{ risk.counts.lapse_risk }}<span class="unit">건</span></div><div class="cap">2회 이상 밀림</div></div>
+  <div class="card"><div class="k"><span class="dot warn"></span>미납</div><div class="mid">{{ risk.counts.unpaid }}<span class="unit">건</span></div><div class="cap">1회 밀림</div></div>
+  <div class="card"><div class="k"><span class="dot off"></span>실효</div><div class="mid">{{ risk.counts.lapsed }}<span class="unit">건</span></div><div class="cap">최근 석 달</div></div>
+  <div class="card"><div class="k"><span class="dot off"></span>판단 못 함</div><div class="mid">{{ risk.counts.no_data }}<span class="unit">건</span></div><div class="cap">납입 기록 없음</div></div>
+</div>
+{% if risk.rows %}
+<div class="card tablecard" style="margin-top:16px"><table class="risk-list">
+<tr><th>증권번호 끝 네 자리</th><th>단계</th></tr>
+{% for x in risk.rows %}<tr><td class="strong num-l">{{ x.policy_tail or '-' }}</td>
+<td><span class="chip {{ {'lapse_risk':'bad','unpaid':'warn','lapsed':''}[x.level] }}">{{ x.level_ko }}</span></td></tr>{% endfor %}
+</table></div>
+{% if risk.more %}<p class="cap">이 밖에 {{ risk.more }}건이 더 있습니다.</p>{% endif %}
+{% else %}<div class="card" style="margin-top:16px"><div class="k">{{ empty_text }}</div></div>{% endif %}
+<p class="cap">{{ risk.note }} 실효는 기준 월을 넣어 석 달 안에 실효된 계약입니다. 이 기준은 가정이며 납입 자료가 확보되면 다시 봅니다.</p>
+{% endmacro %}

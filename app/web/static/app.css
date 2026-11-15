@@ -422,3 +422,16 @@ table.onboard .chip{white-space:nowrap}
 .reveal-form{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-top:14px}
 .reveal-form label.f{flex:1 1 280px}
 @media (max-width:760px){.contract-pick label.f{flex:1 1 140px}.facts{grid-template-columns:minmax(0,1fr)}}
+
+/* 유지율과 내 유지율. 자료가 없으면 0% 대신 자료 없음을 흐리게 적는다 */
+.na{color:var(--quiet)}
+.big.na{font-size:clamp(32px,4.6vw,48px)}
+.mid .na{font-size:.62em}
+.num-l{font-variant-numeric:tabular-nums;letter-spacing:.04em}
+/* 지난 프로모션의 결과 확정. 되돌릴 수 없다는 경고와 확인 */
+.confirm-box{border:0;background:rgba(255,59,48,.08)}
+.confirm-box .confirm-check{display:flex;gap:10px;align-items:flex-start;margin:14px 0;font-weight:600;word-break:keep-all}
+.confirm-box .confirm-check input{width:22px;height:22px;flex:none;margin-top:2px}
+.confirm-acts{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+button.danger{background:var(--red);color:#fff;border:0;border-radius:999px;min-height:48px;padding:0 24px;font-weight:600;font-size:16px;cursor:pointer}
+.plan-orig{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px 16px}

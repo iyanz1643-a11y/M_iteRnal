@@ -4,7 +4,8 @@
 - 교육 차수는 education.list_courses 로 그 사람에게 보이는 과정을 고른 뒤 education.sessions 로 낸다. 수료자 수는 범위 안 사람만 센다.
 - 교육 기한은 education.not_done 으로 낸다. 설계사는 본인 것, 관리자와 메인 관리자는 범위 안 사람 수만 적는다.
 - 기준일은 둘이다. 프로모션은 자료 기준 달의 pm.ref_date, 교육 기한은 교육 화면과 같은 deps.edu_today(오늘)다.
-- 13회차 도래는 도래를 내는 계산이 아직 없어 넣지 않는다.
+- 13회차 도래는 persist.inst13_due 로 범위 안 사람의 날짜별 건수만 낸다. 고객 이름도 증권번호도 없다. 유지 위험과 겹치는 건수는
+  자료 기준 달(ctx['ym'])의 persist.risk 로 센다. 링크는 유지율 화면이 열린 사람에게는 유지율, 아니면 내 유지율이다.
 - 휴대폰에서는 목록이 먼저 보이고 달력은 접어 둔다. view=month 로 열면 휴대폰에서도 달력을 보인다.
 """
 from __future__ import annotations
@@ -18,6 +19,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 
 from app.engine import education as edu
+from app.engine import persist as ps
 from app.engine import promotion as pm
 from app.web import menu
 from app.web.deps import _period_text, edu_today, get_con, guard, page
@@ -25,7 +27,8 @@ from app.web.deps import _period_text, edu_today, get_con, guard, page
 router = APIRouter()
 MONTH_RE = re.compile(r"^(20\d\d)-(0[1-9]|1[0-2])$")
 WEEK_KO = ("일", "월", "화", "수", "목", "금", "토")          # 한 주는 일요일부터
-KIND_KO = {"promo_start": "프로모션 시작", "promo_end": "프로모션 마감", "edu_session": "교육 차수", "edu_due": "교육 기한"}
+KIND_KO = {"promo_start": "프로모션 시작", "promo_end": "프로모션 마감", "edu_session": "교육 차수", "edu_due": "교육 기한",
+           "inst13_due": "13회차 도래"}
 
 
 def _link(ctx, path, query=""):
@@ -104,7 +107,12 @@ def events(con, ctx, first: date, last: date, ref: date, edu_ref: date | None = 
         else:
             sub = f"미수료 {len(rs)}명" + (" · 본인 포함" if mine else "")
             evs.append(_ev(due, "edu_due", f"{name} 기한", sub, _link(ctx, "/team/education") or _link(ctx, "/edu/courses"), tone))
-    order = {"promo_end": 0, "edu_due": 1, "edu_session": 2, "promo_start": 3}
+    due = ps.inst13_due(con, scope, first, last, ym=ctx["ym"])
+    due_link = _link(ctx, "/perf/persistency") or _link(ctx, "/my/persistency")
+    for d in due["days"]:
+        sub = "유지 중인 계약의 13회차 납입일" + (f" · 유지 위험과 겹침 {d['at_risk']}건" if d["at_risk"] else "")
+        evs.append(_ev(d["date"], "inst13_due", f"13회차 도래 {d['count']}건", sub, due_link, "warn" if d["at_risk"] else ""))
+    order = {"promo_end": 0, "edu_due": 1, "inst13_due": 2, "edu_session": 3, "promo_start": 4}
     evs.sort(key=lambda e: (e["day"], order[e["kind"]], e["title"]))
     return spans, evs
 

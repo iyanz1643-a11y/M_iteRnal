@@ -5,7 +5,7 @@
 <h1 class="display">{{ '프로모션 고치기' if editing else '구간과 조건 입력' }}</h1>
 <p class="lede">{% if editing %}고친 내용은 바로 반영되고, 고치기 전과 뒤가 변경 기록에 남습니다.{% if d.status == 'published' %} 게시 중인 프로모션이라 설계사 화면도 함께 바뀝니다.{% endif %}
 {% else %}주차, 연계, 여행 시상처럼 금액이 원문의 표나 그림에만 있는 프로모션을 등록합니다.{% endif %}</p>
-{% if err %}<div class="alert" style="margin-top:20px">{{ err }}</div>{% endif %}
+{% if err %}<div class="alert" style="margin-top:20px">{{ err }}</div>{% endif %}{% if msg %}<div class="okmsg" style="margin-top:20px">{{ msg }}</div>{% endif %}
 {% if d.origin %}<div class="origin" style="margin-top:20px"><b>원문</b> · {{ d.insurer_name }} · {{ d.origin }}</div>{% endif %}
 <form class="wide" method="post" action="/promo/tiers" style="margin-top:24px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
 <input type="hidden" name="source_line_id" value="{{ d.source_line_id }}"><input type="hidden" name="promo_id" value="{{ d.promo_id }}">
@@ -35,7 +35,7 @@
   <label class="f" style="max-width:320px">창이 여럿일 때<select name="combine_rule"><option value="">유형에 맞게 자동</option>{% for k, v in pm.COMBINE_KO.items() if k != 'single' %}<option value="{{ k }}" {{ 'selected' if k == d.combine_rule }}>{{ v }}</option>{% endfor %}</select></label></section>
 {% if is_rate %}
 <section class="card"><div class="k" style="margin-bottom:4px">지급률</div><div class="cap" style="margin:0 0 14px">시상안 원장에서 온 값이라 여기서 바꾸지 않습니다. 원장의 해석이 틀렸으면 회수하고 원장에서 다시 승인합니다</div>
-  <div class="ladder">{% for r in d.rates %}<div class="rung"><span>{% if r.option_label %}{{ r.option_label }}번 조건 · {% endif %}{{ pm.TIMING_KO.get(r.pay_timing, '지급 시점 표기 없음') }}</span><b>{{ '%g'|format(r.rate * 100) }}%</b></div>{% endfor %}</div></section>
+  <div class="ladder">{% for r in d.rates %}<div class="rung"><span>{% if r.option_label %}{{ r.option_label }}번 조건 · {% endif %}{{ pm.timing_text(r.pay_timing) }}</span><b>{{ '%g'|format(r.rate * 100) }}%</b></div>{% endfor %}</div></section>
 {% else %}
 <section class="card"><div class="k" style="margin-bottom:4px">구간표</div><div class="cap" style="margin:0 0 14px">기준 이상이면 그 구간입니다. 비율은 퍼센트로 넣습니다</div>
   {% for i in range(1, 7) %}{% set t = d.tiers[i - 1] %}<div class="frow t4" style="margin-bottom:10px">
@@ -45,9 +45,25 @@
     <label class="f">이름. 여행지나 물품<input class="sm" type="text" name="t_label_{{ i }}" value="{{ t[3] }}" placeholder="예: 오사카 3박 4일"></label></div>{% endfor %}</section>
 {% endif %}
 <section class="card"><div class="k" style="margin-bottom:14px">지급과 유의사항</div>
-  <div class="frow"><label class="f">지급 시점<select name="pay_timing"><option value="">표기 없음</option>{% for k, v in pm.TIMING_KO.items() %}<option value="{{ k }}" {{ 'selected' if k == d.pay_timing }}>{{ v }}</option>{% endfor %}</select></label></div>
+  <div class="frow"><label class="f">지급 시점<select name="pay_timing"><option value="{{ 'unspecified' if d.pay_timing == 'unspecified' }}">표기 없음</option>{% for k in pm.TIMING_KO if pm.timing_ko(k) %}<option value="{{ k }}" {{ 'selected' if k == d.pay_timing }}>{{ pm.timing_ko(k) }}</option>{% endfor %}</select></label></div>
   <label class="f" style="margin-top:12px">유의사항<textarea name="caution" placeholder="예: 13회차 유지 시 지급. 현금 대체 불가">{{ d.caution }}</textarea></label></section>
 <div class="actions">{% if editing %}<button class="primary" name="action" value="update">고친 내용 저장</button><a class="second" href="/promo/publish" style="display:inline-grid;place-items:center;height:52px;border-radius:999px;background:var(--card);color:var(--ink);font-weight:600;padding:0 28px">그만두기</a>
 {% else %}<button class="primary" name="action" value="publish">게시하기</button><button class="second" name="action" value="draft">초안으로 저장</button>{% endif %}</div>
 </form>
+{% if plan %}
+<h2 class="sec" id="original">원안 보상</h2>
+<p class="cap">메인 관리자만 넣고 봅니다. 위의 금액은 적립금을 뺀 배포안으로 보고, 보험사 원안은 여기에 따로 넣습니다. 비워 두면 {{ plan.missing }}으로 보입니다. 넣은 값은 변경 기록에 남습니다.</p>
+{% if plan.tiers or plan.rates %}
+<form method="post" action="/promo/tiers" class="wide"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+<input type="hidden" name="promo_id" value="{{ d.promo_id }}"><input type="hidden" name="action" value="original">
+<section class="card"><div class="k" style="margin-bottom:14px">{{ '지급률 조각마다' if plan.rates else '금액 구간마다' }} 원안 {% if plan.has %}<span class="chip good">원안 있음</span>{% else %}<span class="chip warn">{{ plan.missing }}</span>{% endif %}</div>
+  <div class="plan-orig">
+  {% for t in plan.tiers %}<label class="f">{{ t.no }}구간 · {{ t.kind_ko }} · 배포안 {{ t.dist or '-' }}{{ t.unit }}<input type="number" name="o_tier_{{ t.no }}" min="0" step="any" value="{{ t.orig }}" placeholder="원안 {{ t.unit }}"></label>{% endfor %}
+  {% for r in plan.rates %}<label class="f">{{ r.label }} · 배포안 {{ r.dist or '-' }}%<input type="number" name="o_rate_{{ r.seq }}" min="0" step="any" value="{{ r.orig }}" placeholder="원안 %"></label>{% endfor %}
+  </div>
+  <div class="cap">비율과 지급률은 퍼센트로 넣습니다. 여행과 물품 구간에는 원안 금액을 넣지 않습니다.</div></section>
+<div class="actions"><button class="primary">원안 저장</button></div>
+</form>
+{% else %}<div class="card"><div class="k">원안을 넣을 금액 구간이 없습니다</div><div class="cap">여행과 물품만 있는 프로모션입니다.</div></div>{% endif %}
+{% endif %}
 {% endblock %}

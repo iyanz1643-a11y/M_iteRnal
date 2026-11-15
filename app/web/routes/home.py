@@ -5,6 +5,7 @@ from datetime import date, datetime
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 
+from app.engine import promotion as pm
 from app.org import card_grant as cg
 from app.periods import period_key
 from app.web.deps import _cards, _last_load, _perf, _q, get_con, guard, page
@@ -12,9 +13,6 @@ from app.web.routes import card, me
 from app.web.routes import edu as edu_routes
 
 router = APIRouter()
-
-TIMING_KO = {"next_month": "익월", "inst13": "13회차", "next_month+inst13": "익월과 13회차", "year1": "1차년", "year2": "2차년"}
-
 
 def _pct(rate):
     return f"{rate * 100:g}%"
@@ -38,7 +36,7 @@ def _promos(con, ym, limit=6):
             r["rate_kind"], r["rate_label"] = "text", r["reward_raw"]        # 조건이 여럿이면 숫자 하나로 줄이지 않는다
         else:
             r["rate_kind"], r["rate_label"] = "none", None
-        r["timing"] = TIMING_KO.get(r["pay_timing"])
+        r["timing"] = pm.timing_ko(r["pay_timing"])             # 지급 시점의 한국어는 엔진 한 곳(pm.TIMING_KO)을 쓴다. 표기 없음이면 None
         if r["period_to"]:
             end = date.fromisoformat(r["period_to"])
             left = (end - today).days

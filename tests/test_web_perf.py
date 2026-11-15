@@ -26,7 +26,7 @@ from app.web import auth, menu
 PW = "perf-pass-1234"
 TOKEN = re.compile(r'name="csrf_token" value="([^"]+)"')
 NEW = ["/perf/period", "/perf/category", "/perf/ranking", "/perf/org-compare", "/perf/hall", "/my/summary", "/my/awards"]
-NOT_YET = ["/perf/persistency", "/my/persistency"]          # 유지율 엔진 확인이 먼저다. 계약 원장은 tests/test_web_s2_finish.py 가 본다
+NOT_YET = []          # 유지율 두 화면은 S2 마지막에 만들어 tests/test_web_s2_last.py 가 본다. 계약 원장은 tests/test_web_s2_finish.py 가 본다
 
 
 class Client(TestClient):

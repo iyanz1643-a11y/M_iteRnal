@@ -25,8 +25,8 @@ groups:
          desc: "월·분기·반기·연 실적과 구분별 집계. 청약은 예정, 성립은 확정으로 나눈다"}
       - {id: my-awards, name: 시상 진척, path: /my/awards, roles: {manager: self, agent: self}, phase: 2, status: built,
          desc: "조직 부문 순위와 구간시상 달성 현황"}
-      - {id: my-persistency, name: 내 유지율, path: /my/persistency, roles: {manager: self, agent: self}, phase: 2, status: planned,
-         desc: "13회차·25회차 유지율과 위험 계약"}
+      - {id: my-persistency, name: 내 유지율, path: /my/persistency, roles: {manager: self, agent: self}, phase: 2, status: built,
+         desc: "13회차·25회차 유지율, 위험 계약, 석 달 안 13회차 도래"}
       - {id: my-education, name: 내 교육, path: /my/education, roles: {manager: self, agent: self}, phase: 2, status: built,
          desc: "필수 과정 수료 현황, 수료 이력, 기한"}
       - {id: my-career, name: 커리어패스, path: /my/career, roles: {manager: self, agent: self}, phase: 3, status: planned,
@@ -63,8 +63,8 @@ groups:
          desc: "종신, 건강, 저축, 연금, 재물, 자동차, 일반"}
       - {id: perf-contracts, name: 계약 원장, path: /perf/contracts, roles: {main: all, manager: org, agent: self}, phase: 1, status: built,
          desc: "권한 범위의 계약 목록과 상태 이력"}
-      - {id: perf-persistency, name: 유지율, path: /perf/persistency, roles: {main: all, manager: org}, phase: 1, status: legacy,
-         desc: "13회차·25회차, 보험사별과 조직별"}
+      - {id: perf-persistency, name: 유지율, path: /perf/persistency, roles: {main: all, manager: org}, phase: 1, status: built,
+         desc: "13회차·25회차의 업권별·보험사별·사람별 유지율과 위험 계약 건수"}
       - {id: perf-ranking, name: 랭킹, path: /perf/ranking, roles: {main: all, manager: org, agent: self}, phase: 1, status: built,
          desc: "지표, 업권 조건, 조직 범위를 골라 순위를 낸다. 설계사에게는 상위 10명과 본인 순위"}
       - {id: perf-hall, name: 명예의전당, path: /perf/hall, roles: {main: all, manager: org, agent: self}, phase: 2, status: built,

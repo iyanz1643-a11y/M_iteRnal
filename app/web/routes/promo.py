@@ -87,13 +87,22 @@ def promo_compare(request: Request, cat: str | None = None, ctx: dict = Depends(
                 sel_cat=sel_cat, show_original=show_original, estimate_note=res["estimate_note"], plan_note=res["plan_note"], cat_names=names)
 
 
-# ---------------------------------------------------------------- 지난 프로모션
-HIDDEN_FOR_MANAGER = ("amount", "reward", "r")                  # D-17: 관리자에게 팀원의 시상 금액과 보상 글을 넘기지 않는다
+# ---------------------------------------------------------------- 지난 프로모션과 결과 확정
+HIDDEN_FOR_MANAGER = ("amount", "reward", "r", "original_amount")   # D-17: 관리자에게 팀원의 시상 금액과 보상 글을 넘기지 않는다
+HIDDEN_ORIGINAL = ("original_amount",)                               # D-21: 원안 금액은 메인 관리자에게만
+CONFIRM_WARN = "확정하면 되돌릴 수 없습니다. 지금의 사람별 결과가 그대로 남고, 그 뒤에 계약이 바뀌어도 이 프로모션의 결과는 다시 계산하지 않습니다."
+
+
+def _who_name(con, login_id) -> str | None:
+    if not login_id:
+        return None
+    r = con.execute("SELECT display_name FROM user_account WHERE login_id=?", (login_id,)).fetchone()
+    return (r["display_name"] if r and r["display_name"] else login_id)
 
 
 @router.get("/promo/archive", response_class=HTMLResponse)
-def promo_archive(request: Request, ym: str | None = None, p: int | None = None, view: str | None = None,
-                  ctx: dict = Depends(guard), con=Depends(get_con)):
+def promo_archive(request: Request, ym: str | None = None, p: int | None = None, view: str | None = None, confirm: int | None = None,
+                  msg: str | None = None, err: str | None = None, ctx: dict = Depends(guard), con=Depends(get_con)):
     today = date.today()
     months = sorted({x["period_ym"] for x in pm.ended(con, ref=today)}, reverse=True)
     sel_ym = ym if ym in months else (months[0] if months else None)
@@ -109,14 +118,47 @@ def promo_archive(request: Request, ym: str | None = None, p: int | None = None,
         if mine:                                                # 본인 줄만 남긴다
             res["rows"] = [x for x in res["rows"] if x["agent_id"] == ctx["agent_id"]]
         if not show_amount:
-            res["rows"] = [{k: v for k, v in x.items() if k not in HIDDEN_FOR_MANAGER} for x in res["rows"]]
-            res["summary"] = {k: v for k, v in res["summary"].items() if k != "amount"}
+            hidden, hidden_sum = HIDDEN_FOR_MANAGER, ("amount", "original_amount")
+        else:
+            hidden = hidden_sum = HIDDEN_ORIGINAL if role != "main" else ()
+        res["rows"] = [{k: v for k, v in x.items() if k not in hidden} for x in res["rows"]]
+        res["summary"] = {k: v for k, v in res["summary"].items() if k not in hidden_sum}
         res["period_text"] = _period_text(res["promo"])
+        res["confirmed_name"] = _who_name(con, res["confirmed_by"])
     sel = None
     if not mine and results:
         sel = next((x for x in results if x["promo"]["promo_id"] == p), results[0])
-    return page(request, ctx, "promo_archive.html", months=months, sel_ym=sel_ym, results=results, sel=sel, mine=mine,
-                show_amount=show_amount, today=today.isoformat(), settle_ko=pm.SETTLE_KO["estimate"])
+    ask = sel if (role == "main" and sel and confirm == sel["promo"]["promo_id"] and sel["settlement"] == "estimate") else None
+    n_done = sum(1 for x in results if x["settlement"] == "confirmed")
+    return page(request, ctx, "promo_archive.html", months=months, sel_ym=sel_ym, results=results, sel=sel, mine=mine, ask=ask, msg=msg, err=err,
+                show_amount=show_amount, can_confirm=role == "main", today=today.isoformat(), n_done=n_done, n_open=len(results) - n_done,
+                SETTLE_KO=pm.SETTLE_KO, confirm_warn=CONFIRM_WARN)
+
+
+@router.post("/promo/archive")
+async def promo_archive_confirm(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
+    """결과 확정. 메인 관리자만 한다. 확인 칸(agree=yes)이 없으면 확정하지 않는다. pm.confirm_results 가 계정 표에서 다시 확인한다."""
+    f = await request.form()
+    if ctx["role"] != "main":
+        auth.log(con, ctx["login_id"], "access_denied", "/promo/archive confirm")
+        raise HTTPException(403, "메인 관리자만 결과를 확정합니다.")
+    raw = str(f.get("promo_id") or "")
+    if f.get("action") != "confirm" or not raw.isdigit():
+        raise HTTPException(400, "처리할 수 없는 요청입니다.")
+    pid = int(raw)
+    ym = str(f.get("ym") or "")
+    back = f"/promo/archive?{'ym=' + quote(ym) + '&' if ym.isdigit() else ''}p={pid}"
+    if f.get("agree") != "yes":
+        return RedirectResponse(f"{back}&confirm={pid}&err={quote('되돌릴 수 없다는 것을 확인하는 칸에 표시해야 확정합니다.')}#confirm", status_code=303)
+    try:
+        res = pm.confirm_results(con, pid, ctx, ref=date.today())
+    except PermissionError as e:
+        auth.log(con, ctx["login_id"], "access_denied", "/promo/archive confirm")
+        raise HTTPException(403, str(e)) from e
+    except ValueError as e:
+        return RedirectResponse(f"{back}&err={quote(str(e))}", status_code=303)
+    done = quote(f"결과 {res['summary']['n']}명을 확정했습니다.")
+    return RedirectResponse(f"{back}&msg={done}", status_code=303)
 
 
 @router.get("/promo/publish", response_class=HTMLResponse)
@@ -156,7 +198,7 @@ async def promo_publish_action(request: Request, ctx: dict = Depends(guard), con
 
 def _tier_form_defaults(con, ctx, line_id=None, promo_id=None):
     d = {"promo_id": "", "name": "", "kind": "weekly", "insurer_id": None, "insurer_name": "", "sector": "", "caution": "", "target_note": "",
-         "metric": "premium_monthly", "date_basis": "contract_date", "cap": "", "categories": [], "combine_rule": "", "pay_timing": "",
+         "metric": "premium_monthly", "date_basis": pm.DEFAULT_DATE_BASIS, "cap": "", "categories": [], "combine_rule": "", "pay_timing": "",
          "windows": [("", "", "")] * 3, "tiers": [("", "fixed", "", "")] * 6, "rates": [], "source_line_id": "", "origin": None, "status": None}
     num = lambda v: "" if v is None else f"{v:g}"
     if promo_id:
@@ -180,16 +222,63 @@ def _tier_form_defaults(con, ctx, line_id=None, promo_id=None):
     return d
 
 
+# ---------------------------------------------------------------- 원안 (D-21)
+# D-21 제안대로 지금 금액을 배포안으로 보고, 원안은 메인 관리자가 이 칸에 넣은 것만 쓴다. 비우면 원문 확인이다.
+# 구간과 조건 입력은 메뉴에서 메인 관리자에게만 열려 있고, pm.set_original 이 계정 표에서 다시 메인 관리자인지 본다.
+MONEY_KINDS = ("fixed", "rate")
+num_text = lambda v: "" if v is None else f"{v:g}"
+
+
+def original_rows(p) -> dict:
+    """원안 입력 칸. 금액 구간(정액과 비율)과 지급률 조각마다 한 줄. 비율과 지급률은 퍼센트로 보이고 받는다."""
+    tiers = [{"no": t["tier_no"], "min_value": t["min_value"], "kind": t["reward_kind"], "kind_ko": pm.REWARD_KO[t["reward_kind"]],
+              "dist": num_text(t["reward_value"] * 100 if t["reward_kind"] == "rate" and t["reward_value"] is not None else t["reward_value"]),
+              "orig": num_text(t["original_value"] * 100 if t["reward_kind"] == "rate" and t.get("original_value") is not None else t.get("original_value")),
+              "unit": "%" if t["reward_kind"] == "rate" else "원"}
+             for t in p["tiers"] if t["reward_kind"] in MONEY_KINDS]
+    rates = [{"seq": r["seq"], "label": (f"{r['option_label']}번 조건 · " if r["option_label"] else "") + pm.timing_text(r["pay_timing"]),
+              "dist": num_text(r["rate"] * 100 if r["rate"] is not None else None),
+              "orig": num_text(r["original_rate"] * 100 if r.get("original_rate") is not None else None)} for r in p["rates"]]
+    return {"tiers": tiers, "rates": rates, "has": pm.has_original(p), "missing": pm.MISSING_ORIGINAL}
+
+
 @router.get("/promo/tiers", response_class=HTMLResponse)
-def promo_tiers(request: Request, line: int | None = None, edit: int | None = None, err: str | None = None, ctx: dict = Depends(guard), con=Depends(get_con)):
-    return page(request, ctx, "promo_tiers.html", d=_tier_form_defaults(con, ctx, line, edit), err=err,
+def promo_tiers(request: Request, line: int | None = None, edit: int | None = None, err: str | None = None, msg: str | None = None,
+                ctx: dict = Depends(guard), con=Depends(get_con)):
+    d = _tier_form_defaults(con, ctx, line, edit)
+    plan = original_rows(pm._load(con, edit)) if edit else None
+    return page(request, ctx, "promo_tiers.html", d=d, err=err, msg=msg, plan=plan,
                 cats=_q(con, "SELECT code, name FROM product_category ORDER BY sort_order"),
                 insurers=_q(con, "SELECT insurer_id, name, sector FROM insurer WHERE active=1 ORDER BY name"))
+
+
+def _save_original(con, ctx, f) -> RedirectResponse:
+    """원안 칸 저장. 퍼센트로 받은 비율과 지급률은 100 으로 나눠 넘긴다. 메인 관리자가 아니면 403 이다."""
+    promo_id = int(f.get("promo_id") or 0) if str(f.get("promo_id") or "").isdigit() else 0
+    pct = lambda v: None if v is None else v / 100
+    num = lambda v: float(str(v).replace(",", "").strip()) if str(v or "").strip() else None
+    p = pm._load(con, promo_id)
+    if not p:
+        raise HTTPException(404, "없는 프로모션입니다.")
+    try:
+        tiers = {t["tier_no"]: (pct(num(f.get(f"o_tier_{t['tier_no']}"))) if t["reward_kind"] == "rate" else num(f.get(f"o_tier_{t['tier_no']}")))
+                 for t in p["tiers"] if t["reward_kind"] in MONEY_KINDS}
+        rates = {r["seq"]: pct(num(f.get(f"o_rate_{r['seq']}"))) for r in p["rates"]}
+        res = pm.set_original(con, promo_id, by=ctx, tiers=tiers, rates=rates)
+    except PermissionError as e:
+        auth.log(con, ctx["login_id"], "access_denied", f"/promo/tiers original {promo_id}")
+        raise HTTPException(403, str(e)) from e
+    except ValueError as e:
+        return RedirectResponse(f"/promo/tiers?edit={promo_id}&err={quote(str(e))}#original", status_code=303)
+    msg = f"원안을 저장했습니다. {len(res['changed'])}칸을 변경 기록에 남겼습니다."
+    return RedirectResponse(f"/promo/tiers?edit={promo_id}&msg={quote(msg)}#original", status_code=303)
 
 
 @router.post("/promo/tiers")
 async def promo_tiers_save(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
     f = await request.form()
+    if f.get("action") == "original":
+        return _save_original(con, ctx, f)
     num = lambda v: float(str(v).replace(",", "").strip()) if str(v or "").strip() else None
     promo_id = int(f["promo_id"]) if f.get("promo_id") else None
     try:
@@ -208,7 +297,7 @@ async def promo_tiers_save(request: Request, ctx: dict = Depends(guard), con=Dep
         common = dict(name=f["name"], windows=windows, tiers=tiers, by=ctx["login_id"], kind=f.get("kind", "weekly"),
                       insurer_id=ins["insurer_id"] if ins else None, insurer_name=(ins["name"] if ins else f.get("insurer_name", "").strip() or None),
                       sector=f.get("sector") or None, categories=f.getlist("categories"), target_note=f.get("target_note", "").strip() or None,
-                      metric=f.get("metric", "premium_monthly"), date_basis=f.get("date_basis", "contract_date"), per_contract_cap=num(f.get("cap")),
+                      metric=f.get("metric", "premium_monthly"), date_basis=f.get("date_basis") or pm.DEFAULT_DATE_BASIS, per_contract_cap=num(f.get("cap")),
                       combine_rule=f.get("combine_rule") or None, pay_timing=f.get("pay_timing") or None, caution=f.get("caution", "").strip() or None)
         if promo_id:
             res = pm.update(con, promo_id, **common)

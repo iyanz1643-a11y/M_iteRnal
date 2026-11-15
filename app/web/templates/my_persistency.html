@@ -1,0 +1,31 @@
+{% extends "base.html" %}{% import "_perf.html" as pf %}{% import "_persist.html" as px %}
+{% block body %}
+<p class="eyebrow">{{ ym|ymko }} 기준 · 본인</p>
+<h1 class="display">내 유지율</h1>
+{% if not has_agent %}<div class="card" style="margin-top:24px"><div class="k">설계사 정보가 이어지지 않은 계정입니다</div><div class="cap">메인 관리자에게 계정과 사번 연결을 요청하세요.</div></div>
+{% else %}
+<p class="lede">내 계약의 13회차와 25회차 유지율, 밀린 계약, 곧 13회차가 오는 계약입니다.</p>
+{{ px.stamp_line(stamps) }}
+{{ px.heroes(k) }}
+
+<h2 class="sec">13회차 도래 {{ due.total }}건</h2>
+<div class="card"><div class="k">{{ due.date_from|md }}부터 {{ due.date_to|md }}까지</div>
+  {% if due.months %}<div class="grid g3 keep" style="margin-top:12px">{% for m in due.months %}
+    <div data-ym="{{ m.ym }}"><div class="cap" style="margin:0">{{ m.ym|ymko }}</div><div class="mid">{{ m.count }}<span class="unit">건</span></div>
+      <div class="cap" style="margin:0">{% if m.at_risk %}<span class="chip bad">위험 겹침 {{ m.at_risk }}건</span>{% else %}위험 겹침 없음{% endif %}</div></div>{% endfor %}</div>
+  {% else %}<div class="cap">석 달 안에 13회차가 오는 유지 계약이 없습니다.</div>{% endif %}
+  <div class="cap">{{ due.note }} 날짜별로는 <a href="/calendar">일정</a>에서 봅니다.</div></div>
+
+<h2 class="sec">위험 계약 {{ risk.total }}건</h2>
+{{ px.risk_block(risk, '밀린 계약과 최근 실효된 계약이 없습니다') }}
+
+{% if sectors|length > 1 or insurers|length > 1 %}
+<h2 class="sec">업권별</h2>
+{{ px.split_table(sectors, '업권') }}
+<h2 class="sec">보험사별</h2>
+{{ px.split_table(insurers, '보험사') }}
+{% endif %}
+{% if yms|length > 1 %}<h2 class="sec">다른 달 보기</h2>{{ pf.pick_form(path, f, yms, ym) }}{% endif %}
+<p class="cap" style="margin-top:20px">{{ o.rates.note }} 이 화면에는 보험료와 수수료 금액이 없습니다. 13회차 시책의 지급과 환수는 보험사 정산을 따릅니다.</p>
+{% endif %}
+{% endblock %}
