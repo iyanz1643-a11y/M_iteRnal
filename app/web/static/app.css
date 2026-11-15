@@ -146,6 +146,10 @@ button.ghost{display:inline-flex;align-items:center;justify-content:center;min-h
 .sheet a.row{display:flex;align-items:center;min-height:48px;color:var(--ink);font-size:17px;padding:6px 0;border-bottom:1px solid var(--line)}
 .sheet a.row:last-child{border-bottom:none}
 .sheet a.row.on{color:var(--blue);font-weight:600}
+/* 나가기는 CSRF 토큰을 실은 POST 라 폼 단추다. 모양과 누르는 크기는 a.row 와 같게 둔다 */
+form.out{margin:0}
+.sheet form.out button.row{display:flex;align-items:center;width:100%;min-height:48px;color:var(--ink);background:none;border:none;font:inherit;font-size:17px;padding:6px 0;text-align:left;cursor:pointer}
+form.out button.link{display:inline-flex;align-items:center;min-height:48px;color:var(--blue);background:none;border:none;font:inherit;padding:0;cursor:pointer}
 
 /* ---------- 휴대폰 아래 탭 */
 .tabbar{display:none}

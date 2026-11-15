@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>나가기 · GA 업무 앱</title>
+{% include "_head.html" %}</head>
+<body><div class="login">
+<h1 class="display">나가시겠어요?</h1><p class="lede" style="margin-left:auto;margin-right:auto">나가면 이 계정으로 들어와 있는 다른 기기에서도 함께 나갑니다.</p>
+<form class="stack" method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  <button class="primary" type="submit">나가기</button>
+</form>
+<p class="cap" style="margin-top:24px"><a href="/">홈으로 돌아가기</a></p></div></body></html>

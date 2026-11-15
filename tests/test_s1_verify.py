@@ -281,7 +281,7 @@ def test_unknown_path_before_login_keeps_csrf_but_not_login(env):
         assert r.status_code == 303 and r.headers["location"] == "/login", path
     assert c.post("/login", data={"login_id": "admin", "password": PW, "csrf_token": token}).status_code == 303
     assert c.get("/org/tree").status_code == 200
-    assert c.get("/logout").status_code == 303
+    assert c.post("/logout", data={"csrf_token": TOKEN.search(c.get("/logout").text).group(1)}).status_code == 303
     r = c.get("/org/tree")
     assert r.status_code == 303 and r.headers["location"] == "/login"
     con = env["con"]

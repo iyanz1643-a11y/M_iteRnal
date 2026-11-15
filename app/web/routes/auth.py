@@ -1,5 +1,7 @@
 """로그인과 나가기. 메뉴 밖의 주소라 guard 대신 로그인 자체를 검사한다.
 
+나가기는 CSRF 토큰을 실은 POST /logout 이다. GET /logout 은 확인 화면만 보여 주고 세션을 바꾸지 않는다.
+
 로그인은 app/ops/ratelimit.py 의 IP 와 아이디 기준 실패 횟수 제한을 거친다. 세션 버전은 app/ops/sessions.py 다.
 """
 from fastapi import APIRouter, Depends, Form, Request
@@ -7,7 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.ops import ratelimit, sessions
 from app.web import auth
-from app.web.deps import get_con, renew_csrf, templates
+from app.web.deps import NO_STORE, get_con, renew_csrf, templates
 
 router = APIRouter()
 
@@ -35,9 +37,25 @@ def login(request: Request, login_id: str = Form(...), password: str = Form(...)
     return RedirectResponse("/me" if user["must_change_password"] else "/", status_code=303)
 
 
-@router.get("/logout")
+@router.get("/logout", response_class=HTMLResponse)
+def logout_confirm(request: Request, con=Depends(get_con)):
+    """나가기 확인 화면. GET 은 아무것도 바꾸지 않는다.
+
+    나가면 계정의 세션 버전이 올라 그 사람의 모든 기기가 함께 나간다. GET 으로 끊으면 다른 사이트의 링크나 그림 하나로
+    남을 내보낼 수 있으므로, 끊는 일은 CSRF 토큰을 실은 POST 에서만 한다. 로그인 전이거나 끝난 쿠키면 로그인 화면으로 보낸다.
+    """
+    uid = request.session.get("uid")
+    if not (uid and sessions.matches(request, con, uid)):
+        return RedirectResponse("/login", status_code=303)
+    resp = templates.TemplateResponse(request, "logout.html", {})
+    resp.headers["Cache-Control"] = NO_STORE
+    return resp
+
+
+@router.post("/logout")
 def logout(request: Request, con=Depends(get_con)):
-    """나가기. 쿠키가 아직 살아 있으면 계정의 세션 버전을 올려 복사해 둔 쿠키도 함께 끝낸다. 그 사람의 다른 기기도 나간다."""
+    """나가기. 앱 전체의 csrf_protect 를 지나야 여기에 온다. 쿠키가 아직 살아 있으면 계정의 세션 버전을 올려
+    복사해 둔 쿠키도 함께 끝낸다. 그 사람의 다른 기기도 나간다."""
     uid = request.session.get("uid")
     if uid and sessions.matches(request, con, uid):
         sessions.bump(con, uid)

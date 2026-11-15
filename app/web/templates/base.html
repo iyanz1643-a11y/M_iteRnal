@@ -36,7 +36,7 @@
   <div class="sheet-grid">
   {% for g in groups %}<section class="card"><h3>{{ ui.icon(g.id) }}{{ g.name }}</h3>
     {% for it in g['items'] %}<a class="row {{ 'on' if it.path == path }}" href="{{ it.path }}">{{ it.name }}</a>{% endfor %}
-    {% if g.id == 'common' %}<a class="row" href="/logout">나가기</a>{% endif %}</section>{% endfor %}
+    {% if g.id == 'common' %}<form class="out" method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="row" type="submit">나가기</button></form>{% endif %}</section>{% endfor %}
   </div>
 </div>
 <script>document.querySelectorAll('[data-sheet]').forEach(function(b){b.addEventListener('click',function(){document.getElementById('sheet').classList.toggle('open');window.scrollTo(0,0)})})</script>
