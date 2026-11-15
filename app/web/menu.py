@@ -58,6 +58,16 @@ def for_role(role: str) -> list:
     return out
 
 
+def entry(group: dict) -> str:
+    """묶음을 누르면 갈 화면. 그 사람에게 보이는 항목 가운데 만들어진(built) 첫 화면이고, 없으면 첫 항목이다.
+
+    menu.yaml 의 순서는 기획의 순서라 그대로 두고, 위 메뉴와 아래 탭이 아직 만들지 않은 안내 화면으로 먼저 가지 않게 한다.
+    group 은 for_ctx 가 돌려준 묶음이라 이미 권한으로 걸러져 있다.
+    """
+    items = group["items"]
+    return next((it["path"] for it in items if it["status"] == "built"), items[0]["path"])
+
+
 def find(path: str):
     for g in load()["groups"]:
         for it in g["items"]:

@@ -28,7 +28,7 @@ class AppStatic(StaticFiles):
 
     휴대폰 홈 화면 추가의 앱 정보 파일과 서비스 워커도 여기 있다. 서비스 워커는 /static/sw.js 에 두되
     Service-Worker-Allowed 머리글로 앱 전체(/)의 오프라인 안내를 맡긴다. 늘 새 판을 받도록 브라우저 캐시는 쓰지 않는다.
-    서비스 워커가 무엇을 보관하는지는 static/sw.js 의 머리말과 tests/test_pwa.py 에 있다.
+    서비스 워커가 무엇을 보관하는지는 static/sw.js 의 머리말과 tests/test_s2_screens.py 에 있다.
     """
     async def get_response(self, path, scope):
         resp = await super().get_response(path, scope)

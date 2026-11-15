@@ -37,7 +37,7 @@ from app.loader.excel_loader import DuplicateFile
 from app.loader.sheet import HeaderMismatch
 from app.org.sync import org_texts
 from app.web import auth
-from app.web.deps import _in, _q, get_con, guard, page
+from app.web.deps import _in, _q, edu_today, get_con, guard, page
 from app.web.routes import card as card_route
 from app.web.routes.staff import upload_dir
 
@@ -60,7 +60,8 @@ SESSION_STATUS_KO = {"planned": "예정", "held": "마침", "cancelled": "취소
 
 # ---------------------------------------------------------------- 도우미
 def _today() -> date:
-    return date.today()
+    """교육 화면의 기준일. deps.edu_today 한 곳에서 정한다."""
+    return edu_today()
 
 
 def _day_label(d: date) -> str:

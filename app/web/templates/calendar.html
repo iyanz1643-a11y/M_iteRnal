@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block body %}
-<p class="eyebrow">{{ SCOPES[ctx.scope] }} · 기한은 기준일 {{ ref|md }}로 따집니다</p>
+<p class="eyebrow">{{ SCOPES[ctx.scope] }} · 프로모션은 기준일 {{ ref|md }}, 교육 기한은 오늘 {{ edu_ref|md }}로 따집니다</p>
 <h1 class="display">{{ y }}년 {{ mo }}월 일정 {{ n }}건</h1>
 <p class="lede">프로모션 기간과 마감, 교육 차수, 교육 기한을 한곳에서 봅니다.</p>
 <div class="cal-bar">

@@ -31,6 +31,7 @@ def _qs(params: dict, **kw) -> str:
 
 
 templates.env.globals["qs"] = _qs
+templates.env.globals["group_entry"] = menu.entry
 
 
 def get_con():
@@ -166,6 +167,15 @@ def _perf(con, ym, agent_ids):
                                   WHERE s.period_type='month' AND s.period_key=?) s ON s.agent_id=a.agent_id
                        WHERE a.agent_id IN ({q}) AND (a.status='active' OR h.org_id IS NOT NULL) ORDER BY COALESCE(s.converted_premium,0) DESC, a.internal_code""",
               (ym, ym, ym, ym, *ids))
+
+
+def edu_today() -> date:
+    """교육 기한의 기준일. 교육은 실적 자료와 상관없는 날짜 일이라 모든 교육 화면이 오늘을 쓴다.
+
+    팀 교육 진척도, 내 교육, 홈의 할 일, 신인 정착, 알림함의 교육 기한, 일정의 교육 기한이 모두 이 함수를 부른다.
+    프로모션의 기준일은 자료 기준 달의 pm.ref_date 이고 이 함수와 따로다.
+    """
+    return date.today()
 
 
 def _last_load(con):

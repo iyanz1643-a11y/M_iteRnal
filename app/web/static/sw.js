@@ -5,7 +5,7 @@
    - 화면 요청은 늘 서버로 보낸다. 연결이 없을 때만 오프라인 안내를 보여 준다.
    - 정적 파일은 서버의 새 것을 먼저 쓰고, 연결이 없을 때만 보관본을 쓴다.
    - 그 밖의 요청과 POST 는 손대지 않는다.
-   tests/test_pwa.py 가 이 규칙을 코드로 검사한다. 목록을 바꾸면 CACHE 의 판 번호를 올린다. */
+   tests/test_s2_screens.py 가 이 규칙을 코드로 검사한다. 목록을 바꾸면 CACHE 의 판 번호를 올린다. */
 const CACHE = 'ga-static-v1';
 const OFFLINE = '/static/offline.html';
 const STATIC = [

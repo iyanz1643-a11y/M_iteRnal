@@ -142,3 +142,93 @@ def test_static_folder_holds_no_data():
     allowed = {".css", ".js", ".png", ".html", ".webmanifest"}
     files = [p for p in STATIC.rglob("*") if p.is_file()]
     assert files and all(p.suffix in allowed for p in files), [p.name for p in files if p.suffix not in allowed]
+
+
+# ---------------------------------------------------------------- 누르는 크기 48픽셀(docs/12 1장 5)
+CSS_RULE = re.compile(r"([^{}]+)\{([^{}]*)\}")
+TAPPABLE = re.compile(r"(?:^|[\s,>+~(])(?:a|button)(?:[.:\[\s]|$)|\.ghost\b|\.pickbox\b|label\b")
+
+
+def _css_rules():
+    """app.css 의 규칙을 (선택자 하나, 선언 문자열) 로 편다. @media 안의 규칙도 같은 꼴로 나온다."""
+    src = re.sub(r"/\*.*?\*/", "", (STATIC / "app.css").read_text(encoding="utf-8"), flags=re.S)
+    src = re.sub(r"@media[^{]*\{", "", src)                                  # 바깥 괄호를 벗겨 안쪽 규칙만 남긴다
+    out = []
+    for sel, body in CSS_RULE.findall(src):
+        for one in sel.split(","):
+            out.append((" ".join(one.split()), body))
+    return out
+
+
+def _min_height(body):
+    m = re.search(r"(?:^|;)\s*min-height:\s*(\d+)px", body) or re.search(r"(?:^|;)\s*height:\s*(\d+)px", body)
+    return int(m.group(1)) if m else None
+
+
+@pytest.mark.parametrize("selector", [".nav-groups a", ".nav-right a", ".nav-right button", ".subnav a", ".seg a", "button.ghost", "a.ghost",
+                                      ".notif-title a", ".tabbar a", ".tabbar button", ".sheet a.row", "button.ghost.notif-all",
+                                      ".notif-act button.ghost", ".cal-bar .seg a", ".promo-acts .ghost"])
+def test_tap_targets_are_48px(selector):
+    """묶음 메뉴, 거르기 알약, 종과 내 정보, 표 안 단추, 알림 제목 링크, 아래 탭, 더보기 목록의 누르는 곳이 48픽셀 이상이다."""
+    hits = [_min_height(b) for s, b in _css_rules() if s == selector and _min_height(b) is not None]
+    assert hits and min(hits) >= 48, (selector, hits)
+
+
+def test_no_tappable_rule_sets_height_under_48px():
+    """누르는 요소에 48픽셀보다 작은 높이를 다시 주는 규칙이 없다. 미디어 쿼리 안도 본다."""
+    small = [(s, _min_height(b)) for s, b in _css_rules() if TAPPABLE.search(s) and (_min_height(b) or 48) < 48]
+    assert not small, small
+
+
+def test_widened_pills_keep_their_look():
+    """알약과 표 안 단추는 보이는 크기를 그대로 두고 투명 테두리로 누르는 곳만 넓힌다. 바탕색이 테두리에 칠해지면 커 보인다."""
+    rules = dict(_css_rules())
+    for sel in (".subnav a", ".seg a", "button.ghost", "a.ghost"):
+        assert "border:" in rules[sel] and "transparent" in rules[sel] and "background-clip:padding-box" in rules[sel], sel
+
+
+# ---------------------------------------------------------------- 아래 탭과 위 메뉴는 만들어진 첫 화면으로 간다
+def _role_logins(env):
+    con = env["con"]
+    manager = con.execute("""SELECT a.internal_code FROM org_manager m JOIN agent a ON a.agent_id=m.agent_id JOIN org_unit o ON o.org_id=m.org_id
+                             WHERE o.level='branch' AND m.effective_to IS NULL LIMIT 1""").fetchone()[0]
+    agent = con.execute("SELECT internal_code FROM agent WHERE status='active' AND agent_id NOT IN (SELECT agent_id FROM org_manager) LIMIT 1").fetchone()[0]
+    return {"main": "admin", "manager": manager, "agent": agent}
+
+
+@pytest.mark.parametrize("role,sales", [("agent", "/sales/card"), ("manager", "/sales/card"), ("main", "/sales/card-approve")])
+def test_tabbar_goes_to_first_built_screen(env, role, sales):
+    from app.web import menu
+    c = login(env, _role_logins(env)[role])
+    html = c.get("/").text
+    tabbar = re.search(r'<nav class="tabbar"[^>]*>(.*?)</nav>', html, re.S).group(1)
+    hrefs = re.findall(r'href="([^"]+)"', tabbar)
+    assert sales in hrefs, (role, hrefs)
+    assert "/sales/leads" not in hrefs and "/sales/assign" not in hrefs, (role, hrefs)
+    for h in hrefs:                                                            # 아래 탭은 모두 만들어진 화면이고 그 사람에게 열린다
+        it = menu.find(h)
+        assert it and it["status"] == "built", (role, h)
+        assert c.get(h).status_code == 200, (role, h)
+    top = re.findall(r'href="([^"]+)"', re.search(r'<nav class="nav-groups"[^>]*>(.*?)</nav>', html, re.S).group(1))
+    assert sales in top, (role, top)
+
+
+def test_group_entry_falls_back_to_first_item_when_nothing_built():
+    from app.web import menu
+    g = {"items": [{"path": "/a", "status": "planned"}, {"path": "/b", "status": "legacy"}]}
+    assert menu.entry(g) == "/a"
+    g["items"].append({"path": "/c", "status": "built"})
+    assert menu.entry(g) == "/c"
+
+
+# ---------------------------------------------------------------- 실적에는 기준 시각을 붙인다
+def test_hall_and_team_members_show_reference_time_in_words(env):
+    c = login(env)
+    hall = c.get("/perf/hall").text
+    line = re.search(r'<p class="cap perf-fresh">(.*?)</p>', hall, re.S)
+    assert line, "명예의전당 기준 시각 줄"
+    assert re.search(r"계산한 순위가 기준입니다|순위는 아직 계산하지 않았습니다", line.group(1))
+    assert re.search(r"적재 기준입니다|적재한 계약 자료가 없습니다", line.group(1))
+    team = c.get("/team/members").text
+    assert not re.search(r"\d{4}-\d\d-\d\d \d\d:\d\d(:\d\d)? 적재 기준", team)            # 날짜 꼴 그대로 적지 않는다
+    assert re.search(r"\d+월 \d+일 \d+시 \d\d분 적재 기준입니다\.|적재한 계약 자료가 없습니다", team)

@@ -231,5 +231,5 @@ def perf_hall(request: Request, metric: str = "recognized_premium", ctx: dict = 
     metric = pick(metric, HALL_METRICS, "recognized_premium")
     prev = ym_add(ctx["ym"], -1)
     closed = bool(con.execute("SELECT 1 FROM close_period WHERE period_ym=? AND status='closed'", (prev,)).fetchone())
-    return page(request, ctx, "perf_hall.html", prev=prev, closed=closed, metric=metric, METRICS=HALL_METRICS,
+    return page(request, ctx, "perf_hall.html", prev=prev, closed=closed, metric=metric, METRICS=HALL_METRICS, fresh=fresh(con, prev),
                 rank=hall_ranking(con, ctx, prev, metric), divisions=hall_divisions(con, ctx, prev), history=hall_history(con, ctx))

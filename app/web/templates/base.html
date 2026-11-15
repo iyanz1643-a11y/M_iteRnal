@@ -6,7 +6,7 @@
 <header class="nav">
   <a class="brand" href="/">GA 업무 앱</a>
   <nav class="nav-groups" aria-label="주 메뉴">
-    {% for g in groups if g.id != 'common' %}<a class="{{ 'on' if item and item.group == g.id }}" href="{{ g['items'][0].path }}">{{ g.name }}</a>{% endfor %}
+    {% for g in groups if g.id != 'common' %}<a class="{{ 'on' if item and item.group == g.id }}" href="{{ group_entry(g) }}">{{ g.name }}</a>{% endfor %}
   </nav>
   <div class="nav-right">
     {% set nb = notif_badge(ctx) if notif_badge is defined else 0 %}
@@ -25,7 +25,7 @@
 </main>
 <nav class="tabbar" aria-label="아래 탭">
   {% for gid in mobile_tabs %}{% for g in groups if g.id == gid %}
-  <a class="{{ 'on' if item and item.group == g.id }}" href="{{ g['items'][0].path }}">{{ ui.icon(g.id) }}{{ g.name }}</a>
+  <a class="{{ 'on' if item and item.group == g.id }}" href="{{ group_entry(g) }}">{{ ui.icon(g.id) }}{{ g.name }}</a>
   {% endfor %}{% endfor %}
   <button type="button" data-sheet>{{ ui.icon('common') }}더보기</button>
 </nav>

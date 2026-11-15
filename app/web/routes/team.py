@@ -21,7 +21,7 @@ from fastapi.responses import HTMLResponse
 from app.engine import education as edu
 from app.engine import performance
 from app.org.sync import org_texts
-from app.web.deps import _in, _last_load, _perf, _q, get_con, guard, page
+from app.web.deps import _in, _last_load, _perf, _q, edu_today, get_con, guard, page
 
 router = APIRouter()
 ONBOARD_DAYS = 90
@@ -35,7 +35,8 @@ def team_members(request: Request, ctx: dict = Depends(guard), con=Depends(get_c
 
 # ---------------------------------------------------------------- 신인 정착
 def _today() -> date:
-    return date.today()
+    """신인 정착은 교육 기한을 함께 보므로 교육 화면과 같은 기준일 deps.edu_today 를 쓴다."""
+    return edu_today()
 
 
 def _scope(con, ctx) -> list:

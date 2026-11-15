@@ -3,6 +3,9 @@
 <p class="eyebrow">{{ prev|ymko }} · {{ '마감 확정' if closed else '마감 전' }}</p>
 <h1 class="display">명예의전당</h1>
 <p class="lede">지난달 순위와 수상자입니다. 이번 달 순위는 집계 중이라 랭킹 화면에서 봅니다.</p>
+{% set run_at = rank.run_at if rank else none %}{% set behind = run_at and fresh.last_load and fresh.last_load > run_at %}
+<p class="cap perf-fresh"><span class="dot {{ 'warn' if behind else ('' if run_at else 'off') }}"></span>{% if run_at %}{{ run_at|when }}에 계산한 순위가 기준입니다.{% else %}{{ prev|ymko }} 순위는 아직 계산하지 않았습니다.{% endif %}
+{% if fresh.last_load %} 계약은 {{ fresh.last_load|when }} 적재 기준입니다.{% else %} 적재한 계약 자료가 없습니다.{% endif %}{% if behind %} 순위를 계산한 뒤 계약을 다시 올려 랭킹 화면의 숫자와 다를 수 있습니다.{% endif %}</p>
 
 <h2 class="sec">{{ prev[4:]|int }}월 전체 순위</h2>
 <div class="seg perf-seg">{% for k, v in METRICS.items() %}<a class="{{ 'on' if k == metric }}" href="{{ path }}{{ qs({}, metric=k if k != 'recognized_premium' else '') }}">{{ v }}</a>{% endfor %}</div>

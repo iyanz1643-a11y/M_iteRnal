@@ -3,6 +3,7 @@
 - 프로모션은 진행 중 프로모션 화면과 같은 pm.listing 으로 고른다. 설계사와 관리자에게는 게시된 설계사 몫만 보인다.
 - 교육 차수는 education.list_courses 로 그 사람에게 보이는 과정을 고른 뒤 education.sessions 로 낸다. 수료자 수는 범위 안 사람만 센다.
 - 교육 기한은 education.not_done 으로 낸다. 설계사는 본인 것, 관리자와 메인 관리자는 범위 안 사람 수만 적는다.
+- 기준일은 둘이다. 프로모션은 자료 기준 달의 pm.ref_date, 교육 기한은 교육 화면과 같은 deps.edu_today(오늘)다.
 - 13회차 도래는 도래를 내는 계산이 아직 없어 넣지 않는다.
 - 휴대폰에서는 목록이 먼저 보이고 달력은 접어 둔다. view=month 로 열면 휴대폰에서도 달력을 보인다.
 """
@@ -19,7 +20,7 @@ from fastapi.responses import HTMLResponse
 from app.engine import education as edu
 from app.engine import promotion as pm
 from app.web import menu
-from app.web.deps import _period_text, get_con, guard, page
+from app.web.deps import _period_text, edu_today, get_con, guard, page
 
 router = APIRouter()
 MONTH_RE = re.compile(r"^(20\d\d)-(0[1-9]|1[0-2])$")
@@ -54,8 +55,9 @@ def _ev(day, kind, title, sub="", link=None, tone=""):
     return {"day": day, "kind": kind, "kind_ko": KIND_KO[kind], "title": title, "sub": sub, "link": link, "tone": tone}
 
 
-def events(con, ctx, first: date, last: date, ref: date) -> tuple:
-    """(그 달에 걸친 프로모션 기간 목록, 하루짜리 일정 목록)."""
+def events(con, ctx, first: date, last: date, ref: date, edu_ref: date | None = None) -> tuple:
+    """(그 달에 걸친 프로모션 기간 목록, 하루짜리 일정 목록). ref 는 프로모션 기준일, edu_ref 는 교육 기한 기준일이다."""
+    edu_ref = edu_ref or edu_today()
     ym = first.strftime("%Y%m")
     spans, evs = [], []
     for p in pm.listing(con, ym, ctx["role"]):
@@ -86,7 +88,7 @@ def events(con, ctx, first: date, last: date, ref: date) -> tuple:
                 status = {"cancelled": "취소", "held": "진행함"}.get(s["status"])
                 evs.append(_ev(max(f, first).isoformat(), "edu_session", c["name"] + (f" ({status})" if status else ""), sub, sess_link,
                                "" if s["status"] == "cancelled" else "good"))
-        rows = edu.not_done(con, scope, as_of=ref)
+        rows = edu.not_done(con, scope, as_of=edu_ref)
     except sqlite3.OperationalError:                         # 교육 표가 없는 오래된 DB
         con.rollback()
         rows = []
@@ -115,7 +117,8 @@ def calendar_page(request: Request, m: str | None = None, view: str | None = Non
     first = date(y, mo, 1)
     last = date(y, mo, calendar.monthrange(y, mo)[1])
     ref = pm.ref_date(ctx["ym"])
-    spans, evs = events(con, ctx, first, last, ref)
+    edu_ref = edu_today()
+    spans, evs = events(con, ctx, first, last, ref, edu_ref)
     by_day: dict = {}
     for e in evs:
         by_day.setdefault(e["day"], []).append(e)
@@ -130,4 +133,4 @@ def calendar_page(request: Request, m: str | None = None, view: str | None = Non
     next_m = (last + timedelta(days=1)).strftime("%Y-%m")
     days = [{"date": k, "wd": WEEK_KO[(date.fromisoformat(k).weekday() + 1) % 7], "events": v} for k, v in sorted(by_day.items())]
     return page(request, ctx, "calendar.html", y=y, mo=mo, weeks=weeks, days=days, spans=spans, n=len(evs), view=view if view in ("month", "list") else None,
-                prev_m=prev_m, next_m=next_m, this_m=today.strftime("%Y-%m"), today=today.isoformat(), ref=ref.isoformat(), WEEK_KO=WEEK_KO)
+                prev_m=prev_m, next_m=next_m, this_m=today.strftime("%Y-%m"), today=today.isoformat(), ref=ref.isoformat(), edu_ref=edu_ref.isoformat(), WEEK_KO=WEEK_KO)

@@ -226,10 +226,6 @@ def _course_due_soon_by_data_month(env):
     return cid, ref, due
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "교육 기한의 기준일이 화면마다 다르다. 팀 교육 진척도와 홈은 오늘(app/web/routes/edu.py _today), 알림함과 일정은 "
-    "자료 기준 달 말일 pm.ref_date(ctx['ym']) 이다(app/web/routes/notify.py _edu_notes, app/web/routes/schedule.py events). "
-    "자료 달이 지난 달이면 이미 지난 기한이 알림함에는 '기한 임박' 으로, 팀 교육 진척도에는 '지남' 으로 나온다. web-screen 이 기준일을 하나로 맞춘다"))
 def test_education_due_state_same_on_team_home_notifications_calendar(env):
     cid, ref, due = _course_due_soon_by_data_month(env)
     boss = login(env, env["mgr"]["code"])
@@ -248,9 +244,6 @@ def test_education_due_state_same_on_team_home_notifications_calendar(env):
     assert len(set(states.values())) == 1, sorted(states.items())
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "알림함과 일정은 자료 기준 달 말일까지의 수료만 본다(app/engine/education.py _completions 의 completed_on<=ref). "
-    "그 뒤 오늘까지 관리자가 수료 확인한 사람도 알림함에는 기한 임박 미수료자로 남는다. 팀 교육 진척도는 수료로 본다. web-screen"))
 def test_confirmed_completion_disappears_from_notifications(env):
     cid, ref, due = _course_due_soon_by_data_month(env)
     con, who = env["con"], env["inside"][0]
