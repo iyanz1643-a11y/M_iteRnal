@@ -2,13 +2,14 @@
 
 조립기가 하는 일은 네 가지다.
 1. 권한 범위로 거른다. 기능마다 쓸 수 있는 역할이 정해져 있고, 사람에 딸린 줄은 ctx["agent_ids"] 안의 것만 넣는다.
-2. 개인정보를 가린다. 주민번호, 휴대폰과 전화번호, 전자우편 꼴은 지우고, 넘겨받은 사람 이름은 고객 가, 설계사 가 로 바꾼다.
+2. 개인정보를 가린다. 주민번호와 외국인 등록번호(줄표 없는 13자리 포함), 휴대폰과 전화번호(+82 꼴 포함), 전자우편 꼴은 지우고, 넘겨받은 사람 이름은 고객 가, 설계사 가 로 바꾼다.
    이름, 연락처, 주민번호, 주소, 계좌 열쇠를 가진 값은 아예 넣지 않는다. D-25 제안대로 이름과 연락처를 뺀 요약만 넣는다.
 3. 근거 줄에 번호를 붙인다. [1] 부터다. 근거 안의 명령문은 자료로만 넣고 몇 줄에 있었는지 남긴다(원칙 6).
 4. 지침 버전을 찍는다. 확정된 지침만 쓴다(원칙 3).
 
 숫자 원칙: 모델에게 주는 숫자는 근거 줄의 원문과 facts 에 넣은 계산 엔진의 값뿐이다.
-조립한 글에서 뽑은 숫자 모음 numbers 를 checks.check 가 받아, 출력에 그 밖의 숫자가 있으면 막는다.
+근거 본문, 계산값, 할 일에서 뽑은 숫자 모음 numbers 를 checks.check 가 받아, 출력에 그 밖의 숫자가 있으면 막는다.
+오늘 날짜와 근거 번호 [n] 의 숫자는 numbers 에 넣지 않는다. 오늘 날짜는 dates 로 두어 날짜 꼴 그대로 쓸 때만 받는다.
 """
 from __future__ import annotations
 
@@ -29,8 +30,15 @@ FEATURE_ROLES = {
     "monthly_report": {"main"},
 }
 
-RRN = re.compile(r"(?<![0-9])[0-9]{6}\s?-\s?[1-4][0-9]{6}(?![0-9])")
-PHONE = re.compile(r"(?<![0-9])0[0-9]{1,2}[-. ]?[0-9]{3,4}[-. ]?[0-9]{4}(?![0-9])")
+# 개인정보 꼴. 가림과 거절이 모두 이 한 곳을 쓴다. has_pii 를 보라.
+# 주민번호와 외국인 등록번호: 앞 여섯 자리, 뒷자리 첫 숫자 1 에서 8, 나머지 여섯 자리.
+# 줄표가 있으면 앞 여섯 자리를 따지지 않는다. 줄표가 없는 13자리는 앞 여섯 자리가 생년월일 꼴일 때만 잡아 금액과 번호를 덜 가린다.
+_YYMMDD = r"[0-9]{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])"
+RRN = re.compile(r"(?<![0-9])(?:[0-9]{6}\s?[-‐‑–—]\s?|" + _YYMMDD + r"\s?)[1-8][0-9]{6}(?![0-9])")
+# 전화번호: 0 으로 시작하는 국내 꼴과 +82 나 0082 로 시작하는 국제 꼴. 국제 꼴의 (0) 과 띄어쓰기와 줄표 변형을 받는다.
+_SEP = r"[-‐‑–—. ]?"
+PHONE = re.compile(r"(?:(?<![0-9])0|(?:\+|(?<![0-9])00)\s?82\s?[-‐‑–—.]?\s?(?:\(0\)\s?|0)?)"
+                   r"[0-9]{1,2}" + _SEP + r"[0-9]{3,4}" + _SEP + r"[0-9]{4}(?![0-9])")
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 PII_KEYS = {"name", "customer_name", "agent_name", "insured_name", "contractor_name", "display_name", "phone", "mobile", "tel",
             "contact", "email", "rrn", "resident_no", "jumin", "address", "addr", "account", "account_no", "bank_account",
@@ -38,6 +46,30 @@ PII_KEYS = {"name", "customer_name", "agent_name", "insured_name", "contractor_n
 LABELS = "가나다라마바사아자차카타파하"
 
 NUM = re.compile(r"[0-9][0-9,]*(?:\.[0-9]+)?")
+# 근거 번호 [3] 이나 [근거 3]. 숫자가 아니라 근거를 가리키는 표시라 허용 숫자에도, 출력의 숫자 점검에도 넣지 않는다.
+CITE = re.compile(r"\[(?:근거\s*)?([0-9]+)\]")
+# 날짜 꼴. 2026-11-15, 2026.11.15, 2026/11/15, 2026년 11월 15일.
+DATE = re.compile(r"(?<![0-9])((?:19|20)[0-9]{2})\s*(?:[-./]|년)\s*([0-9]{1,2})\s*(?:[-./]|월)\s*([0-9]{1,2})(?:\s*일)?(?![0-9])")
+
+
+def _ymd(d) -> tuple | None:
+    if isinstance(d, date):
+        return (d.year, d.month, d.day)
+    if isinstance(d, tuple) and len(d) == 3:
+        return tuple(int(x) for x in d)
+    m = DATE.fullmatch(str(d or "").strip())
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+
+
+def strip_dates(text: str, dates) -> str:
+    """dates 에 든 날짜가 날짜 꼴 그대로 있으면 지운다. 연, 월, 일을 따로 쓴 숫자는 그대로 두어 숫자 점검에 걸린다."""
+    want = {t for t in (_ymd(d) for d in dates or ()) if t}
+    if not want:
+        return text or ""
+
+    def sub(m):
+        return " " if (int(m.group(1)), int(m.group(2)), int(m.group(3))) in want else m.group(0)
+    return DATE.sub(sub, text or "")
 
 
 class OutOfScope(PermissionError):
@@ -91,6 +123,14 @@ def mask(text, people: dict | None = None) -> str:
     return Masker(people)(text)
 
 
+def has_pii(*texts) -> bool:
+    """주민번호, 외국인 등록번호, 전화번호, 전자우편 꼴이 하나라도 있는지. 심사 요청과 결재와 화면의 거절이 함께 쓴다."""
+    probe = Masker()
+    for t in texts:
+        probe(t)
+    return probe.count > 0
+
+
 def drop_pii_keys(d: dict) -> dict:
     """이름, 연락처, 주민번호, 주소, 계좌 열쇠를 뺀다. D-25."""
     return {k: v for k, v in d.items() if str(k).lower() not in PII_KEYS}
@@ -136,6 +176,7 @@ class Context:
     evidence: list = field(default_factory=list)
     facts: dict = field(default_factory=dict)
     numbers: set = field(default_factory=set)
+    dates: set = field(default_factory=set)      # 날짜 꼴 그대로일 때만 받는 날짜. 오늘 날짜다
     masked: int = 0
     injection_lines: list = field(default_factory=list)
     input_hash: str = ""
@@ -184,15 +225,19 @@ def assemble(feature: str, ctx: dict, *, task: str, evidence=None, facts: dict |
     task_s = _neutralize(m(task))
 
     system = "\n\n".join(s for s in (guides.COMMON_RULES, g["text"], extra_system) if s)
+    facts_s = "\n".join(f"- {k}: {v}" for k, v in clean_facts.items())
     parts = [f"<오늘>{today_s}</오늘>"]
     if clean_facts:
-        parts.append("<계산값>\n" + "\n".join(f"- {k}: {v}" for k, v in clean_facts.items()) + "\n</계산값>")
+        parts.append("<계산값>\n" + facts_s + "\n</계산값>")
     parts.append("<자료>\n" + ("\n".join(f"[{e.no}] {e.text}" for e in evs) if evs else "(근거 줄 없음)") + "\n</자료>")
     parts.append(f"<할 일>\n{task_s}\n</할 일>")
-    allowed = numbers("\n\n".join(parts))
+    # 허용 숫자는 근거 본문, 계산값, 질문에서만 뽑는다. 오늘 날짜와 근거 번호 [n] 은 넣지 않는다.
+    # 오늘 날짜는 dates 로 따로 두어 날짜 꼴 그대로 쓸 때만 받는다.
+    allowed = numbers("\n".join([*(e.text for e in evs), facts_s, CITE.sub(" ", task_s)]))
+    today_ymd = _ymd(today)
     if examples:
         parts.append("<예시>\n" + "\n".join(_neutralize(str(x)) for x in examples) + "\n</예시>")
     user = "\n\n".join(parts)
     h = hashlib.sha256(f"{g['version']}\n{system}\n{user}".encode()).hexdigest()
     return Context(feature=feature, guide_key=gkey, guide_version=g["version"], login_id=ctx.get("login_id"), system=system, user=user,
-                   evidence=evs, facts=clean_facts, numbers=allowed, masked=m.count, injection_lines=inj, input_hash=h)
+                   evidence=evs, facts=clean_facts, numbers=allowed, dates={today_ymd} if today_ymd else set(), masked=m.count, injection_lines=inj, input_hash=h)

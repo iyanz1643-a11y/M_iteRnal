@@ -309,6 +309,25 @@ def test_review_refuses_text_with_contact(env):
         review.submit(env["con"], env["main"], kind="landing", audience="customer", text=f"상담은 {PHONE} 로 주세요")
 
 
+def test_pii_patterns_catch_variants_and_spare_plain_numbers(env):
+    rrn_plain = "850505" + "2345678"
+    foreign = ["850505" + "-" + d + "345678" for d in "5678"]
+    intl = ["+82 " + "10-" + "9876" + "-" + "5432", "+82-" + "10-" + "9876" + "-" + "5432", "+82" + "1098765432",
+            "+82 (0)" + "10 9876 5432", "+82 " + "010 9876 5432", "0082-" + "10-" + "9876" + "-" + "5432", "+82 2 " + "123 4567"]
+    for t in [rrn_plain, "850505 " + "2345678", *foreign, *intl]:
+        assert aictx.has_pii(f"메모 {t} 끝"), t
+        assert t not in aictx.mask(f"메모 {t} 끝"), t
+    # 금액, 증권번호 끝 네 자리, 날짜, 생년월일 꼴이 아닌 13자리는 가리지 않는다
+    for t in ["보험료 1,234,567원", "1234567원", "증권번호 끝 4567", "2026-11-15", "2026.11.15", "20261115", "2026년 11월 15일",
+              "13회차", "200%", "1234567890123", "3000000000000", "12,345,678,901,234", "850505-9345678"]:
+        assert not aictx.has_pii(t) and aictx.mask(t) == t, t
+    # 심사 요청과 결재의 거절도 같은 규칙을 쓴다
+    with pytest.raises(ValueError, match="주민번호"):
+        review.submit(env["con"], env["main"], kind="notice", audience="internal", text=f"확인용 {foreign[0]} 입니다")
+    with pytest.raises(ValueError, match="연락처"):
+        review.submit(env["con"], env["main"], kind="notice", audience="internal", text=f"문의 {intl[0]}")
+
+
 # ------------------------------------------------------------------ 숫자 생성 막기
 def test_numbers_must_come_from_input():
     c = checks.check("월초 보험료의 70% 입니다", allowed_numbers=aictx.numbers("월초P * 50%(13회차 지급)"))
@@ -329,6 +348,17 @@ def test_qa_blocks_invented_numbers(env):
     assert nocite["status"] == "blocked"
     push = plan_qa.ask(con, env["main"], q, today=TODAY, client=AIClient(con, FakeTransport(["200% 라서 가입하세요 [1]"])))
     assert push["status"] == "blocked" and any("금지 표현" in p for p in push["problems_ko"])
+
+
+def test_allowed_numbers_skip_today_and_citation_marks(env):
+    c = aictx.assemble("plan_qa", env["main"], task="[2] 의 10월 시책은요?", today=date(2026, 11, 17),
+                       evidence=[("x", "시상내용 200% (익월)"), ("y", "비고")])
+    assert c.numbers == {"200", "10"}                   # 근거 본문과 질문뿐이다. 오늘 날짜와 근거 번호 [1] [2] 는 없다
+    assert "<오늘>2026-11-17</오늘>" in c.user
+    assert checks.check("기준일 2026-11-17 입니다 [1]", c).ok                # 날짜 꼴 그대로면 받는다
+    assert checks.check("기준일 2026년 11월 17일 입니다 [1]", c).ok
+    for bad in ("17% 를 드립니다 [1]", "2026년 시책입니다 [1]", "11월 17일 입니다 [1]", "2명 [1]"):
+        assert not checks.check(bad, c).ok, bad
 
 
 def test_qa_without_evidence_does_not_call(env):
@@ -451,6 +481,37 @@ def test_review_not_required_for_internal(env):
     assert rv["status"] == "stopped" and rv["can_approve"]
     done = review.decide(con, env["main"], rv["review_id"], True, final_text="월간 회의 안내입니다. 장소는 본부입니다.")
     assert done["status"] == "approved" and done["human_edited"] == 1
+
+
+def test_revision_adopted_in_last_round_is_marked_unreviewed(env):
+    con = env["con"]
+    n = {"themis": 0}
+
+    def themis(user):
+        n["themis"] += 1
+        if n["themis"] < review.MAX_ROUNDS:
+            return {"verdict": "revise", "quote": None, "reason": "다듬기", "revised": None}
+        return {"verdict": "revise", "quote": None, "reason": "다듬기", "revised": "월간 회의는 본부에서 합니다."}
+    rv = review.submit(con, env["main"], kind="notice", audience="internal", text="월간 회의 안내입니다.",
+                       client=AIClient(con, FakeTransport(_panel_reply(themis))))
+    assert rv["status"] == "stopped" and rv["stop_reason"] == "rounds" and rv["current_text"] == "월간 회의는 본부에서 합니다."
+    assert rv["unreviewed"] and rv["unreviewed_ko"] == review.UNREVIEWED and rv["can_approve"]
+    with pytest.raises(ValueError, match="심사되지 않았습니다"):
+        review.decide(con, env["main"], rv["review_id"], True)
+    done = review.decide(con, env["main"], rv["review_id"], True, confirm_unreviewed=True)
+    assert done["status"] == "approved" and done["final_text"] == "월간 회의는 본부에서 합니다."
+    # 고침을 받은 다음 회전을 모두 돌았으면 심사된 글이다
+    rv2 = review.submit(con, env["main"], kind="notice", audience="internal", text="무조건 보장됩니다.",
+                        client=AIClient(con, FakeTransport(_panel_reply(
+                            lambda u: {"verdict": "revise", "quote": None, "reason": "단정", "revised": "약관에 따라 보장됩니다."}
+                            if "무조건" in u else {"verdict": "revise", "quote": None, "reason": "다듬기", "revised": None}))))
+    assert rv2["status"] == "stopped" and rv2["current_text"] == "약관에 따라 보장됩니다." and not rv2["unreviewed"]
+    # 고침을 받은 다음 회전이 끊기면 심사되지 않은 글이다
+    replies = ["형상", json.dumps({"verdict": "revise", "quote": None, "reason": "단정", "revised": "약관에 따라 보장됩니다."}, ensure_ascii=False),
+               TransportError("fake")]
+    rv3 = review.submit(con, env["main"], kind="notice", audience="internal", text="무조건 보장됩니다.",
+                        client=AIClient(con, FakeTransport(replies)))
+    assert rv3["status"] == "stopped" and rv3["current_text"] == "약관에 따라 보장됩니다." and rv3["unreviewed"]
 
 
 def test_review_reject_and_bad_format(env):

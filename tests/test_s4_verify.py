@@ -520,28 +520,24 @@ RRN_FOREIGN = "900101" + "-" + "5234567"            # 외국인 등록번호 꼴
 PHONE_INTL = "+82 " + "10-" + "0000" + "-" + "7788"  # 국가 번호를 붙인 휴대폰
 
 
-@pytest.mark.xfail(strict=True, reason="app/ai/context.py RRN 정규식이 줄표 없는 주민번호를 못 잡는다. 심사 요청과 묻고 답하기 질문으로 그대로 나간다")
 def test_mask_catches_rrn_without_hyphen():
     m = aictx.Masker()
     m(f"주민번호 {RRN_PLAIN}")
     assert m.count == 1
 
 
-@pytest.mark.xfail(strict=True, reason="app/ai/context.py RRN 정규식이 뒷자리 첫 숫자를 1에서 4로만 본다. 외국인 등록번호 5에서 8이 빠진다")
 def test_mask_catches_foreigner_registration_number():
     m = aictx.Masker()
     m(f"등록번호 {RRN_FOREIGN}")
     assert m.count == 1
 
 
-@pytest.mark.xfail(strict=True, reason="app/ai/context.py PHONE 정규식이 +82 로 시작하는 휴대폰 번호를 못 잡는다")
 def test_mask_catches_international_phone():
     m = aictx.Masker()
     m(f"연락처 {PHONE_INTL}")
     assert m.count == 1
 
 
-@pytest.mark.xfail(strict=True, reason="위 가림 구멍 때문에 줄표 없는 주민번호가 든 글이 심사에 들어가 API 로 나간다")
 def test_review_submit_refuses_rrn_without_hyphen(env, fake):
     con = env["con"]
     with pytest.raises(ValueError):
@@ -566,8 +562,6 @@ def test_s4_qa_number_not_in_evidence_is_blocked(env, fake):
     assert "원안을 확인해 주세요 [1]" in r.text and plan_qa.NOTICE in r.text
 
 
-@pytest.mark.xfail(strict=True, reason="app/ai/context.py assemble 이 <오늘> 날짜와 근거 번호 [n] 의 숫자까지 허용 숫자에 넣는다. "
-                                       "근거에 없는 지급률이 오늘 날짜와 같으면 통과한다")
 def test_qa_number_equal_to_today_is_still_blocked(env):
     con = env["con"]
     line = _approved_fc_line(con)

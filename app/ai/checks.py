@@ -11,9 +11,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from app.ai.context import Context, numbers
+from app.ai.context import CITE, Context, numbers, strip_dates
 
-CITE = re.compile(r"\[(?:근거\s*)?([0-9]+)\]")
 UNKNOWN_HINTS = ("모릅니다", "알 수 없습니다", "찾지 못했습니다", "확인되지 않습니다", "원안을 확인")
 
 
@@ -47,7 +46,8 @@ def new_numbers(output: str, allowed: set) -> list:
 def check(output: str, context: Context | None = None, *, allowed_numbers: set | None = None, forbidden=(), require_citation=False) -> Check:
     allowed = set(allowed_numbers or ()) | (context.numbers if context else set())
     problems = []
-    extra = new_numbers(output, allowed)
+    # 컨텍스트의 날짜(오늘)는 날짜 꼴 그대로일 때만 받는다. 연, 월, 일을 따로 쓰면 숫자 점검에 걸린다.
+    extra = new_numbers(strip_dates(output, context.dates) if context else output, allowed)
     if extra:
         problems.append({"kind": "number", "detail": extra})
     hits = forbidden_hits(output, forbidden)

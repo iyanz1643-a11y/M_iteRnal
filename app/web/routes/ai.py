@@ -100,9 +100,7 @@ async def review_requests_post(request: Request, ctx: dict = Depends(guard), con
     elif len(text) > TEXT_MAX:
         err = f"심사할 글은 {TEXT_MAX}자까지 받습니다."
     else:
-        probe = aictx.Masker()
-        probe(text + "\n" + (title or ""))
-        if probe.count:
+        if aictx.has_pii(text, title):
             err = review.PII_FOUND
     if parent and not review.get_review(con, parent):
         parent = None

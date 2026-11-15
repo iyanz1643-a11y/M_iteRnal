@@ -6,6 +6,8 @@
 3. 심사: 회전마다 다빈치의 형상화가 먼저 나오고, 일곱 자리를 따로 부른다. 첫 회전에는 다른 자리의 의견을 보여 주지 않는다.
    둘째 회전부터는 앞 회전의 의견을 함께 준다. 테미스에게는 금지 표현과 준수 항목을 빠짐없이 넣는다. 회전은 세 번까지다.
    고친 문안은 새 숫자와 금지 표현이 없을 때만 받고, 받은 문안으로 다음 회전을 돈다.
+   마지막 회전에서 받은 문안이나 다음 회전을 끝내지 못한 문안은 심사되지 않은 채 멈춘다. get_review 의 unreviewed 가 참이고,
+   내부용이라도 decide 에서 confirm_unreviewed 로 확인을 받아야 승인된다.
 4. 결재: 메인 관리자가 승인하거나 반려한다. D-15 제안대로 고객에게 나가는 글만 심사 통과가 필수 관문이다.
    고객에게 나가는 글을 사람이 고쳤으면 고친 글로 다시 심사에 올린다.
 5. 기록: ai_review 에 입력 해시, 지침 버전, 심사단 버전, 처음 글, 마지막 글, 사람이 확정한 글. ai_review_opinion 에 자리별 의견.
@@ -39,6 +41,7 @@ PII_FOUND = "심사할 글에 연락처나 주민번호 꼴이 있습니다. 빼
 STOP_KO = {"rounds": "3회전 안에 모든 자리가 통과하지 않았습니다", "reject": "반려 의견이 있어 사람이 보아야 합니다",
            "number": "입력에 없는 숫자가 있습니다", "off": "AI 기능이 꺼져 있습니다", "budget": "이번 달 AI 사용 한도에 닿았습니다",
            "error": "AI 를 부르지 못했습니다"}
+UNREVIEWED = "마지막 고침은 심사되지 않았습니다. 확인하고 승인해 주세요."
 
 
 @dataclass
@@ -140,9 +143,7 @@ def submit(con, ctx: dict, *, kind: str, audience: str, text: str, title: str | 
     text = (text or "").strip()
     if not text:
         raise ValueError("심사할 글이 비어 있습니다")
-    probe = aictx.Masker()
-    probe(text)
-    if probe.count:
+    if aictx.has_pii(text, title):
         raise ValueError(PII_FOUND)
     store.ensure(con)
     panel = panel or load_panel()
@@ -223,9 +224,19 @@ def submit(con, ctx: dict, *, kind: str, audience: str, text: str, title: str | 
 
 
 def _has_pii(text) -> bool:
-    m = aictx.Masker()
-    m(text)
-    return m.count > 0
+    return aictx.has_pii(text)
+
+
+def _unreviewed(ops: list) -> bool:
+    """지금 문안이 받은 고침인데, 그 뒤에 모든 자리가 의견을 낸 회전이 없으면 참이다.
+    3회전째에 받은 고침이나, 고침을 받은 다음 회전이 한도나 오류로 끊긴 경우다."""
+    adopted = [o["round_no"] for o in ops if o["adopted"]]
+    if not adopted:
+        return False
+    last = max(adopted)
+    need = sum(1 for o in ops if o["round_no"] == last and o["verdict"] != "shape")
+    later = {o["round_no"] for o in ops if o["round_no"] > last}
+    return not any(sum(1 for o in ops if o["round_no"] == n and o["verdict"] != "shape") >= need for n in later)
 
 
 def get_review(con, review_id: int) -> dict | None:
@@ -247,6 +258,8 @@ def get_review(con, review_id: int) -> dict | None:
     d["kind_ko"] = KINDS.get(d["kind"], d["kind"])
     d["stop_ko"] = STOP_KO.get(d["stop_reason"]) if d["stop_reason"] else None
     d["can_approve"] = d["status"] == "passed" or (d["status"] == "stopped" and not d["required"] and d["stop_reason"] != "number")
+    d["unreviewed"] = d["status"] != "passed" and _unreviewed(ops)       # 승인 전에 UNREVIEWED 확인을 받는다
+    d["unreviewed_ko"] = UNREVIEWED if d["unreviewed"] else None
     return d
 
 
@@ -261,8 +274,12 @@ def list_reviews(con, status: str | None = None, limit: int = 100) -> list:
     return rows
 
 
-def decide(con, ctx: dict, review_id: int, approve: bool, *, final_text: str | None = None, reason: str | None = None) -> dict:
-    """메인 관리자의 결재. 화면의 결재 단추가 부른다."""
+def decide(con, ctx: dict, review_id: int, approve: bool, *, final_text: str | None = None, reason: str | None = None,
+           confirm_unreviewed: bool = False) -> dict:
+    """메인 관리자의 결재. 화면의 결재 단추가 부른다.
+
+    마지막 고침이 심사되지 않은 글(get_review 의 unreviewed)은 confirm_unreviewed 가 참일 때만 승인한다.
+    """
     aictx.require_role(ctx, FEATURE)
     d = get_review(con, review_id)
     if not d:
@@ -280,6 +297,8 @@ def decide(con, ctx: dict, review_id: int, approve: bool, *, final_text: str | N
         raise ValueError(GATE)
     if d["stop_reason"] == "number":
         raise ValueError("입력에 없는 숫자가 있는 글은 승인하지 않습니다")
+    if d["unreviewed"] and not confirm_unreviewed:
+        raise ValueError(UNREVIEWED)
     final = (final_text or "").strip() or d["current_text"]
     edited = final != d["current_text"]
     if edited:
