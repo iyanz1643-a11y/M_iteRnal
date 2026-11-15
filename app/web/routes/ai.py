@@ -5,7 +5,7 @@
 | GET /review/requests | 카드뉴스, 제안 리포트 서식, 안내문, 기준 문안, 랜딩 문구를 심사에 올리는 폼과 심사 작업의 상태 |
 | POST /review/requests | 요청 파일을 저장소 uploads 의 review/ 에 두고 작업 review_submit 을 넣는다. 심사는 워커가 3회전까지 돈다 |
 | GET /review/results | 심사 목록. ?id= 로 한 건의 회전별 형상화, 자리별 의견, 회전 수, 결재 |
-| POST /review/results | 사람의 최종 결재. review.decide |
+| POST /review/results | 사람의 최종 결재. review.decide. 마지막 고침이 심사되지 않은 글은 확인 체크 confirm_unreviewed 가 있어야 승인한다 |
 | GET, POST /data/plan-qa | 시상안 묻고 답하기. 답, 근거 줄 번호, 원안 우선 문구. D-27 제안대로 메인 관리자만 |
 | GET, POST /org/ai | 기능별 이번 달 AI 사용량과 한도, 한도 고치기. client.usage, set_limit |
 
@@ -167,7 +167,8 @@ async def review_results_post(request: Request, ctx: dict = Depends(guard), con=
     final = str(form.get("final_text") or "").strip() or None
     reason = str(form.get("reason") or "").strip()[:REASON_MAX] or None
     try:
-        out = review.decide(con, ctx, rid, action == "approve", final_text=final if action == "approve" else None, reason=reason)
+        out = review.decide(con, ctx, rid, action == "approve", final_text=final if action == "approve" else None, reason=reason,
+                            confirm_unreviewed=action == "approve" and form.get("confirm_unreviewed") == "1")
     except ValueError as e:
         _flash(request, "bad", str(e))
     else:

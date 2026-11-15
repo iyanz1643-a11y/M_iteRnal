@@ -70,6 +70,10 @@
     {% endif %}
     {% if not d.can_approve %}<div class="alert" style="margin:0">{{ '입력에 없는 숫자가 있는 글은 승인하지 않습니다.' if d.stop_reason == 'number' else '통과하지 못한 고객용 글이라 승인할 수 없습니다. 반려하거나 고쳐서 다시 올려 주세요.' }}</div>{% endif %}
     <label class="f">반려 사유 · 반려할 때 적어 주세요<input class="sm" type="text" name="reason" maxlength="{{ REASON_MAX }}"></label>
+    {% if d.unreviewed %}
+    <div class="ai-unreviewed" role="note"><p>{{ d.unreviewed_ko }}</p>
+      {% if d.can_approve %}<label class="ai-confirm"><input type="checkbox" name="confirm_unreviewed" value="1">심사되지 않은 마지막 고침을 읽고 확인했습니다</label>{% endif %}</div>
+    {% endif %}
     <div class="actions"><button class="primary" name="action" value="approve" {{ 'disabled' if not d.can_approve }}>승인</button><button class="second" name="action" value="reject">반려</button></div>
   </form>
   {% endif %}

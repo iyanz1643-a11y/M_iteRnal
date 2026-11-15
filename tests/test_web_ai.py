@@ -250,6 +250,54 @@ def test_internal_text_can_be_edited_when_approving(env, fake):
     assert d["status"] == "approved" and d["human_edited"] == 1
 
 
+def _unreviewed_review(env, fake, main, audience):
+    """테미스가 회전마다 다른 고친 문안을 내 3회전째 고침이 받힌 채 멈춘 심사를 만든다."""
+    a, b = "정기 점검 안내를 드립니다.", "정기 점검을 안내해 드립니다."
+    fake.themis = lambda user: {"verdict": "revise", "quote": None, "reason": "다듬기", "revised": b if a in user else a}
+    _submit(env, main, kind="notice", audience=audience, text="정기 점검 안내입니다.")
+    res = jobs.drain(env["con"])[0]["result"]
+    assert res["status"] == "stopped" and res["stop"] == "rounds"
+    d = review.get_review(env["con"], res["review_id"])
+    assert d["unreviewed"] and d["unreviewed_ko"] == review.UNREVIEWED
+    return res["review_id"]
+
+
+def test_unreviewed_internal_text_needs_confirm(env, fake):
+    con = env["con"]
+    main = client_for(env, "admin")
+    rid = _unreviewed_review(env, fake, main, "internal")
+    body = main.get(f"/review/results?id={rid}").text
+    assert review.UNREVIEWED in body and 'name="confirm_unreviewed"' in body
+    assert body.index('name="confirm_unreviewed"') < body.index('value="approve"')   # 승인 단추 위에 있다
+    # 확인 없이 승인하면 거절된다
+    r = main.post("/review/results", data={"review_id": rid, "action": "approve"})
+    assert r.status_code == 303 and review.get_review(con, rid)["status"] == "stopped"
+    assert re.search(r'class="alert bad"[^>]*>' + re.escape(review.UNREVIEWED), main.get(f"/review/results?id={rid}").text)
+    # CSRF 토큰이 틀리거나 없으면 확인을 붙여도 받지 않는다
+    bad = {"review_id": rid, "action": "approve", "confirm_unreviewed": "1"}
+    assert main.post("/review/results", data={**bad, "csrf_token": "wrong"}).status_code == 403
+    assert TestClient.post(main, "/review/results", data=bad).status_code == 403
+    assert review.get_review(con, rid)["status"] == "stopped"
+    # 확인하면 승인된다
+    r = main.post("/review/results", data=bad)
+    assert r.status_code == 303
+    d = review.get_review(con, rid)
+    assert d["status"] == "approved" and d["decided_by"] == "admin" and review.can_release(con, rid)
+    assert con.execute("SELECT 1 FROM audit_log WHERE action='ai_review_approve' AND target=?", (f"review:{rid}",)).fetchone()
+
+
+def test_unreviewed_customer_text_stays_blocked_with_confirm(env, fake):
+    con = env["con"]
+    main = client_for(env, "admin")
+    rid = _unreviewed_review(env, fake, main, "customer")
+    body = main.get(f"/review/results?id={rid}").text
+    assert review.UNREVIEWED in body and re.search(r'value="approve"\s+disabled', body)
+    assert 'name="confirm_unreviewed"' not in body                     # 승인할 수 없는 글에는 확인 칸을 두지 않는다
+    r = main.post("/review/results", data={"review_id": rid, "action": "approve", "confirm_unreviewed": "1"})
+    assert r.status_code == 303 and review.get_review(con, rid)["status"] == "stopped"
+    assert review.GATE in main.get(f"/review/results?id={rid}").text and not review.can_release(con, rid)
+
+
 def test_review_request_refuses_contact_and_bad_kind(env, fake):
     con = env["con"]
     main = client_for(env, "admin")

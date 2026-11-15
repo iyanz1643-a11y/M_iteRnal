@@ -534,6 +534,10 @@ label.consent-check{display:flex;gap:10px;align-items:center;min-height:48px;fon
 .ai-meter i{display:block;height:100%;background:var(--blue);border-radius:999px}
 .ai-meter i.warn{background:var(--orange)}.ai-meter i.bad{background:var(--red)}
 button.primary:disabled,button.second:disabled{opacity:.4;cursor:not-allowed}
+.ai-unreviewed{background:rgba(255,149,0,.12);border-radius:14px;padding:12px 16px;color:var(--ink)}
+.ai-unreviewed p{margin:0;font-weight:600;word-break:keep-all;overflow-wrap:anywhere}
+.ai-confirm{display:flex;gap:10px;align-items:center;min-height:48px;margin-top:4px;font-size:15px;font-weight:500;cursor:pointer;word-break:keep-all}
+.ai-confirm input{width:22px;height:22px;flex:none;margin:0;accent-color:var(--blue)}
 a.ai-line-link{display:inline-flex;align-items:center;min-height:48px;font-size:14px;font-weight:600;white-space:nowrap}
 @media (max-width:760px){.ai-seats{grid-template-columns:minmax(0,1fr)}.ai-seat{padding:12px 14px}}
 
