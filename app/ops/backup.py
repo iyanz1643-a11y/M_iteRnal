@@ -4,7 +4,7 @@
 | --- | --- |
 | 백업 | SQLite 의 온라인 백업으로 쓰는 중에도 한 시점의 사본을 뜬다. 이름은 app-YYYYMMDD-HHMMSS.db, 암호화하면 .db.enc |
 | 설명 파일 | 같은 이름의 .json. 형식, 만든 시각, 암호화 여부, 원본 크기와 SHA-256, 표별 건수, 스키마 버전. 자료 내용은 넣지 않는다 |
-| 암호화 | BACKUP_KEY 가 있으면 기본으로 한다. AES-256-GCM 을 1MB 조각마다 걸고 조각 번호와 끝 표시를 함께 묶어 순서 바꾸기와 자르기를 막는다. 키는 scrypt 로 만든다 |
+| 암호화 | 기본으로 한다. BACKUP_KEY 가 없으면 멈춘다. 평문은 encrypt=False, 명령으로는 --no-encrypt 를 분명히 줄 때만 만든다. AES-256-GCM 을 1MB 조각마다 걸고 조각 번호와 끝 표시를 함께 묶어 순서 바꾸기와 자르기를 막는다. 키는 scrypt 로 만든다 |
 | 키 | 환경 변수 BACKUP_KEY 로만 받는다. 파일, 명령줄 인자, 설명 파일에 남기지 않는다. 12자 이상 |
 | 되살리기 확인 | 임시 폴더에 풀어 SHA-256, integrity_check, 표별 건수, 스키마 버전을 설명 파일과 견준다 |
 | 되살리기 | 대상 파일이 있으면 멈춘다. --force 면 있던 파일을 .before-restore-시각 으로 옮겨 두고 바꾼다. 지우지 않는다 |
@@ -128,13 +128,17 @@ def describe_db(path: pathlib.Path) -> dict:
 
 # ---------------------------------------------------------------- 백업
 def backup(db_path, out_dir=None, *, encrypt: bool | None = None, now: datetime | None = None, keep: int | None = None) -> dict:
-    """백업 파일과 설명 파일을 만들고 설명을 돌려준다. encrypt 가 None 이면 BACKUP_KEY 가 있을 때 암호화한다."""
+    """백업 파일과 설명 파일을 만들고 설명을 돌려준다.
+    encrypt 가 None 이면 암호화하고, BACKUP_KEY 가 없으면 멈춘다. 평문 백업은 encrypt=False 를 분명히 줄 때만 만든다."""
     src = pathlib.Path(db_path)
     if not src.is_file():
         raise BackupError(f"DB 파일이 없습니다: {src.name}")
     key = _key()
     if encrypt is None:
-        encrypt = key is not None
+        if not key:
+            raise BackupError(f"환경 변수 {ENV_KEY} 가 없어 백업하지 않았습니다. 백업은 기본으로 암호화합니다. "
+                              f"키를 넣거나, 암호화하지 않은 백업이 꼭 필요하면 --no-encrypt 를 주세요.")
+        encrypt = True
     if encrypt and not key:
         raise BackupError(f"암호화하려면 환경 변수 {ENV_KEY} 가 있어야 합니다.")
     out = pathlib.Path(out_dir) if out_dir else default_dir()

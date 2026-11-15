@@ -90,7 +90,7 @@ def test_logout_ends_a_copied_cookie(web):
     c = login(web)
     stolen = copy_of(c)
     assert stolen.get("/").status_code == 200                       # 나가기 전에는 복사한 쿠키도 된다
-    assert c.get("/logout").status_code == 303
+    assert c.post("/logout", data={}).status_code == 303
     r = stolen.get("/")
     assert r.status_code == 303 and r.headers["location"] == "/login"
     assert login(web).get("/").status_code == 200                   # 다시 들어오면 새 쿠키로 된다
@@ -99,10 +99,58 @@ def test_logout_ends_a_copied_cookie(web):
 def test_logout_with_an_old_cookie_does_not_bump_again(web):
     c = login(web, agent_login(web))
     stolen = copy_of(c)
-    c.get("/logout")
+    c.post("/logout", data={})
     v = sessions.version(web["con"], uid(web, agent_login(web)))
-    stolen.get("/logout")                                           # 끝난 쿠키로 나가도 버전은 그대로다
+    stolen.post("/logout", data={})                                 # 끝난 쿠키로 나가도 버전은 그대로다
     assert sessions.version(web["con"], uid(web, agent_login(web))) == v
+
+
+def test_logout_without_csrf_is_refused_and_keeps_version(web):
+    """다른 사이트가 보낸 나가기는 토큰이 없다. 403 이고 세션 버전이 그대로며 그 사람은 계속 쓴다."""
+    who = agent_login(web)
+    c = login(web, who)
+    v = sessions.version(web["con"], uid(web, who))
+    assert c.post("/logout", data={}, with_csrf=False).status_code == 403
+    assert c.post("/logout", data={"csrf_token": "wrong"}).status_code == 403
+    assert sessions.version(web["con"], uid(web, who)) == v
+    assert c.get("/").status_code == 200
+
+
+def test_logout_get_changes_nothing(web):
+    """GET /logout 은 확인 화면만 보여 준다. 링크나 그림 한 번으로는 나가지 않는다."""
+    who = agent_login(web)
+    c = login(web, who)
+    stolen = copy_of(c)
+    v = sessions.version(web["con"], uid(web, who))
+    r = c.get("/logout")
+    assert r.status_code == 200 and 'action="/logout"' in r.text and 'method="post"' in r.text
+    assert r.headers["cache-control"] == "no-store"
+    assert sessions.version(web["con"], uid(web, who)) == v
+    assert c.get("/").status_code == 200 and stolen.get("/").status_code == 200
+    out = Client(web["app"], follow_redirects=False).get("/logout")           # 로그인 전이면 로그인 화면으로 보낸다
+    assert out.status_code == 303 and out.headers["location"] == "/login"
+
+
+def test_logout_post_ends_copied_cookie_and_bumps_once(web):
+    who = agent_login(web)
+    c = login(web, who)
+    stolen = copy_of(c)
+    v = sessions.version(web["con"], uid(web, who))
+    r = c.post("/logout", data={})
+    assert r.status_code == 303 and r.headers["location"] == "/login"
+    assert sessions.version(web["con"], uid(web, who)) == v + 1
+    for k in (c, stolen):
+        r = k.get("/")
+        assert r.status_code == 303 and r.headers["location"] == "/login"
+
+
+def test_logout_buttons_are_post_forms(web):
+    """화면의 나가기는 토큰을 실은 POST 폼이다. GET 링크가 남아 있지 않다."""
+    c = login(web)
+    for path in ("/", "/me"):
+        html = c.get(path).text
+        assert 'href="/logout"' not in html, path
+        assert re.search(r'<form class="out" method="post" action="/logout"><input type="hidden" name="csrf_token" value="[^"]+">', html), path
 
 
 def test_password_change_keeps_this_device_and_ends_others(web):
@@ -308,6 +356,24 @@ def test_slow_requests_are_logged(caplog, monkeypatch):
     slow = [json.loads(x.getMessage()) for x in caplog.records if x.name == "app.ops"]
     slow = [x for x in slow if x["event"] == "slow_request"]
     assert slow and slow[0]["path"] == "/ok" and slow[0]["status"] == 200 and "ms" in slow[0] and slow[0]["uid"] is None
+
+
+def test_access_log_query_tail_is_removed():
+    """uvicorn 접근 기록 꼴 그대로 거르개를 지나면 주소 뒤 꼬리가 없다. 칸 수와 종류는 그대로다."""
+    import app.web.main  # noqa: F401  불러오기만 해도 거르개가 달린다
+    lg = logging.getLogger("uvicorn.access")
+    assert sum(isinstance(f, observe.QueryTailFilter) for f in lg.filters) == 1
+    observe.setup_logging()
+    assert sum(isinstance(f, observe.QueryTailFilter) for f in lg.filters) == 1      # 여러 번 불러도 하나다
+    rec = logging.LogRecord("uvicorn.access", logging.INFO, __file__, 1, '%s - "%s %s HTTP/%s" %d',
+                            ("127.0.0.1:5000", "GET", "/invite?t=VerifyTokenSecret&x=1", "1.1", 303), None)
+    assert observe.QueryTailFilter().filter(rec)
+    assert rec.args == ("127.0.0.1:5000", "GET", "/invite", "1.1", 303)
+    assert rec.getMessage() == '127.0.0.1:5000 - "GET /invite HTTP/1.1" 303'
+    plain = logging.LogRecord("uvicorn.error", logging.INFO, __file__, 1, '"GET /ok?q=가상인물 HTTP/1.1"', None, None)
+    observe.QueryTailFilter().filter(plain)
+    assert plain.getMessage() == '"GET /ok HTTP/1.1"'
+    assert observe.strip_query("/ok") == "/ok"
 
 
 def test_app_500_page_shows_request_id_but_not_the_error(web, caplog):
@@ -645,6 +711,30 @@ def test_backup_prune_only_when_asked(bdb, tmp_path):
     assert m["removed"] == ["app-20261115-030000.db", "app-20261115-030001.db"]
     assert sorted(p.name for p in (tmp_path / "bk").iterdir()) == ["app-20261115-030002.db", "app-20261115-030002.db.json", "app-20261116-030000.db",
                                                                     "app-20261116-030000.db.json", "keep-me.txt"]
+
+
+def test_backup_without_key_stops_unless_no_encrypt(bdb, tmp_path, monkeypatch, capsys):
+    """BACKUP_KEY 가 없으면 기본 백업은 멈추고 아무 파일도 만들지 않는다. --no-encrypt 를 줄 때만 평문을 만든다."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("backup_db", db.ROOT / "scripts" / "backup_db.py")
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+    out = tmp_path / "bk"
+    with pytest.raises(backup.BackupError, match="--no-encrypt"):
+        backup.backup(bdb, out)
+    assert not out.exists() or not any(out.iterdir())
+    assert script.main(["--db", str(bdb), "--out", str(out)]) == 1
+    err = capsys.readouterr().err
+    assert "BACKUP_KEY" in err and "--no-encrypt" in err
+    assert not out.exists() or not any(out.iterdir())
+    assert script.main(["--db", str(bdb), "--out", str(out), "--no-encrypt"]) == 0
+    cap = capsys.readouterr()
+    assert "암호화 아니오" in cap.out and "암호화하지 않은 백업" in cap.err
+    files = [p.name for p in out.iterdir()]
+    assert len([n for n in files if n.endswith(".db")]) == 1 and not any(n.endswith(".enc") for n in files)
+    with pytest.raises(SystemExit):
+        script.main(["--help"])
+    assert "--no-encrypt" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------- SQL 호환 층

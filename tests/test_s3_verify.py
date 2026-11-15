@@ -457,7 +457,6 @@ def _free_port() -> int:
     return port
 
 
-@pytest.mark.xfail(strict=True, reason="platform: 운영 실행(Dockerfile CMD)의 uvicorn 접근 기록이 /invite?t=<토큰> 을 그대로 남긴다. 쓰지 않은 초대 링크를 기록을 읽는 사람이 쓸 수 있다")
 def test_s3_invite_token_not_in_server_access_log(env):
     """Dockerfile 의 실행 줄과 같은 uvicorn 설정으로 서버를 띄우고 초대 링크를 연다. 표준 출력과 오류에 토큰 원문이 없어야 한다.
     고치는 길: 접근 기록을 끄거나(--no-access-log), uvicorn.access 기록에서 주소 뒤 꼬리를 지우는 거르개를 앱이 켤 때 단다."""

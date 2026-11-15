@@ -35,5 +35,7 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD python -c "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4).status == 200 else 1)"
 
+# 접근 기록은 켜 둔다. 주소 뒤 꼬리(?...)는 app.web.main 을 불러올 때 다는 거르개가 지워 초대 토큰이 남지 않는다(app/ops/observe.py).
+# 실행 줄을 바꿔도 app.web.main:app 을 띄우면 거르개를 탄다. 다른 진입점으로 띄우지 않는다
 # 프록시 뒤에서는 FORWARDED_ALLOW_IPS 에 프록시 주소를 준다. 요청 횟수 제한이 진짜 IP 를 보게 하려는 것이다
 CMD ["sh", "-c", "exec uvicorn app.web.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips \"${FORWARDED_ALLOW_IPS:-127.0.0.1}\""]

@@ -8,6 +8,7 @@
 services:
   app:
     build: .
+    # command 를 두지 않는다. Dockerfile 의 CMD 로 띄워 접근 기록의 꼬리 거르개를 탄다
     env_file: .env
     environment:
       APP_DB: /app/data/app.db

@@ -5,6 +5,7 @@
 주소는 app/web/routes/ 에, 권한 검사 guard 와 공통 도우미는 app/web/deps.py 에 있다.
 요청 번호, 오류 기록, 느린 요청 기록은 app/ops/observe.py, 상태 점검 /healthz 는 app/ops/health.py 다.
 미들웨어는 바깥부터 세션, 관측 순서다. 관측이 세션 안쪽에 있어야 오류 기록에 사용자 번호를 남긴다.
+uvicorn 접근 기록의 주소 뒤 꼬리(?...)는 이 모듈을 불러올 때 다는 거르개가 지운다. 초대 토큰이 기록에 남지 않게 하려는 것이다.
 """
 import contextlib
 import os
@@ -33,6 +34,8 @@ from app.web.routes import org_settings as settings_routes
 from app.web.routes import perf as perf_routes
 from app.web.routes import persistency as persist_routes
 from app.web.routes import settle as settle_routes
+
+observe.install_query_filter()                                 # 불러올 때 단다. --lifespan off 로 띄워도 거른다
 
 
 def _db_path() -> str:
