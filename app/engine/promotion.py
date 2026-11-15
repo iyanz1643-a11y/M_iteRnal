@@ -7,10 +7,20 @@
   - monthly / membership / travel / activity  누적 실적을 구간표에 대입
 달성 현황은 저장하지 않고 계약 원장에서 그때그때 계산한다. 모두 예상이며 확정은 보험사 정산을 따른다.
 비교(compare)는 진행 중 프로모션을 실적 10만 원당 예상 보상, 구간, 조건으로 나란히 놓는다. 지난 프로모션(past)은 끝난
-프로모션의 사람별 최종 결과를 progress() 로 낸다. 확정은 S3 이라 지금은 마감 전 예상만 있다.
+프로모션의 사람별 최종 결과를 progress() 로 낸다. 메인 관리자가 confirm_results() 로 확정하면 그 뒤에는 확정한 값을 낸다.
+
+실적 기준 (D-08, 열린 결정이라 제안대로 둔 가정).
+- 프로모션은 보험사 규칙대로 기간 안 계약 가운데 성립한 것을 세고 철회, 청약, 반송은 세지 않는다. 지금 상태로 센다.
+  업적 집계(성립한 달에 더하고 철회한 달에 뺀다)와 다를 수 있다. 화면은 progress() 의 basis 글을 그대로 보여 준다.
+- 기준일은 프로모션마다 고른다. 새로 만들 때의 기본값은 영수일자(DEFAULT_DATE_BASIS)다. 영수일자가 빈 계약은 계약일자로 센다.
+  실제 계약현황의 '영수일자' 열은 contract.receipt_date 에 실린다 (config/mapping/eternal_contract.yaml). 샘플 계약에는 영수일자가 없다.
+
+원안과 배포안 (D-21, 열린 결정이라 제안대로 둔 가정). 지금 금액(reward_value, rate)은 배포안이다. 원안은 promotion_tier.original_value 와
+promotion_rate.original_rate 에 메인 관리자가 넣은 것만 있고, 없으면 원문 확인이다. 원안을 보여 줄지는 화면이 역할로 정한다.
 """
 import calendar
 import json
+import sqlite3
 from datetime import date
 
 from app import db
@@ -20,10 +30,14 @@ KIND_KO = {"rate": "정률 시책", "weekly": "주차 시상", "linked": "연계
            "travel": "여행 시상", "activity": "가동 시상", "membership": "멤버십"}
 METRIC_KO = {"premium_monthly": "보험료", "converted_premium": "인정보험료", "policy_count": "건수"}
 METRIC_UNIT = {"premium_monthly": "원", "converted_premium": "원", "policy_count": "건"}
-BASIS_KO = {"contract_date": "계약일자", "application_date": "청약일자"}
+BASIS_KO = {"receipt_date": "영수일자", "contract_date": "계약일자", "application_date": "청약일자"}
+DEFAULT_DATE_BASIS = "receipt_date"                          # D-08 제안. 새 프로모션의 기본값
+BASIS_FALLBACK = {"receipt_date": "contract_date"}           # 그 날짜가 빈 계약은 이 날짜로 센다
 COMBINE_KO = {"single": "창 하나", "all": "창마다 달성", "sum": "창을 합산"}
 REWARD_KO = {"fixed": "정액", "rate": "실적의 비율", "travel": "여행", "goods": "물품"}
-TIMING_KO = {"next_month": "익월", "inst13": "13회차", "next_month+inst13": "익월과 13회차", "year1": "1차년", "year2": "2차년"}
+TIMING_KO = {"next_month": "익월", "inst13": "13회차", "next_month+inst13": "익월과 13회차", "year1": "1차년", "year2": "2차년",
+             "mixed": "혼합", "unspecified": "표기 없음"}
+NO_TIMING = "지급 시점 표기 없음"
 COUNTED = ("inforce", "lapsed", "cancelled", "matured")       # 성립한 계약. 청약, 반송, 철회는 세지 않는다
 FROM_LINE_KIND = {"rate_promo": "rate", "activity": "activity", "consecutive": "linked", "tier": "monthly"}
 
@@ -35,6 +49,36 @@ def ref_date(ym: str) -> date:
         return today
     y, m = int(ym[:4]), int(ym[4:])
     return date(y, m, calendar.monthrange(y, m)[1])
+
+
+def timing_ko(code) -> str | None:
+    """지급 시점 코드의 한국어. 비었거나 표기 없음(unspecified)이면 None 이다. 모르는 코드는 원문 그대로 둔다."""
+    if not code or code == "unspecified":
+        return None
+    return TIMING_KO.get(code, code)
+
+
+def timing_text(code) -> str:
+    """'익월 지급' 처럼 붙여 쓰는 글. 표기가 없으면 '지급 시점 표기 없음' 이다."""
+    ko = timing_ko(code)
+    return f"{ko} 지급" if ko else NO_TIMING
+
+
+def basis_note(p) -> str:
+    """달성 현황의 실적 기준 설명 (D-08 가정). 화면이 그대로 보여 준다."""
+    b = p["date_basis"]
+    head = f"기준: {BASIS_KO[b]}"
+    if b in BASIS_FALLBACK:
+        head += f", {BASIS_KO[b]}가 없는 계약은 {BASIS_KO[BASIS_FALLBACK[b]]}"
+    return f"{head}. 기간 안 성립 계약만 세고 철회는 뺍니다. 보험사 규칙대로 세어 업적 집계와 다를 수 있습니다."
+
+
+def _date_expr(basis: str) -> str:
+    if basis not in BASIS_KO:
+        raise ValueError(basis)
+    if basis in BASIS_FALLBACK:
+        return f"COALESCE(c.{basis}, c.{BASIS_FALLBACK[basis]})"
+    return f"c.{basis}"
 
 
 # ---------------------------------------------------------------- 등록과 게시
@@ -71,7 +115,7 @@ def _write_children(con, pid, windows, tiers):
 
 
 def create(con, *, period_ym, name, kind, windows, tiers=(), rates=(), by, recipient_level="fc", insurer_id=None, insurer_name=None,
-           sector=None, categories=None, target_note=None, metric="premium_monthly", date_basis="contract_date", per_contract_cap=None,
+           sector=None, categories=None, target_note=None, metric="premium_monthly", date_basis=DEFAULT_DATE_BASIS, per_contract_cap=None,
            combine_rule=None, pay_timing=None, caution=None, source_line_id=None, publish=False) -> int:
     """windows: [(label, from, to)], tiers: [(min_value, reward_kind, reward_value, reward_label)], rates: [(option, basis, rate, timing)]"""
     windows, tiers, combine_rule, categories = _normalize(kind, windows, tiers, combine_rule, metric, date_basis, categories)
@@ -100,7 +144,7 @@ def _snapshot(p):
 
 
 def update(con, promo_id, *, by, name, windows, tiers=(), kind=None, insurer_id=None, insurer_name=None, sector=None, categories=None, target_note=None,
-           metric="premium_monthly", date_basis="contract_date", per_contract_cap=None, combine_rule=None, pay_timing=None, caution=None) -> dict:
+           metric="premium_monthly", date_basis=DEFAULT_DATE_BASIS, per_contract_cap=None, combine_rule=None, pay_timing=None, caution=None) -> dict:
     """프로모션을 고친다. 게시 중이어도 고칠 수 있고, 고치기 전과 뒤를 변경 기록에 남긴다.
     정률 시책은 유형과 지급률을 바꾸지 않는다. 지급률은 시상안 원장에서 온 것이기 때문이다."""
     before = _load(con, promo_id)
@@ -116,9 +160,12 @@ def update(con, promo_id, *, by, name, windows, tiers=(), kind=None, insurer_id=
                    per_contract_cap=?, combine_rule=?, pay_timing=?, caution=? WHERE promo_id=?""",
                 (name.strip(), kind, insurer_id, insurer_name, sector or None, categories, target_note, metric, date_basis, per_contract_cap or None,
                  combine_rule, pay_timing, caution, promo_id))
+    kept = {float(t["min_value"]): t["original_value"] for t in before["tiers"] if t.get("original_value") is not None}
     con.execute("DELETE FROM promotion_window WHERE promo_id=?", (promo_id,))
     con.execute("DELETE FROM promotion_tier WHERE promo_id=?", (promo_id,))
     _write_children(con, promo_id, windows, tiers)
+    for m, v in kept.items():                                    # 원안(D-21)은 문턱이 같은 구간에 그대로 둔다. 문턱이 바뀐 구간은 원문 확인이 된다
+        con.execute("UPDATE promotion_tier SET original_value=? WHERE promo_id=? AND min_value=?", (v, promo_id, m))
     after = _load(con, promo_id)
     b, a = _snapshot(before), _snapshot(after)
     changed = sorted(k for k in a if json.dumps(a[k], ensure_ascii=False, default=str) != json.dumps(b[k], ensure_ascii=False, default=str))
@@ -177,7 +224,7 @@ def _load(con, promo_id) -> dict | None:
     p["rates"] = [dict(r) for r in con.execute("SELECT * FROM promotion_rate WHERE promo_id=? ORDER BY seq", (promo_id,))]
     p["date_from"], p["date_to"] = p["windows"][0]["date_from"], p["windows"][-1]["date_to"]
     p["kind_ko"], p["metric_ko"], p["unit"] = KIND_KO[p["kind"]], METRIC_KO[p["metric"]], METRIC_UNIT[p["metric"]]
-    p["timing_ko"] = TIMING_KO.get(p["pay_timing"])
+    p["timing_ko"] = timing_ko(p["pay_timing"])
     p["category_list"] = p["categories"].split(",") if p["categories"] else []
     return p
 
@@ -203,7 +250,7 @@ def headline(p) -> dict:
         if len(p["rates"]) == 1 and plain:
             return {"big": f"{plain[0]['rate'] * 100:g}%", "small": "지급률"}
         if p["rates"] and len(plain) == len(p["rates"]):
-            return {"big": " + ".join(f"{r['rate'] * 100:g}%" for r in plain), "small": " + ".join(TIMING_KO.get(r["pay_timing"], "지급") for r in plain)}
+            return {"big": " + ".join(f"{r['rate'] * 100:g}%" for r in plain), "small": " + ".join(timing_ko(r["pay_timing"]) or "지급" for r in plain)}
         return {"big": None, "small": "조건별 지급률. 원문 확인"}
     top = p["tiers"][-1] if p["tiers"] else None
     if not top:
@@ -253,7 +300,7 @@ def _values(con, p, agent_ids) -> dict:
     q = ",".join("?" * len(agent_ids))
     for i, w in enumerate(p["windows"]):
         sql = f"""SELECT c.agent_id, SUM({expr}) v FROM contract c {classify.JOINS}
-                  WHERE c.agent_id IN ({q}) AND c.status IN ({','.join('?' * len(COUNTED))}) AND c.{p['date_basis']} BETWEEN ? AND ?"""
+                  WHERE c.agent_id IN ({q}) AND c.status IN ({','.join('?' * len(COUNTED))}) AND {_date_expr(p['date_basis'])} BETWEEN ? AND ?"""
         params = ([p["per_contract_cap"]] if "MIN(" in expr else []) + list(agent_ids) + list(COUNTED) + [w["date_from"], w["date_to"]]
         if p["insurer_id"]:
             sql += " AND c.insurer_id=?"
@@ -278,21 +325,23 @@ def _tier_of(tiers, value):
 
 
 def progress(con, p, agent_ids, ref: date) -> dict:
-    """{agent_id: 달성 현황}. 금액과 구간은 모두 예상이다."""
+    """{agent_id: 달성 현황}. 금액과 구간은 모두 예상이다. basis 는 실적 기준 설명 글이다 (D-08, basis_note())."""
     vals = _values(con, p, list(agent_ids))
     states = [window_state(w, ref) for w in p["windows"]]
     ended_all = all(s["state"] == "ended" for s in states)
+    basis = basis_note(p)
     out = {}
     for a, per_window in vals.items():
         wins = [{**w, **s, "value": v, "tier": (_tier_of(p["tiers"], v) if p["combine_rule"] == "all" else None)}
                 for w, s, v in zip(p["windows"], states, per_window)]
         total = sum(per_window)
-        res = {"windows": wins, "value": total, "tier": None, "next": None, "reward": None, "amount": None, "status": "in_progress", "broken": False, "capped": False}
+        res = {"windows": wins, "value": total, "tier": None, "next": None, "reward": None, "amount": None, "status": "in_progress", "broken": False, "capped": False,
+               "basis": basis, "date_basis": p["date_basis"]}
         if p["kind"] == "rate":
             plain = [r for r in p["rates"] if not r["option_label"]]
             if plain and len(plain) == len(p["rates"]):
                 res["amount"] = sum(r["rate"] for r in plain) * total
-                res["parts"] = [{"timing": (TIMING_KO[r["pay_timing"]] + " 지급") if r["pay_timing"] in TIMING_KO else "지급 시점 표기 없음",
+                res["parts"] = [{"timing": timing_text(r["pay_timing"]),
                                  "amount": r["rate"] * total} for r in plain]
             res["status"] = "ended" if ended_all else ("achieved" if total > 0 else "in_progress")
         else:
@@ -334,12 +383,95 @@ def progress(con, p, agent_ids, ref: date) -> dict:
     return out
 
 
+# ---------------------------------------------------------------- 원안 (D-21)
+# D-21 은 열려 있다. 제안대로 지금 금액(reward_value, rate)을 배포안으로 보고, 원안은 메인 관리자가 넣은 original_value, original_rate 만 쓴다.
+# 원안 칸이 비면 원문 확인이다. 원안 칸은 schema.sql 의 [promotion_plan] 묶음이고 오래된 DB 에는 ensure() 가 붙인다.
+PLAN_BEGIN, PLAN_END = "-- [promotion_plan:begin]", "-- [promotion_plan:end]"
+MISSING_ORIGINAL = "원문 확인"
+
+
+def ensure(con) -> None:
+    """원안 칸과 확정 결과 표가 없는 오래된 DB 에서 schema.sql 의 [promotion_plan] 묶음을 돌린다. 이미 있는 칸과 표는 건너뛴다."""
+    text = db.SCHEMA.read_text(encoding="utf-8")
+    block = text[text.index(PLAN_BEGIN):text.index(PLAN_END)]
+    body = "\n".join(line.split("--", 1)[0] for line in block.splitlines())
+    for stmt in (x.strip() for x in body.split(";")):
+        if not stmt:
+            continue
+        words = stmt.split()
+        if words[:2] == ["ALTER", "TABLE"] and words[3:5] == ["ADD", "COLUMN"]:
+            if words[5] in {r[1] for r in con.execute(f"PRAGMA table_info({words[2]})")}:
+                continue
+        con.execute(stmt)
+    con.commit()
+
+
+def _require_main(con, by) -> str:
+    """메인 관리자만 통과한다. by 는 login_id 이거나 auth.context() 의 결과다. 계정 표에서 다시 확인한다."""
+    if isinstance(by, dict):
+        if by.get("role") != "main":
+            raise PermissionError("메인 관리자만 할 수 있습니다.")
+        by = by.get("login_id")
+    row = con.execute("SELECT is_main_admin FROM user_account WHERE login_id=? AND status='active'", (by,)).fetchone() if by else None
+    if not row or not row["is_main_admin"]:
+        raise PermissionError("메인 관리자만 할 수 있습니다.")
+    return by
+
+
+def has_original(p) -> bool:
+    return any(t.get("original_value") is not None for t in p["tiers"]) or any(r.get("original_rate") is not None for r in p["rates"])
+
+
+def _original_view(p) -> dict | None:
+    """원안 칸으로 바꿔 끼운 프로모션. 원안이 하나도 없으면 None 이다. 원안이 빈 금액 구간과 지급률은 missing 이다."""
+    if not has_original(p):
+        return None
+    tiers = []
+    for t in p["tiers"]:
+        money = t["reward_kind"] in ("fixed", "rate")
+        miss = money and t.get("original_value") is None
+        tiers.append({**t, "reward_value": None if miss else (t.get("original_value") if money else t["reward_value"]), "missing": miss})
+    rates = [{**r, "rate": r.get("original_rate"), "missing": r.get("original_rate") is None} for r in p["rates"]]
+    return {**p, "tiers": tiers, "rates": rates}
+
+
+def set_original(con, promo_id, *, by, tiers=None, rates=None) -> dict:
+    """원안 보상을 넣는다. 메인 관리자만 한다. tiers 는 {구간 번호: 원안 보상}, rates 는 {조각 순번: 원안 지급률}이다.
+    값이 None 이면 원안을 비운다(원문 확인). 바꾸기 전과 뒤를 변경 기록에 남긴다."""
+    by = _require_main(con, by)
+    ensure(con)
+    p = _load(con, promo_id)
+    if not p:
+        raise ValueError("없는 프로모션입니다.")
+    known_t = {t["tier_no"]: t for t in p["tiers"]}
+    known_r = {r["seq"]: r for r in p["rates"]}
+    before, after = {}, {}
+    for no, v in (tiers or {}).items():
+        if int(no) not in known_t:
+            raise ValueError(f"없는 구간입니다: {no}")
+        if known_t[int(no)]["reward_kind"] not in ("fixed", "rate"):
+            raise ValueError("여행과 물품 구간에는 원안 금액을 넣지 않습니다.")
+        v = None if v in (None, "") else float(v)
+        before[f"tier{no}"], after[f"tier{no}"] = known_t[int(no)].get("original_value"), v
+        con.execute("UPDATE promotion_tier SET original_value=? WHERE promo_id=? AND tier_no=?", (v, promo_id, int(no)))
+    for seq, v in (rates or {}).items():
+        if int(seq) not in known_r:
+            raise ValueError(f"없는 지급률 조각입니다: {seq}")
+        v = None if v in (None, "") else float(v)
+        before[f"rate{seq}"], after[f"rate{seq}"] = known_r[int(seq)].get("original_rate"), v
+        con.execute("UPDATE promotion_rate SET original_rate=? WHERE promo_id=? AND seq=?", (v, promo_id, int(seq)))
+    con.execute("INSERT INTO audit_log(at, actor, action, target, before_json, after_json) VALUES(?,?,?,?,?,?)",
+                (db.now(), by, "promotion_original", f"{promo_id}:{','.join(sorted(after)) or '바뀐 것 없음'}",
+                 json.dumps(before, ensure_ascii=False), json.dumps(after, ensure_ascii=False)))
+    con.commit()
+    return {"promo_id": promo_id, "changed": sorted(after)}
+
+
 # ---------------------------------------------------------------- 비교
-# D-21 은 열려 있다. 프로모션 표에 원안과 배포안을 나누는 칸이 없어 지금 금액을 배포안으로 보고, 원안 금액은 비워 둔다(원문 확인).
-# 비교는 역할과 상관없이 같은 값을 낸다. 설계사에게 여는 일(D-19)과 원안을 보여 줄지는 화면이 정한다.
+# 비교는 역할과 상관없이 같은 값을 낸다. 설계사에게 여는 일(D-19)과 원안을 보여 줄지(D-21)는 화면이 정한다.
 COMPARE_UNIT = 100_000
 PLAN_KO = {"distributed": "배포안", "original": "원안"}
-PLAN_NOTE = "원안과 배포안을 나누는 칸이 없어 지금 금액을 배포안으로 봅니다. 원안 금액은 원문 확인입니다."
+PLAN_NOTE = "지금 금액을 적립금을 뺀 배포안으로 봅니다. 원안 금액은 메인 관리자가 넣은 것만 보이고, 없으면 원문 확인입니다."
 ESTIMATE_NOTE = "금액과 구간은 모두 예상입니다. 확정은 보험사 정산을 따릅니다."
 RATE_BASIS_KO = {"initial_premium": "월초보험료", "converted_premium": "월납환산보험료", "monthly_premium": "월납보험료", "paid_premium": "입금보험료",
                  "base_premium": "기본보험료", "premium": "보험료", "unspecified": "기준 표기 없음"}
@@ -351,7 +483,9 @@ def _money(p) -> bool:
 
 
 def _tier_amount(t):
-    """그 구간의 문턱에 딱 닿았을 때의 예상 보상(원). 여행과 물품은 금액이 없어 None 이다."""
+    """그 구간의 문턱에 딱 닿았을 때의 예상 보상(원). 여행과 물품, 원안이 빈 구간은 금액이 없어 None 이다."""
+    if t.get("missing"):
+        return None
     if t["reward_kind"] == "fixed":
         return t["reward_value"]
     if t["reward_kind"] == "rate":
@@ -373,10 +507,48 @@ def conditions(p, cat_names=None) -> list:
     if p["per_contract_cap"]:
         out.append(f"건당 {int(p['per_contract_cap']):,}원까지 인정")
     if p["pay_timing"]:
-        out.append(f"지급 {TIMING_KO.get(p['pay_timing'], p['pay_timing'])}")
+        out.append(f"지급 {timing_ko(p['pay_timing'])}" if timing_ko(p["pay_timing"]) else NO_TIMING)
     if p["pay_timing"] and "inst13" in p["pay_timing"]:
         out.append("13회차 유지 시 지급")
     return out
+
+
+def _plan(p, unit) -> dict:
+    """금액 한 벌(배포안 또는 원안)을 같은 기준에 놓는다. {per_unit, per_unit_entry, parts, tiers, comparable, note, per_unit_basis}"""
+    plan = {"per_unit": None, "per_unit_entry": None, "parts": [], "tiers": [], "comparable": False, "note": None,
+            "per_unit_basis": f"{METRIC_KO[p['metric']]} {unit:,}원당"}
+    if p["kind"] == "rate":
+        plain = [r for r in p["rates"] if not r["option_label"]]
+        if p["rates"] and len(plain) == len(p["rates"]):
+            plan["parts"] = [{"rate": r["rate"], "basis": r["basis"], "basis_ko": RATE_BASIS_KO.get(r["basis"], r["basis"]),
+                              "timing_ko": timing_ko(r["pay_timing"]) or NO_TIMING,
+                              "per_unit": None if r["rate"] is None else r["rate"] * unit, "missing": bool(r.get("missing"))} for r in plain]
+            bases = {RATE_BASIS_KO.get(r["basis"], r["basis"]) for r in plain}
+            plan["per_unit_basis"] = f"{' · '.join(sorted(bases))} {unit:,}원당"
+            if all(r["rate"] is not None for r in plain):
+                plan["per_unit"] = plan["per_unit_entry"] = sum(r["rate"] for r in plain) * unit
+                plan["comparable"] = True
+            else:
+                plan["note"] = f"원안 지급률이 빈 조각이 있습니다. {MISSING_ORIGINAL}"
+        else:
+            plan["note"] = "조건별 지급률이라 숫자 하나로 견주지 않습니다. 원문 확인"
+    else:
+        for t in p["tiers"]:
+            amt = _tier_amount(t)
+            per = amt / t["min_value"] * unit if (amt is not None and _money(p) and t["min_value"] > 0) else None
+            plan["tiers"].append({"tier_no": t["tier_no"], "min_value": t["min_value"], "min_text": fmt_value(t["min_value"], p),
+                                  "reward_kind": t["reward_kind"], "reward": MISSING_ORIGINAL if t.get("missing") else reward_text(t),
+                                  "amount": amt, "per_unit": per, "missing": bool(t.get("missing"))})
+        pers = [t["per_unit"] for t in plan["tiers"] if t["per_unit"] is not None]
+        if pers:
+            plan["per_unit"] = max(pers)
+            plan["per_unit_entry"] = plan["tiers"][0]["per_unit"] if plan["tiers"] else None
+            plan["comparable"] = True
+        elif not _money(p):
+            plan["note"] = "건수 기준이라 보험료로 견주지 않습니다. 구간과 보상을 보세요"
+        else:
+            plan["note"] = "여행이나 물품 보상이라 금액으로 견주지 않습니다. 구간과 보상을 보세요"
+    return plan
 
 
 def compare_row(p, unit=COMPARE_UNIT, cat_names=None) -> dict:
@@ -385,42 +557,23 @@ def compare_row(p, unit=COMPARE_UNIT, cat_names=None) -> dict:
     - 정률 시책: 지급률의 합 × unit. 조건별 지급률이면 숫자 하나로 줄이지 않고 None 이다
     - 구간 시상: 구간마다 문턱 실적에 딱 닿았을 때의 보상 ÷ 문턱 × unit. per_unit 은 그 가운데 가장 높은 값,
       per_unit_entry 는 첫 구간의 값이다. 여행과 물품, 건수 기준(가동 시상)은 보험료로 견주지 않아 None 이다
-    금액은 plan 아래 distributed(배포안)와 original(원안)로 나눈다. 원안은 칸이 없어 None 이다 (D-21 가정).
+    금액은 plan 아래 distributed(배포안)와 original(원안)로 나눈다. 견주는 값(per_unit)은 배포안이다.
+    원안은 원안 칸이 하나라도 있을 때만 같은 꼴로 채우고, 원안이 빈 구간과 조각은 missing 이며 글은 '원문 확인'이다.
+    원안 칸이 하나도 없으면 original 은 None 이다 (D-21 가정).
     """
     row = {k: p[k] for k in ("promo_id", "period_ym", "name", "kind", "kind_ko", "insurer_name", "sector", "category_list", "metric", "metric_ko",
                              "unit", "date_from", "date_to", "recipient_level", "pay_timing", "timing_ko", "per_contract_cap", "combine_rule", "caution")}
     row.update(sector_ko=SECTOR_KO.get(p["sector"], p["sector"]), windows=[{"label": w["label"], "date_from": w["date_from"], "date_to": w["date_to"]} for w in p["windows"]],
-               conditions=conditions(p, cat_names), per_unit_basis=f"{METRIC_KO[p['metric']]} {unit:,}원당", compare_unit=unit, comparable=False, note=None,
-               estimate=True, estimate_note=ESTIMATE_NOTE, plan_assumed=True, plan_note=PLAN_NOTE)
-    plan = {"per_unit": None, "per_unit_entry": None, "parts": [], "tiers": []}
-    if p["kind"] == "rate":
-        plain = [r for r in p["rates"] if not r["option_label"]]
-        if p["rates"] and len(plain) == len(p["rates"]):
-            plan["parts"] = [{"rate": r["rate"], "basis": r["basis"], "basis_ko": RATE_BASIS_KO.get(r["basis"], r["basis"]),
-                              "timing_ko": TIMING_KO.get(r["pay_timing"], "지급 시점 표기 없음"), "per_unit": r["rate"] * unit} for r in plain]
-            plan["per_unit"] = plan["per_unit_entry"] = sum(r["rate"] for r in plain) * unit
-            row["comparable"] = True
-            bases = {RATE_BASIS_KO.get(r["basis"], r["basis"]) for r in plain}
-            row["per_unit_basis"] = f"{' · '.join(sorted(bases))} {unit:,}원당"
-        else:
-            row["note"] = "조건별 지급률이라 숫자 하나로 견주지 않습니다. 원문 확인"
-    else:
-        for t in p["tiers"]:
-            amt = _tier_amount(t)
-            per = amt / t["min_value"] * unit if (amt is not None and _money(p) and t["min_value"] > 0) else None
-            plan["tiers"].append({"tier_no": t["tier_no"], "min_value": t["min_value"], "min_text": fmt_value(t["min_value"], p),
-                                  "reward_kind": t["reward_kind"], "reward": reward_text(t), "amount": amt, "per_unit": per})
-        pers = [t["per_unit"] for t in plan["tiers"] if t["per_unit"] is not None]
-        if pers:
-            plan["per_unit"] = max(pers)
-            plan["per_unit_entry"] = plan["tiers"][0]["per_unit"]
-            row["comparable"] = True
-        elif not _money(p):
-            row["note"] = "건수 기준이라 보험료로 견주지 않습니다. 구간과 보상을 보세요"
-        else:
-            row["note"] = "여행이나 물품 보상이라 금액으로 견주지 않습니다. 구간과 보상을 보세요"
-    row["plan"] = {"distributed": plan, "original": None}
-    row["per_unit"], row["per_unit_entry"] = plan["per_unit"], plan["per_unit_entry"]
+               conditions=conditions(p, cat_names), compare_unit=unit, estimate=True, estimate_note=ESTIMATE_NOTE, plan_assumed=True, plan_note=PLAN_NOTE,
+               basis=basis_note(p))
+    dist = _plan(p, unit)
+    op = _original_view(p)
+    orig = _plan(op, unit) if op else None
+    row.update(comparable=dist.pop("comparable"), note=dist.pop("note"), per_unit_basis=dist.pop("per_unit_basis"), has_original=orig is not None)
+    if orig:
+        orig.pop("per_unit_basis")
+    row["plan"] = {"distributed": dist, "original": orig}
+    row["per_unit"], row["per_unit_entry"] = dist["per_unit"], dist["per_unit_entry"]
     return row
 
 
@@ -432,7 +585,7 @@ def compare(con, ym, *, ref: date | None = None, unit=COMPARE_UNIT, recipient_le
 
     돌려주는 것: {ref, unit, rows, groups, estimate_note, plan_note}
     - rows: compare_row() 의 줄에 phase(active / upcoming / ended), days_left 를 붙인 것. 10만 원당 예상 보상이 큰 순이고
-      견줄 수 없는 줄은 뒤에 둔다
+      견줄 수 없는 줄은 뒤에 둔다. plan.original 은 원안 칸이 있을 때만 채운다. 원안을 보여 줄지는 화면이 정한다
     - groups: 실적 기준(metric)이 같은 줄끼리. 보험료와 인정보험료와 건수는 서로 견주지 않는다
     """
     ref = ref or ref_date(ym)
@@ -457,10 +610,12 @@ def compare(con, ym, *, ref: date | None = None, unit=COMPARE_UNIT, recipient_le
     return {"ref": ref.isoformat(), "unit": unit, "rows": rows, "groups": groups, "estimate_note": ESTIMATE_NOTE, "plan_note": PLAN_NOTE}
 
 
-# ---------------------------------------------------------------- 지난 프로모션
-# 확정 기능은 S3 이다. 지금은 모든 결과가 마감 전 예상(estimate)이고, 확정(confirmed)을 담을 칸만 둔다.
+# ---------------------------------------------------------------- 지난 프로모션과 확정
+# 확정 전에는 결과가 마감 전 예상(estimate)이다. 메인 관리자가 confirm_results() 로 확정하면 그때의 값을 promotion_result 에 남기고,
+# 그 뒤에 final_results() 는 다시 계산하지 않고 남긴 값(confirmed)을 낸다.
 SETTLE_KO = {"estimate": "마감 전 예상", "confirmed": "확정"}
 OUTCOME_KO = {"achieved": "달성", "missed": "미달성"}
+CONFIRMED_NOTE = "메인 관리자가 확정한 결과입니다. 지급은 보험사 정산을 따릅니다."
 
 
 def _eligible(con, agent_ids) -> list:
@@ -483,42 +638,146 @@ def ended(con, *, ym=None, ref: date | None = None, recipient_level="fc") -> lis
     return sorted(items, key=lambda p: (p["date_to"], p["promo_id"]), reverse=True)
 
 
-def final_results(con, p, agent_ids, ref: date | None = None) -> dict:
-    """끝난 프로모션 하나의 사람별 최종 달성 결과. 값은 달성 현황 계산(progress)을 그대로 쓴다.
+def original_amount(p, r) -> float | None:
+    """progress() 의 결과 하나에 원안을 대입한 금액. 원안 칸이 없거나 그 구간의 원안이 비었으면 None 이다."""
+    op = _original_view(p)
+    if not op:
+        return None
+    total = r["value"]
+    if p["kind"] == "rate":
+        plain = [x for x in op["rates"] if not x["option_label"]]
+        if not plain or len(plain) != len(op["rates"]) or any(x["rate"] is None for x in plain):
+            return None
+        return sum(x["rate"] for x in plain) * total
+    if not r["tier"]:
+        return None
+    t = next((x for x in op["tiers"] if x["tier_no"] == r["tier"]["tier_no"]), None)
+    if not t or t["missing"]:
+        return None
+    if t["reward_kind"] == "fixed":
+        return t["reward_value"]
+    if t["reward_kind"] == "rate":
+        return (t["reward_value"] or 0) * total
+    return None
 
-    돌려주는 것: {promo, settlement, settlement_ko, rows, summary}
-    - rows: [{agent_id, code, name, org, value, tier_no, reward, amount, outcome, outcome_ko, settlement, settlement_ko, r}]
-      값 큰 순. r 은 progress() 의 결과 그대로다. amount 는 예상 금액이고 관리자 화면에서는 가린다 (D-17)
-    - outcome: 구간 시상은 끝난 뒤 구간이 있으면 달성. 정률 시책은 대상 실적이 있으면 달성이다
-    - settlement: 지금은 늘 estimate(마감 전 예상). S3 의 확정 기능이 confirmed 를 채운다
-    - summary: {n, achieved, missed, amount}
-    """
-    ref = ref or date.today()
-    end = date.fromisoformat(p["date_to"])
-    if ref <= end:
-        raise ValueError("아직 끝나지 않은 프로모션입니다.")
+
+def confirmation(con, promo_id) -> dict | None:
+    """살아 있는 확정 한 줄. 없거나 확정 표가 없는 오래된 DB 면 None 이다."""
+    try:
+        row = con.execute("SELECT * FROM promotion_confirm WHERE promo_id=? AND voided_at IS NULL ORDER BY confirm_id DESC LIMIT 1", (promo_id,)).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return dict(row) if row else None
+
+
+def _who(con, ids, ym) -> dict:
+    if not ids:
+        return {}
+    q = ",".join("?" * len(ids))
+    return {r["agent_id"]: dict(r) for r in con.execute(
+        f"""SELECT a.agent_id, a.internal_code code, a.name, o.name org FROM agent a
+            LEFT JOIN agent_org_history h ON h.agent_id=a.agent_id AND h.effective_from<=? AND (h.effective_to IS NULL OR h.effective_to>=?)
+            LEFT JOIN org_unit o ON o.org_id=h.org_id WHERE a.agent_id IN ({q})""", (ym, ym, *ids))}
+
+
+def _summary(rows) -> dict:
+    origs = [x["original_amount"] for x in rows if x["original_amount"] is not None]
+    return {"n": len(rows), "achieved": sum(1 for x in rows if x["outcome"] == "achieved"),
+            "missed": sum(1 for x in rows if x["outcome"] == "missed"), "amount": sum(x["amount"] or 0 for x in rows),
+            "original_amount": sum(origs) if origs else None}
+
+
+def _estimate(con, p, agent_ids, ref: date) -> list:
     ids = _eligible(con, agent_ids)
     res = progress(con, p, ids, ref)
-    who = {}
-    if ids:
-        q = ",".join("?" * len(ids))
-        ym = end.strftime("%Y%m")
-        who = {r["agent_id"]: dict(r) for r in con.execute(
-            f"""SELECT a.agent_id, a.internal_code code, a.name, o.name org FROM agent a
-                LEFT JOIN agent_org_history h ON h.agent_id=a.agent_id AND h.effective_from<=? AND (h.effective_to IS NULL OR h.effective_to>=?)
-                LEFT JOIN org_unit o ON o.org_id=h.org_id WHERE a.agent_id IN ({q})""", (ym, ym, *ids))}
+    who = _who(con, ids, date.fromisoformat(p["date_to"]).strftime("%Y%m"))
     rows = []
     for a in ids:
         r = res[a]
         ok = (r["value"] > 0) if p["kind"] == "rate" else (r["status"] == "achieved")
         rows.append({**who.get(a, {"agent_id": a, "code": None, "name": None, "org": None}), "value": r["value"],
                      "tier_no": r["tier"]["tier_no"] if r["tier"] else None, "reward": r["reward"], "amount": r["amount"],
+                     "original_amount": original_amount(p, r),
                      "outcome": "achieved" if ok else "missed", "outcome_ko": OUTCOME_KO["achieved" if ok else "missed"],
                      "settlement": "estimate", "settlement_ko": SETTLE_KO["estimate"], "r": r})
     rows.sort(key=lambda x: (-x["value"], x["code"] or ""))
-    summary = {"n": len(rows), "achieved": sum(1 for x in rows if x["outcome"] == "achieved"),
-               "missed": sum(1 for x in rows if x["outcome"] == "missed"), "amount": sum(x["amount"] or 0 for x in rows)}
-    return {"promo": p, "settlement": "estimate", "settlement_ko": SETTLE_KO["estimate"], "estimate_note": ESTIMATE_NOTE, "rows": rows, "summary": summary}
+    return rows
+
+
+def _confirmed_rows(con, p, head, agent_ids) -> list:
+    ids = sorted(set(agent_ids or ()))
+    if not ids:
+        return []
+    q = ",".join("?" * len(ids))
+    who = _who(con, ids, date.fromisoformat(p["date_to"]).strftime("%Y%m"))
+    rows = []
+    for x in con.execute(f"SELECT * FROM promotion_result WHERE confirm_id=? AND agent_id IN ({q})", (head["confirm_id"], *ids)):
+        a = x["agent_id"]
+        rows.append({**who.get(a, {"agent_id": a, "code": None, "name": None, "org": None}), "value": x["value"], "tier_no": x["tier_no"],
+                     "reward": x["reward"], "amount": x["amount"], "original_amount": x["original_amount"],
+                     "outcome": x["outcome"], "outcome_ko": OUTCOME_KO[x["outcome"]],
+                     "settlement": "confirmed", "settlement_ko": SETTLE_KO["confirmed"], "r": None})
+    rows.sort(key=lambda x: (-x["value"], x["code"] or ""))
+    return rows
+
+
+def final_results(con, p, agent_ids, ref: date | None = None) -> dict:
+    """끝난 프로모션 하나의 사람별 최종 달성 결과. agent_ids 는 범위 안 설계사 목록이다.
+
+    돌려주는 것: {promo, settlement, settlement_ko, estimate_note, basis, confirmed_by, confirmed_at, rows, summary}
+    - 확정 전(settlement=estimate): 값은 달성 현황 계산(progress)을 그대로 쓴다. 재직자만 대상이다 (D-42)
+    - 확정 뒤(settlement=confirmed): 다시 계산하지 않고 confirm_results() 가 남긴 값을 낸다. 대상은 확정할 때의 재직자다
+    - rows: [{agent_id, code, name, org, value, tier_no, reward, amount, original_amount, outcome, outcome_ko, settlement, settlement_ko, r}]
+      값 큰 순. r 은 확정 전에는 progress() 의 결과, 확정 뒤에는 None 이다.
+      amount 는 배포안 금액이고 관리자 화면에서는 가린다 (D-17). original_amount 는 원안 금액이고 메인 관리자에게만 보인다 (D-21)
+    - outcome: 구간 시상은 끝난 뒤 구간이 있으면 달성. 정률 시책은 대상 실적이 있으면 달성이다
+    - summary: {n, achieved, missed, amount, original_amount}
+    """
+    ref = ref or date.today()
+    end = date.fromisoformat(p["date_to"])
+    if ref <= end:
+        raise ValueError("아직 끝나지 않은 프로모션입니다.")
+    head = confirmation(con, p["promo_id"])
+    if head:
+        rows = _confirmed_rows(con, p, head, agent_ids)
+        return {"promo": p, "settlement": "confirmed", "settlement_ko": SETTLE_KO["confirmed"], "estimate_note": CONFIRMED_NOTE,
+                "basis": head["basis_note"] or basis_note(p), "confirmed_by": head["confirmed_by"], "confirmed_at": head["confirmed_at"],
+                "rows": rows, "summary": _summary(rows)}
+    rows = _estimate(con, p, agent_ids, ref)
+    return {"promo": p, "settlement": "estimate", "settlement_ko": SETTLE_KO["estimate"], "estimate_note": ESTIMATE_NOTE,
+            "basis": basis_note(p), "confirmed_by": None, "confirmed_at": None, "rows": rows, "summary": _summary(rows)}
+
+
+def confirm_results(con, promotion_id, by, ref: date | None = None) -> dict:
+    """끝난 프로모션의 사람별 결과를 확정해 남긴다. 메인 관리자만 부른다. by 는 login_id 이거나 auth.context() 의 결과다.
+
+    대상은 확정하는 때의 재직자 모두다 (D-42). 값은 그때의 final_results() 예상과 같다. 이미 확정했으면 막는다.
+    돌려주는 것: 확정 뒤의 final_results() 다. 메인 관리자 범위라 모든 대상이 들어 있다.
+    """
+    by = _require_main(con, by)
+    p = _load(con, promotion_id)
+    if not p:
+        raise ValueError("없는 프로모션입니다.")
+    if p["status"] != "published":
+        raise ValueError("게시한 프로모션만 확정합니다.")
+    ref = ref or date.today()
+    if ref <= date.fromisoformat(p["date_to"]):
+        raise ValueError("아직 끝나지 않은 프로모션입니다.")
+    ensure(con)
+    if confirmation(con, promotion_id):
+        raise ValueError("이미 확정한 프로모션입니다.")
+    everyone = [r["agent_id"] for r in con.execute("SELECT agent_id FROM agent WHERE status='active'")]
+    rows = _estimate(con, p, everyone, ref)
+    at = db.now()
+    cid = con.execute("""INSERT INTO promotion_confirm(promo_id, ref_date, date_basis, basis_note, n_rows, confirmed_by, confirmed_at)
+                         VALUES(?,?,?,?,?,?,?)""", (promotion_id, ref.isoformat(), p["date_basis"], basis_note(p), len(rows), by, at)).lastrowid
+    con.executemany("""INSERT INTO promotion_result(confirm_id, promo_id, agent_id, value, tier_no, reward, amount, original_amount, outcome)
+                       VALUES(?,?,?,?,?,?,?,?,?)""",
+                    [(cid, promotion_id, x["agent_id"], x["value"], x["tier_no"], x["reward"], x["amount"], x["original_amount"], x["outcome"]) for x in rows])
+    con.execute("INSERT INTO audit_log(at, actor, action, target) VALUES(?,?,?,?)",
+                (at, by, "promotion_confirm", f"{promotion_id}:{len(rows)}명"))
+    con.commit()
+    return final_results(con, p, everyone, ref)
 
 
 def past(con, agent_ids, *, ym=None, ref: date | None = None, recipient_level="fc") -> list:

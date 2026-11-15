@@ -1,4 +1,5 @@
 """S2 계산: 기간별 실적, 구분별 집계, 업권과 조직 범위 랭킹, 조직 비교, 프로모션 비교, 지난 프로모션.
+뒤에 덧붙인 것: 프로모션 실적 기준 설명(D-08), 지급 시점 표기 없음, 원안 칸(D-21), 확정 결과, 유지율, 유지 위험, 13회차 도래.
 
 같은 사람의 같은 숫자는 화면이 달라도 같아야 한다. 업적 집계 규칙(성립한 달에 더하고 철회한 달에 뺀다)과
 D-42(그 달 중간 퇴사자는 합계에 넣고 랭킹과 프로모션 달성 대상에서 뺀다)를 본다.
@@ -10,7 +11,7 @@ from datetime import date
 import pytest
 
 from app import db, masters
-from app.engine import orgs, performance, ranking
+from app.engine import orgs, performance, persist, ranking
 from app.engine import promotion as pm
 from app.engine import results as rs
 from app.web import auth
@@ -319,3 +320,239 @@ def test_past_results_match_progress(env):
     with pytest.raises(ValueError):
         pm.final_results(con, pm._load(con, done), ids, date(2026, 10, 9))     # 마지막 날에는 아직 끝나지 않았다
     assert {x["promo"]["promo_id"] for x in pm.past(con, ids, ref=ref)} == {done, rate}
+
+
+# ------------------------------------------------------------------ 프로모션 실적 기준 (D-08 가정)
+def _set(con, policy_no, **cols):
+    con.execute(f"UPDATE contract SET {', '.join(f'{k}=?' for k in cols)} WHERE policy_no=?", (*cols.values(), policy_no))
+    con.commit()
+
+
+def test_basis_default_is_receipt_date_and_falls_back_to_contract_date(env):
+    con, add = env["con"], env["add"]
+    a1, a2 = env["m1"][:2]
+    add(a1, "2026-09-28", 100_000)          # T00001 계약은 9월, 영수는 10월
+    add(a1, "2026-10-05", 40_000)           # T00002 영수일자 없음. 계약일자로 센다
+    add(a2, "2026-10-29", 70_000)           # T00003 계약은 10월, 영수는 11월
+    add(a2, "2026-10-10", 50_000, status="withdrawn", withdrawn_on="2026-10-20")   # 철회는 세지 않는다
+    _set(con, "T00001", receipt_date="2026-10-02")
+    _set(con, "T00003", receipt_date="2026-11-02")
+    win = [("10월", "2026-10-01", "2026-10-31")]
+    tiers = [(50_000, "fixed", 10_000, None)]
+    by_receipt = pm._load(con, pm.create(con, period_ym=YM, name="영수", kind="monthly", windows=win, tiers=tiers, by="t", publish=True))
+    by_contract = pm._load(con, pm.create(con, period_ym=YM, name="계약", kind="monthly", windows=win, tiers=tiers, by="t", publish=True,
+                                          date_basis="contract_date"))
+    assert by_receipt["date_basis"] == pm.DEFAULT_DATE_BASIS == "receipt_date"
+    ref = date(2026, 11, 10)
+    r = pm.progress(con, by_receipt, [a1, a2], ref)
+    c = pm.progress(con, by_contract, [a1, a2], ref)
+    assert (r[a1]["value"], r[a2]["value"]) == (140_000, 0)
+    assert (c[a1]["value"], c[a2]["value"]) == (40_000, 70_000)
+    # basis 설명 칸. 화면이 그대로 보여 준다
+    note = r[a1]["basis"]
+    assert note == pm.basis_note(by_receipt) and r[a1]["date_basis"] == "receipt_date"
+    assert "영수일자" in note and "계약일자" in note and "철회" in note and "업적 집계와 다를 수 있습니다" in note
+    assert "영수일자" not in c[a1]["basis"] and "계약일자" in c[a1]["basis"]
+    assert pm.compare_row(by_receipt)["basis"] == note
+    assert "실적 보험료, 기준일 영수일자" in pm.conditions(by_receipt)
+
+
+def test_receipt_basis_without_receipt_dates_gives_the_same_numbers(env):
+    """샘플처럼 영수일자가 모두 비면 영수일자 기준과 계약일자 기준의 결과가 같다. 계산 규칙은 바꾸지 않았다."""
+    con, add = env["con"], env["add"]
+    a1, a2 = env["m1"][:2]
+    add(a1, "2026-10-03", 60_000)
+    add(a2, "2026-10-12", 80_000, status="withdrawn", withdrawn_on="2026-11-02")
+    add(a2, "2026-10-14", 30_000, status="applied")
+    win = [("10월", "2026-10-01", "2026-10-31")]
+    tiers = [(50_000, "fixed", 10_000, None)]
+    ids = [a1, a2]
+    ref = date(2026, 11, 10)
+    got = [pm.progress(con, pm._load(con, pm.create(con, period_ym=YM, name=b, kind="monthly", windows=win, tiers=tiers, by="t", date_basis=b)),
+                       ids, ref) for b in ("receipt_date", "contract_date")]
+    strip = lambda res: {a: (x["value"], x["amount"], x["status"]) for a, x in res.items()}
+    assert strip(got[0]) == strip(got[1]) == {a1: (60_000, 10_000, "achieved"), a2: (0, None, "missed")}
+
+
+# ------------------------------------------------------------------ 지급 시점 표기 없음
+def test_unspecified_pay_timing_reads_as_no_label(env):
+    con = env["con"]
+    week = [("1주차", "2026-10-01", "2026-10-31")]
+    pid = pm.create(con, period_ym=YM, name="표기 없음", kind="rate", windows=week, pay_timing="unspecified",
+                    rates=[(None, "initial_premium", 0.5, "unspecified")], by="t", publish=True)
+    p = pm._load(con, pid)
+    assert pm.TIMING_KO["unspecified"] == "표기 없음"
+    cond = pm.conditions(p)
+    assert "지급 시점 표기 없음" in cond and not any("unspecified" in x for x in cond)
+    assert p["timing_ko"] is None                                 # 카드의 '… 지급' 꼬리를 붙이지 않는다
+    row = pm.compare_row(p)
+    assert row["plan"]["distributed"]["parts"][0]["timing_ko"] == "지급 시점 표기 없음"
+    env["add"](env["m1"][0], "2026-10-03", 100_000)
+    part = pm.progress(con, p, [env["m1"][0]], date(2026, 10, 20))[env["m1"][0]]["parts"][0]
+    assert part["timing"] == "지급 시점 표기 없음"
+    assert pm.timing_text("next_month") == "익월 지급" and pm.timing_text(None) == "지급 시점 표기 없음"
+
+
+# ------------------------------------------------------------------ 원안 칸 (D-21 가정)
+def test_original_plan_columns_feed_compare_and_survive_update(env):
+    con = env["con"]
+    week = [("1주차", "2026-10-01", "2026-10-31")]
+    tiers = [(50_000, "fixed", 30_000, None), (100_000, "fixed", 70_000, None)]
+    wk = pm.create(con, period_ym=YM, name="구간", kind="weekly", windows=week, tiers=tiers, by="t", publish=True)
+    rt = pm.create(con, period_ym=YM, name="정률", kind="rate", windows=week, rates=[(None, "initial_premium", 0.5, "next_month"),
+                                                                                    (None, "initial_premium", 0.3, "inst13")], by="t", publish=True)
+    # 원안 칸이 없으면 지금처럼 None 이다
+    assert pm.compare_row(pm._load(con, wk))["plan"]["original"] is None
+    with pytest.raises(PermissionError):
+        pm.set_original(con, wk, by="M0001", tiers={1: 40_000})                # 관리자는 넣지 못한다
+    with pytest.raises(PermissionError):
+        pm.set_original(con, wk, by={"role": "manager", "login_id": "admin"}, tiers={1: 40_000})
+    pm.set_original(con, wk, by="admin", tiers={1: 40_000})                    # 2구간은 비워 둔다
+    pm.set_original(con, rt, by="admin", rates={1: 0.6, 2: 0.4})
+    row = pm.compare_row(pm._load(con, wk))
+    assert row["has_original"] and row["per_unit"] == pytest.approx(70_000)   # 견주는 값은 배포안 그대로
+    orig = row["plan"]["original"]
+    assert [t["per_unit"] for t in orig["tiers"]] == [pytest.approx(80_000), None]
+    assert orig["tiers"][1]["missing"] and orig["tiers"][1]["reward"] == "원문 확인"
+    assert row["plan"]["distributed"]["tiers"][1]["reward"] == "70,000원"
+    r = pm.compare_row(pm._load(con, rt))
+    assert r["per_unit"] == pytest.approx(80_000) and r["plan"]["original"]["per_unit"] == pytest.approx(100_000)
+    assert any(a["action"] == "promotion_original" for a in con.execute("SELECT action FROM audit_log"))
+    # 고치기: 문턱이 같은 구간은 원안이 남고 문턱이 바뀐 구간은 원문 확인이 된다
+    pm.update(con, wk, by="admin", name="구간", windows=week, tiers=[(50_000, "fixed", 35_000, None), (120_000, "fixed", 80_000, None)])
+    t = pm._load(con, wk)["tiers"]
+    assert [x["original_value"] for x in t] == [40_000, None]
+    # compare() 도 원안을 읽는다. 원안을 보일지는 화면이 정한다
+    rows = {x["name"]: x for x in pm.compare(con, YM, ref=date(2026, 10, 20))["rows"]}
+    assert rows["정률"]["plan"]["original"]["per_unit"] == pytest.approx(100_000)
+    pm.ensure(con)                                                            # 이미 있는 칸과 표는 건너뛴다
+    pm.ensure(con)
+
+
+# ------------------------------------------------------------------ 확정 결과
+def test_confirm_results_freezes_values_and_only_main_admin_confirms(env):
+    con, add = env["con"], env["add"]
+    a1, a2, leaver = env["m1"][:3]
+    add(a1, "2026-10-02", 60_000)
+    add(a1, "2026-10-09", 50_000)
+    add(a2, "2026-10-03", 30_000)
+    add(leaver, "2026-10-04", 300_000)
+    tiers = [(50_000, "fixed", 30_000, None), (100_000, "fixed", 70_000, None)]
+    pid = pm.create(con, period_ym=YM, name="1주차", kind="weekly", windows=[("1주차", "2026-10-01", "2026-10-09")], tiers=tiers, by="t", publish=True)
+    pm.set_original(con, pid, by="admin", tiers={2: 90_000})
+    _leave(con, leaver, "2026-10-20")
+    ref = date(2026, 10, 25)
+    ids = env["m1"]
+    p = pm._load(con, pid)
+    before = pm.final_results(con, p, ids, ref)
+    assert before["settlement"] == "estimate" and before["confirmed_by"] is None and "업적 집계와 다를 수 있습니다" in before["basis"]
+    mine = {r["agent_id"]: r for r in before["rows"]}
+    assert mine[a1]["amount"] == 70_000 and mine[a1]["original_amount"] == 90_000 and before["summary"]["original_amount"] == 90_000
+    with pytest.raises(PermissionError):
+        pm.confirm_results(con, pid, "M0001", ref)
+    with pytest.raises(ValueError):
+        pm.confirm_results(con, pid, "admin", date(2026, 10, 9))               # 아직 끝나지 않았다
+    done = pm.confirm_results(con, pid, "admin", ref)
+    assert done["settlement"] == "confirmed" and done["settlement_ko"] == "확정" and done["confirmed_by"] == "admin" and done["confirmed_at"]
+    head = pm.confirmation(con, pid)
+    assert head["n_rows"] == con.execute("SELECT COUNT(*) FROM agent WHERE status='active'").fetchone()[0]
+    # 확정 뒤에 계약이 더 들어와도 확정한 값을 낸다
+    add(a2, "2026-10-05", 80_000)
+    live = pm.progress(con, p, [a2], ref)[a2]
+    after = pm.final_results(con, p, ids, ref)
+    got = {r["agent_id"]: r for r in after["rows"]}
+    assert live["value"] == 110_000 and got[a2]["value"] == 30_000 and got[a2]["outcome"] == "missed"
+    assert (got[a1]["value"], got[a1]["tier_no"], got[a1]["amount"], got[a1]["original_amount"]) == (110_000, 2, 70_000, 90_000)
+    assert leaver not in got                                                   # 확정할 때 퇴사자는 대상이 아니었다 (D-42)
+    assert all(r["settlement"] == "confirmed" and r["r"] is None for r in after["rows"])
+    assert after["summary"]["achieved"] == 1 and after["summary"]["amount"] == 70_000
+    assert pm.past(con, ids, ym=YM, ref=ref)[0]["settlement"] == "confirmed"
+    with pytest.raises(ValueError):
+        pm.confirm_results(con, pid, "admin", ref)                             # 두 번 확정하지 않는다
+    assert any(a["action"] == "promotion_confirm" for a in con.execute("SELECT action FROM audit_log"))
+
+
+# ------------------------------------------------------------------ 유지율
+def test_persistency_rates_add_up_by_insurer_and_sector(env):
+    con = env["con"]
+    a1, a2, a3 = env["m1"][:3]
+    rows = [(a1, 1, "202609", "p13", 8, 10), (a1, 3, "202609", "p13", 3, 5), (a2, 2, "202609", "p13", 9, 10),
+            (a1, 1, "202608", "p13", 1, 10), (a1, 1, "202609", "p25", 4, 5)]
+    con.executemany("INSERT INTO persistency(agent_id, insurer_id, period_ym, kind, numerator, denominator, rate) VALUES(?,?,?,?,?,?,0)", rows)
+    con.commit()
+    res = persist.rates(con, [a1, a2, a3], YM)
+    p13, p25 = res["kinds"]
+    assert (p13["kind"], p13["period_ym"], p13["kept"], p13["total"], p13["rate"]) == ("p13", "202609", 20, 25, 0.8)
+    assert p13["rate"] == persist.rate(con, [a1, a2, a3], "p13", YM)[0]       # 기존 규칙과 같은 값
+    assert {s["sector"]: (s["kept"], s["total"]) for s in p13["by_sector"]} == {"life": (17, 20), "nonlife": (3, 5)}
+    assert sum(i["total"] for i in p13["by_insurer"]) == 25
+    assert (p25["kept"], p25["total"], p25["rate"]) == (4, 5, 0.8)
+    people = {x["agent_id"]: x for x in persist.by_agent(con, [a1, a2, a3], YM)}
+    assert people[a1]["p13"]["rate"] == round(11 / 15, 4) and people[a3]["p13"]["rate"] is None
+    # 자료 없는 범위와 빈 범위는 None 이지 0 이 아니다
+    assert persist.rates(con, [a3], YM)["kinds"][0]["rate"] is None
+    assert persist.rates(con, [], YM)["kinds"][0]["rate"] is None
+    assert persist.rates(con, [a1], "202608")["kinds"][0]["period_ym"] == "202608"
+
+
+def test_risk_counts_unpaid_and_lapse_risk_without_names(env):
+    con, add = env["con"], env["add"]
+    a1, a2 = env["m1"][:2]
+    out = env["mo"][0]
+    add(a1, "2026-03-05", 50_000)            # T00001 9월까지 냄: 정상
+    add(a1, "2026-03-06", 50_000)            # T00002 8월까지: 9월 미납 1회
+    add(a1, "2026-03-07", 50_000)            # T00003 6월까지: 실효 위험
+    add(a2, "2026-03-08", 50_000)            # T00004 마지막 납입 달을 모른다
+    add(a2, "2026-03-09", 50_000)            # T00005 연납은 보지 않는다
+    add(a2, "2026-03-10", 50_000, status="lapsed")    # T00006 9월 실효
+    add(out, "2026-03-11", 50_000)           # T00007 범위 밖
+    con.execute("UPDATE contract SET policyholder_name='홍길동'")
+    _set(con, "T00001", last_paid_ym="202609")
+    _set(con, "T00002", last_paid_ym="202608")
+    _set(con, "T00003", last_paid_ym="202606")
+    _set(con, "T00005", last_paid_ym="202603", payment_mode="annual")
+    _set(con, "T00006", status_date="2026-09-15")
+    _set(con, "T00007", last_paid_ym="202601")
+    con.execute("UPDATE contract SET payment_mode='monthly' WHERE payment_mode IS NULL")
+    con.commit()
+    res = persist.risk(con, [a1, a2], YM)
+    assert res["counts"] == {"unpaid": 1, "lapse_risk": 1, "lapsed": 1, "no_data": 1}
+    items = {x["policy_tail"]: x for x in res["items"]}
+    assert set(items) == {"0002", "0003", "0006"}
+    assert (items["0002"]["level"], items["0002"]["missed"]) == ("unpaid", 1)
+    assert (items["0003"]["level"], items["0003"]["level_ko"], items["0003"]["missed"]) == ("lapse_risk", "실효 위험", 3)
+    assert res["items"][0]["level"] == "lapse_risk"
+    for x in res["items"]:                                                    # D-05: 이름과 증권번호 전체를 돌려주지 않는다
+        assert "홍길동" not in repr(x) and not any(k in x for k in ("policyholder_name", "insured_name", "policy_no"))
+    # 납입 회차 표로 마지막 납입 달을 메운다
+    con.execute("INSERT INTO premium_payment(contract_id, period_ym, installment_no, amount) SELECT contract_id, '202607', 5, 1 FROM contract WHERE policy_no='T00004'")
+    con.commit()
+    again = persist.risk(con, [a1, a2], YM)["counts"]
+    assert again["no_data"] == 0 and again["lapse_risk"] == 2
+
+
+# ------------------------------------------------------------------ 13회차 도래
+def test_inst13_due_dates_and_counts(env):
+    con, add = env["con"], env["add"]
+    a1, a2 = env["m1"][:2]
+    add(a1, "2025-11-03", 10_000)            # T00001 도래 2026-11-03
+    add(a1, "2025-11-03", 10_000)            # T00002 같은 날
+    add(a2, "2025-11-30", 10_000)            # T00003 도래 2026-11-30, 실효 위험
+    add(a2, "2025-12-31", 10_000)            # T00004 도래 2026-12-31
+    add(a2, "2025-11-10", 10_000, status="withdrawn")   # 철회는 세지 않는다
+    add(a2, "2025-11-11", 10_000)            # T00006 일시납은 뺀다
+    add(a2, "2025-10-31", 10_000)            # T00007 범위 앞
+    add(env["mo"][0], "2025-11-05", 10_000)  # 범위 밖 사람
+    _set(con, "T00006", payment_mode="single")
+    _set(con, "T00003", last_paid_ym="202607", payment_mode="monthly")
+    assert persist.due13("2024-02-29") == date(2025, 2, 28)
+    res = persist.inst13_due(con, [a1, a2], "2026-11-01", "2026-12-31", ym=YM)
+    assert res["total"] == 4 and res["at_risk"] == 1
+    assert res["days"] == [{"date": "2026-11-03", "count": 2, "at_risk": 0}, {"date": "2026-11-30", "count": 1, "at_risk": 1},
+                           {"date": "2026-12-31", "count": 1, "at_risk": 0}]
+    assert res["months"] == [{"ym": "202611", "count": 3, "at_risk": 1}, {"ym": "202612", "count": 1, "at_risk": 0}]
+    assert all(set(d) == {"date", "count", "at_risk"} for d in res["days"])   # 날짜와 건수만
+    assert persist.inst13_due(con, [a1], "2026-11-01", "2026-11-30")["total"] == 2
+    view = persist.overview(con, [a1, a2], YM)                               # 기준일 10월 31일 다음 날부터 석 달
+    assert view["due"]["date_from"] == "2026-11-01" and view["due"]["date_to"] == "2027-01-31" and view["due"]["total"] == 4
+    assert view["risk"]["counts"]["lapse_risk"] == 1 and [k["kind"] for k in view["rates"]["kinds"]] == ["p13", "p25"]

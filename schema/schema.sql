@@ -1172,3 +1172,46 @@ CREATE TABLE IF NOT EXISTS board_file (
 );
 CREATE INDEX IF NOT EXISTS idx_board_file_post ON board_file(post_id);
 -- [board:end]
+
+-- ---------------------------------------------------------------------------
+-- 프로모션 원안 칸과 확정 결과 (파트 D, D-21 은 열린 결정이라 제안대로 둔 가정). 기존 CREATE 문은 그대로 두고 덧붙이기만 한다.
+-- 원안: 보험사 원안의 보상. 지금 칸(reward_value, rate)은 적립금을 뺀 배포안으로 본다. 원안 칸은 메인 관리자가 넣은 것만 있고
+-- 비면 원문 확인이다. 설계사 화면은 배포안만, 메인 관리자 화면은 둘 다 보여 준다. 금액 단위는 reward_value, rate 와 같다.
+-- 확정: 끝난 프로모션의 사람별 결과를 메인 관리자가 확정해 남긴다. 확정 전에는 계약 원장에서 그때그때 계산한 마감 전 예상이다.
+-- 확정 한 번이 promotion_confirm 한 줄이고, 그때의 재직자 모두의 결과가 promotion_result 에 남는다. 지우지 않는다.
+-- 확정을 무르는 일은 아직 없다. 생기면 voided_at 을 채우고 새 확정을 만든다.
+-- 오래된 DB 에서도 이 묶음만 다시 돌릴 수 있게 쓴다. app/engine/promotion.py 의 ensure 가 이 묶음을 읽고, 이미 있는 칸은 건너뛴다.
+-- [promotion_plan:begin]
+ALTER TABLE promotion_tier ADD COLUMN original_value NUMERIC;   -- 원안 보상. 정액이면 원, 비율이면 0.5 = 50%
+ALTER TABLE promotion_rate ADD COLUMN original_rate NUMERIC;    -- 원안 지급률
+
+CREATE TABLE IF NOT EXISTS promotion_confirm (
+    confirm_id      INTEGER PRIMARY KEY,
+    promo_id        INTEGER NOT NULL REFERENCES promotion(promo_id),
+    ref_date        TEXT NOT NULL,                    -- 계산 기준일 YYYY-MM-DD. 프로모션 종료일 뒤다
+    date_basis      TEXT NOT NULL,                    -- 확정할 때의 실적 기준일 칸
+    basis_note      TEXT,                             -- 확정할 때 화면에 보인 실적 기준 설명
+    n_rows          INTEGER NOT NULL,
+    confirmed_by    TEXT NOT NULL,                    -- 메인 관리자의 login_id
+    confirmed_at    TEXT NOT NULL,
+    voided_by       TEXT,
+    voided_at       TEXT,
+    void_reason     TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_promotion_confirm_live ON promotion_confirm(promo_id) WHERE voided_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS promotion_result (
+    result_id       INTEGER PRIMARY KEY,
+    confirm_id      INTEGER NOT NULL REFERENCES promotion_confirm(confirm_id),
+    promo_id        INTEGER NOT NULL REFERENCES promotion(promo_id),
+    agent_id        INTEGER NOT NULL REFERENCES agent(agent_id),
+    value           NUMERIC NOT NULL,                 -- 실적. 프로모션의 지표 단위
+    tier_no         INTEGER,                          -- 구간. 없으면 NULL
+    reward          TEXT,                             -- 보상 글. 여행지, 물품, 금액 글
+    amount          NUMERIC,                          -- 배포안 금액. 여행과 물품은 NULL
+    original_amount NUMERIC,                          -- 원안 금액. 원안 칸이 없으면 NULL
+    outcome         TEXT NOT NULL,                    -- achieved / missed
+    UNIQUE (confirm_id, agent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_promotion_result_promo ON promotion_result(promo_id, agent_id);
+-- [promotion_plan:end]
