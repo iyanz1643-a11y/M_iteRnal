@@ -25,6 +25,7 @@
 <td class="hide-sm">{{ gap }}</td>
 {% if show_amount %}<td class="num">{% if r.amount is not none %}{{ r.amount|won }}원{% elif r.reward %}{{ r.reward }}{% else %}-{% endif %}</td>{% endif %}</tr>{% endfor %}
 </table></div>
-<p class="cap">구간과 금액은 예상입니다. 성립한 계약만 세고 청약, 반송, 철회는 세지 않습니다. 기준일은 {{ pm.BASIS_KO[sel.date_basis] }}입니다.</p>
+<p class="cap" data-note="basis">{{ basis_note(sel, rows[0].r if rows else none, ref) }}</p>
+<p class="cap">구간과 금액은 예상입니다. 청약과 반송도 세지 않습니다.</p>
 {% endif %}
 {% endblock %}

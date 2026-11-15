@@ -402,3 +402,23 @@ table.onboard .chip{white-space:nowrap}
   table.onboard .sm-sub .chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px}
   table.onboard td.strong{min-width:0}
 }
+
+/* 조직 부문 시상의 순위별 시상표. 조직 부문 시상과 명예의전당 (_awards.html) */
+.prizes{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:14px}
+.prizes .k{font-size:13px;margin:0}
+.prizes .chip{white-space:normal;word-break:keep-all}
+
+/* 계약 원장 /perf/contracts. 목록, 내려받기, 쪽 나누기, 상세 */
+.contract-pick label.f{flex:0 1 180px}
+.contract-acts{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin-top:20px}
+.contract-acts .cap{margin:0}
+.contract-table td.wrap{white-space:normal;word-break:keep-all;max-width:240px}
+.pager{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:16px}
+.pager .cap{margin:0}
+.facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 24px;margin:0}
+.facts div{min-width:0}
+.facts dt{font-size:13px;color:var(--quiet);font-weight:600}
+.facts dd{margin:2px 0 0;font-size:17px;font-variant-numeric:tabular-nums;word-break:keep-all;overflow-wrap:anywhere}
+.reveal-form{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-top:14px}
+.reveal-form label.f{flex:1 1 280px}
+@media (max-width:760px){.contract-pick label.f{flex:1 1 140px}.facts{grid-template-columns:minmax(0,1fr)}}

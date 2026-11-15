@@ -1,0 +1,6 @@
+{# 조직 부문 시상의 순위별 시상표. 규칙은 app/web/awards.py 에 있다(D-45 가정). 조직 부문 시상과 명예의전당이 함께 쓴다 #}
+{% macro prize_line(prizes, note) %}
+{% if prizes %}<div class="prizes" data-rule="prize-table"><span class="k">순위별 시상</span>
+  <div class="chips">{% for p in prizes %}<span class="chip" data-prize-rank="{{ p.rank }}">{{ p.rank }}위 · {{ p.reward }}</span>{% endfor %}</div></div>
+<p class="cap" style="margin-top:6px">{{ note }}</p>{% endif %}
+{% endmacro %}

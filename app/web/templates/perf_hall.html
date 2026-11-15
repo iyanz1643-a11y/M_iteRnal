@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% import "_perf.html" as pf %}
+{% extends "base.html" %}{% import "_perf.html" as pf %}{% import "_awards.html" as aw %}
 {% block body %}
 <p class="eyebrow">{{ prev|ymko }} · {{ '마감 확정' if closed else '마감 전' }}</p>
 <h1 class="display">명예의전당</h1>
@@ -30,13 +30,14 @@
 {% if divisions %}{% for d in divisions %}
 <section class="card" style="margin-top:16px">
   <div class="chips"><span class="chip blue">{{ d.org_name }}</span><span class="chip">{{ d.name }}</span><span class="chip good">확정</span></div>
+  {{ aw.prize_line(d.prizes, prize_note) }}
   <div style="overflow-x:auto;margin-top:12px"><table>
     <tr><th>순위</th><th>성명</th><th class="num">{{ d.metric_ko }}</th><th class="hide-sm">시상</th></tr>
     {% for w in d.winners %}<tr class="{{ 'me' if w.agent_id == ctx.agent_id }}"><td class="strong">{{ w.rank }}</td><td class="strong">{{ w.name }}</td>
       <td class="num">{% if d.metric == 'policy_count' %}{{ w.value|n }}건{% else %}{{ w.value|won }}원{% endif %}</td>
       <td class="hide-sm">{% if w.reward %}{{ w.reward }}{% else %}<span class="chip good">수상</span>{% endif %}</td></tr>{% endfor %}
   </table></div>
-  <p class="cap">{{ d.winners[0].confirmed_at[:10] }}에 확정했습니다.{% if ctx.role != 'main' %} 시상 내용은 본인 줄에만 적습니다.{% endif %}</p>
+  <p class="cap">{{ d.winners[0].confirmed_at[:10] }}에 확정했습니다. 시상 내용은 확정할 때의 순위별 상품표입니다.</p>
 </section>{% endfor %}
 {% else %}<div class="card"><div class="k">확정한 조직 부문 수상이 없습니다</div><div class="cap">메인 관리자가 지난달 수상자를 확정하면 여기에 보입니다.</div></div>{% endif %}
 

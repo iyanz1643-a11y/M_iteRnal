@@ -50,7 +50,8 @@
       <span>{{ pr.val(t.min_value, p) }} 이상</span><b>{{ pm.reward_text(t) }}</b></div>{% endfor %}</div>
   </div>
   {% endif %}
-  {% if p.caution %}<p class="cap" style="margin-top:16px">{{ p.caution }}</p>{% endif %}
+  <p class="cap" style="margin-top:16px" data-note="basis">{{ basis_note(p, r, ref) }}</p>
+  {% if p.caution %}<p class="cap" style="margin-top:8px">{{ p.caution }}</p>{% endif %}
 </section>
 {% endfor %}
 </div>

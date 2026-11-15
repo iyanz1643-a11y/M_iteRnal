@@ -14,6 +14,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.web.deps import HERE, PASSWORD_PATH, NeedLogin, NeedPasswordChange, csrf_protect, guard, page, templates
 from app.web.routes import auth, board, card, home, me, notify, org, promo, schedule, staff, team
+from app.web.routes import contracts as contract_routes
 from app.web.routes import edu as edu_routes
 from app.web.routes import my as my_routes
 from app.web.routes import perf as perf_routes
@@ -60,7 +61,7 @@ for r in (auth, home, team, org, staff, me, promo, card):
     app.include_router(r.router)
 for r in (notify, schedule, board):          # 공통 묶음의 알림함, 일정, 공지와 자료실
     app.include_router(r.router)
-for r in (perf_routes, my_routes):            # 실적 묶음과 내 진척의 실적 요약, 시상 진척
+for r in (perf_routes, contract_routes, my_routes):   # 실적 묶음, 계약 원장, 내 진척의 실적 요약과 시상 진척
     app.include_router(r.router)
 app.include_router(edu_routes.router)         # 교육 묶음, 내 교육, 교육 진척도, 수료자 명부 안내
 

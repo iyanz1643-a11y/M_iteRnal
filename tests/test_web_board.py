@@ -187,7 +187,7 @@ def test_target_below_the_org_includes_its_children(env):
     assert _post(admin, title="지점 아래 포함", org=x).status_code == 303
     assert _post(admin, title="아래 조직 하나만", org=child[0]).status_code == 303
     mgr = login(env, env["manager"]).get("/board").text
-    assert ">지점 아래 포함<" in mgr and ">아래 조직 하나만<" not in mgr                 # 대상 조직보다 위의 관리자는 대상 밖이다
+    assert ">지점 아래 포함<" in mgr and ">아래 조직 하나만<" in mgr                     # 대상 조직보다 위의 관리자도 본다(2026-11-15 가정)
     if deep:
         assert ">지점 아래 포함<" in login(env, env["login_of"](deep)).get("/board").text
 

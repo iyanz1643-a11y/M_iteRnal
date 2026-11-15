@@ -45,6 +45,8 @@
   <td class="num">{% if r.status == 'missed' %}<span class="chip bad">미달</span>{% elif r.tier %}<span class="chip good">{{ r.reward }}</span>{% elif p.kind == 'rate' and r.value > 0 %}<span class="chip good">실적 있음</span>{% elif r.next %}<span class="chip blue">{{ pr.val(r.next.gap, p) }} 남음</span>{% else %}<span class="chip">실적 없음</span>{% endif %}</td>
   <td class="num hide-sm">{% if r.amount %}{{ r.amount|won }}원{% elif p.kind == 'rate' and r.amount is none %}원문 확인{% else %}-{% endif %}</td></tr>{% endfor %}
 </table></div>
+{% set notes = [] %}{% for p in promos %}{% set n = basis_note(p, p.r, ref) %}{% if n not in notes %}{% set _ = notes.append(n) %}{% endif %}{% endfor %}
+{% for n in notes %}<p class="cap" data-note="basis">{{ n }}</p>{% endfor %}
 <p class="cap">예상 금액입니다. 확정은 보험사 정산을 따릅니다. <a href="{{ '/promo/progress?view=me' if ctx.role == 'manager' else '/promo/progress' }}">프로모션별 자세히 보기</a></p>
 {% else %}<div class="card"><div class="k">진행 중인 프로모션이 없습니다</div></div>{% endif %}
 {% endif %}

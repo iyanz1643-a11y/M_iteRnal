@@ -8,7 +8,9 @@
 - 조직 비교: 범위 안 조직 목록(ctx['org_ids'])만 넘긴다.
 - 명예의전당: 저장된 전월 랭킹 run(ranking_snapshot)과 확정한 조직 부문 수상(org_award_result), 수상 이력(agent_certification_award).
 
-D-17. 이 묶음에는 수수료와 시상 금액을 싣지 않는다. 명예의전당의 조직 부문 시상 내용은 메인 관리자와 본인에게만 적는다.
+D-17. 이 묶음에는 수수료와 시상 금액을 싣지 않는다. 명예의전당의 조직 부문 시상 내용은 D-45 제안대로(가정) 모두에게
+공개하는 순위별 상품표로 보고 모든 역할에게 적는다. 규칙은 app/web/awards.py 한 곳이고 조직 부문 시상 화면과 같다.
+계약 원장은 app/web/routes/contracts.py 에 따로 있다.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -18,6 +20,7 @@ from app.engine import orgs
 from app.engine import results as rs
 from app.org import levels
 from app.periods import ym_add
+from app.web import awards
 from app.web.deps import _in, _q, get_con, guard, page
 
 router = APIRouter()
@@ -196,16 +199,14 @@ def hall_ranking(con, ctx, prev, metric) -> dict | None:
 
 def hall_divisions(con, ctx, prev) -> list:
     """전월에 확정한 조직 부문 수상자. 볼 수 있는 부문(org_award.visible)만, 줄은 상위 10명과 자기 범위다.
-    시상 내용은 메인 관리자와 본인 줄에만 싣는다 (D-17)."""
+    순위별 시상 내용은 모두에게 공개하는 상품표라 역할과 상관없이 싣는다. 합계는 만들지 않는다 (awards.py, D-45 가정, D-17)."""
     out = []
     for d in oa.visible(con, ctx, prev, include_inactive=True):
-        rows = oa.view_rows(oa.confirmed(con, d["division_id"], prev), ctx)
+        done = oa.confirmed(con, d["division_id"], prev)
+        rows = awards.label_rows(oa.view_rows(done, ctx))
         if not rows:
             continue
-        for r in rows:
-            if ctx["role"] != "main" and r["agent_id"] != ctx.get("agent_id"):
-                r["reward"] = None
-        out.append({**d, "winners": rows})
+        out.append({**d, "winners": rows, "prizes": awards.confirmed_prizes(done)})
     return out
 
 
@@ -232,4 +233,5 @@ def perf_hall(request: Request, metric: str = "recognized_premium", ctx: dict = 
     prev = ym_add(ctx["ym"], -1)
     closed = bool(con.execute("SELECT 1 FROM close_period WHERE period_ym=? AND status='closed'", (prev,)).fetchone())
     return page(request, ctx, "perf_hall.html", prev=prev, closed=closed, metric=metric, METRICS=HALL_METRICS, fresh=fresh(con, prev),
-                rank=hall_ranking(con, ctx, prev, metric), divisions=hall_divisions(con, ctx, prev), history=hall_history(con, ctx))
+                rank=hall_ranking(con, ctx, prev, metric), divisions=hall_divisions(con, ctx, prev), history=hall_history(con, ctx),
+                prize_note=awards.PUBLIC_NOTE)

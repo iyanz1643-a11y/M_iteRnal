@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends "base.html" %}{% import "_awards.html" as aw %}
 {% macro val(v, d) %}{% if d.metric == 'policy_count' %}{{ v|n }}건{% else %}{{ v|won }}원{% endif %}{% endmacro %}
 {% block body %}
 <p class="eyebrow">{{ ctx.ym[:4] }}년 {{ ctx.ym[4:]|int }}월 · {{ SCOPES[ctx.scope] }}</p>
@@ -41,7 +41,8 @@
   <div class="block-head"><div><div class="chips"><span class="chip blue">{{ d.org_name }}</span><span class="chip">{{ d.metric_ko }}</span><span class="chip">{{ d.sector_ko }}</span>
       <span class="chip">상위 {{ d.top_n }}명</span>{% if d.confirmed %}<span class="chip good">확정</span>{% else %}<span class="chip warn">집계 중</span>{% endif %}
       {% if d.status != 'active' %}<span class="chip bad">닫힘</span>{% endif %}</div>
-      {% if d.note %}<div class="cap">{{ d.note }}</div>{% endif %}</div>
+      {% if d.note %}<div class="cap">{{ d.note }}</div>{% endif %}
+      {{ aw.prize_line(d.prizes, prize_note) }}</div>
     {% if d.can_manage %}<form method="post" action="/promo/org-awards" class="actions"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="division_id" value="{{ d.division_id }}">
       <a class="ghost" href="/promo/org-awards?edit={{ d.division_id }}" style="display:inline-block;border-radius:999px;background:var(--bg);color:var(--ink);font-size:14px;font-weight:600;padding:7px 14px">고치기</a>
       {% if d.status == 'active' %}<button class="ghost" name="action" value="inactive">닫기</button>{% else %}<button class="ghost" name="action" value="active">다시 열기</button>{% endif %}

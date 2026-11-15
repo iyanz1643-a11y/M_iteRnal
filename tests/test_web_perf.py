@@ -26,7 +26,7 @@ from app.web import auth, menu
 PW = "perf-pass-1234"
 TOKEN = re.compile(r'name="csrf_token" value="([^"]+)"')
 NEW = ["/perf/period", "/perf/category", "/perf/ranking", "/perf/org-compare", "/perf/hall", "/my/summary", "/my/awards"]
-NOT_YET = ["/perf/contracts", "/perf/persistency", "/my/persistency"]          # D-05 와 유지율 엔진 확인이 먼저다
+NOT_YET = ["/perf/persistency", "/my/persistency"]          # 유지율 엔진 확인이 먼저다. 계약 원장은 tests/test_web_s2_finish.py 가 본다
 
 
 class Client(TestClient):
@@ -278,8 +278,9 @@ def test_d17_manager_other_views_show_no_member_amounts(env):
     assert not s1._leaks(pages, checkable, "manager")
 
 
-def test_d17_hall_shows_award_content_only_to_main_and_self(env):
-    """명예의전당의 확정한 조직 부문 수상. 시상 내용은 메인 관리자와 본인 줄에만 적는다."""
+def test_d45_hall_shows_award_content_to_everyone(env):
+    """명예의전당의 확정한 조직 부문 수상. D-45 제안대로(가정) 순위별 시상 내용은 공개 상품표라 세 역할 모두 본다.
+    규칙과 합계 금지는 tests/test_web_s2_finish.py 가 조직 부문 시상 화면과 함께 본다."""
     con, mgr, who = env["con"], env["mgr"], env["who"]
     prev = ym_add(env["ym"], -1)
     other = next(a for a in sorted(ctx_of(env, mgr["code"])["agent_ids"]) if a not in (who, mgr["agent_id"], env["leaver"]))
@@ -294,8 +295,8 @@ def test_d17_hall_shows_award_content_only_to_main_and_self(env):
         boss = login(env, mgr["code"]).get("/perf/hall").text
         me = login(env, env["who_code"]).get("/perf/hall").text
         assert "시험시상가" in main and "시험시상나" in main
-        assert "시험 수상 부문" in boss and "시험시상가" not in boss and "시험시상나" not in boss
-        assert "시험시상가" in me and "시험시상나" not in me
+        assert "시험 수상 부문" in boss and "시험시상가" in boss and "시험시상나" in boss
+        assert "시험시상가" in me and "시험시상나" in me
     finally:
         con.execute("DELETE FROM org_award_result WHERE division_id=?", (did,))
         con.execute("DELETE FROM org_award_reward WHERE division_id=?", (did,))

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block body %}
+<p class="eyebrow"><a href="{{ path }}">계약 원장</a> · {{ c.insurer }} · {{ SCOPES[ctx.scope] }}</p>
+<h1 class="display word">{{ c.no }}</h1>
+<p class="lede">{{ c.product or '상품 원문 확인' }}</p>
+<div class="chips" style="margin-top:12px"><span class="chip {{ c.status_class }}">{{ c.status_ko }}</span><span class="chip">{{ c.category }}</span><span class="chip">{{ c.sector_ko }}</span></div>
+<p class="cap perf-fresh"><span class="dot {{ '' if fresh.last_load else 'off' }}"></span>{% if fresh.last_load %}{{ fresh.last_load|when }} 계약 적재 기준입니다.{% else %}아직 적재한 계약 자료가 없습니다.{% endif %}</p>
+
+<h2 class="sec">계약자와 피보험자</h2>
+{% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
+<section class="card" data-names="{{ 'shown' if names else 'masked' }}">
+  <dl class="facts">
+    <div><dt>계약자</dt><dd>{{ names.holder if names else c.holder }}</dd></div>
+    <div><dt>피보험자</dt><dd>{{ names.insured if names else c.insured }}</dd></div>
+  </dl>
+  {% if names %}
+  <p class="cap">{% if access == 'own' %}담당 설계사라 이름을 봅니다.{% elif access == 'head' %}이 계약의 직속 관리자라 이름을 봅니다.{% else %}적은 사유로 이름을 봅니다. 사유: {{ reason }}{% endif %}
+    이름을 본 일은 변경 기록에 남습니다. 옮겨 적거나 밖으로 보내지 마세요.</p>
+  {% elif access == 'reason' %}
+  <p class="cap">메인 관리자는 조회 사유를 적은 뒤 이름을 봅니다. 사유와 본 일은 변경 기록에 남습니다.</p>
+  <form class="reveal-form" method="post" action="{{ path }}"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="action" value="reveal"><input type="hidden" name="id" value="{{ c.contract_id }}">
+    <label class="f">조회 사유<input type="text" name="reason" minlength="{{ REASON_MIN }}" maxlength="{{ REASON_MAX }}" placeholder="예: 보험사 민원 확인" required></label>
+    <button class="primary" type="submit">사유 남기고 이름 보기</button></form>
+  {% else %}
+  <p class="cap">계약자와 피보험자 이름은 담당 설계사와, 업적 귀속 월에 그 설계사가 속한 조직의 조직장과 대리만 봅니다.</p>
+  {% endif %}
+</section>
+
+<h2 class="sec">계약</h2>
+<section class="card"><dl class="facts">
+  <div><dt>증권번호</dt><dd>{{ c.policy_no or '성립 전' }}</dd></div>
+  <div><dt>청약번호</dt><dd>{{ c.application_no or '-' }}</dd></div>
+  <div><dt>보험사</dt><dd>{{ c.insurer }}</dd></div>
+  <div><dt>상품</dt><dd>{{ c.product or '-' }}</dd></div>
+  <div><dt>계약일</dt><dd>{{ c.contract_date or '성립 전' }}</dd></div>
+  <div><dt>청약일</dt><dd>{{ c.application_date or '-' }}</dd></div>
+  <div><dt>업적 귀속 월</dt><dd>{{ c.ym|ymko if c.ym else '-' }}</dd></div>
+  <div><dt>상태</dt><dd>{{ c.status_ko }}{% if c.status_date %} · {{ c.status_date }}{% endif %}{% if c.withdrawal_date %} · 철회일 {{ c.withdrawal_date }}{% endif %}</dd></div>
+  <div><dt>인정보험료</dt><dd>{{ c.converted_premium|won }}원</dd></div>
+  <div><dt>보험료</dt><dd>{{ c.premium|won }}원{% if c.premium_monthly is not none %} · 월납 환산 {{ c.premium_monthly|won }}원{% endif %}</dd></div>
+  <div><dt>건수</dt><dd>{{ c.policy_count|n }}건</dd></div>
+  <div><dt>납입</dt><dd>{{ {'monthly': '월납', 'annual': '연납', 'single': '일시납', 'quarterly': '3개월납', 'semiannual': '6개월납'}.get(c.payment_mode, c.payment_mode or '-') }}{% if c.payment_term_name %} · {{ c.payment_term_name }}{% elif c.payment_term %} · {{ c.payment_term }}년{% endif %}{% if c.paid_installments %} · {{ c.paid_installments }}회차까지{% endif %}</dd></div>
+  <div><dt>담당 설계사</dt><dd>{{ c.agent_name or '담당 미확인' }}{% if c.agent_code %} · {{ c.agent_code }}{% endif %}</dd></div>
+  <div><dt>그 달 소속</dt><dd>{{ c.org }}</dd></div>
+</dl></section>
+
+<h2 class="sec">상태 이력</h2>
+{% if c.history %}<div class="card tablecard"><table>
+<tr><th>날짜</th><th>상태</th><th class="hide-sm">적재</th></tr>
+{% for h in c.history %}<tr><td class="strong">{{ h.status_date }}</td><td>{{ h.status_ko }}</td><td class="hide-sm">{{ h.created_at|when }}</td></tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">쌓인 상태 이력이 없습니다</div><div class="cap">계약현황을 다시 올려 상태가 바뀌면 여기에 쌓입니다.</div></div>{% endif %}
+<p class="cap">수수료와 시상 금액은 이 화면에 없습니다. <a href="{{ path }}">목록으로</a></p>
+{% endblock %}

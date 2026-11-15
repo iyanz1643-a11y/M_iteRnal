@@ -161,6 +161,8 @@ def _screens(con, ctx):
         paths += ["/promo/org-awards?new=1"] + [f"/promo/org-awards?edit={d}" for d in divisions if oa.can_manage(ctx, oa.load(con, d)["org_id"])]
     if role in ("manager", "agent"):
         paths.append("/promo/progress?view=me")
+    # 계약 원장의 다른 보기. 전체 기간 목록과 CSV 내려받기. 둘 다 이름을 가린다. 계약 상세는 아래 D-05 범위 시험이 따로 본다
+    paths += ["/perf/contracts?ym=all", "/perf/contracts?ym=all&export=csv"]
     if role == "main":
         paths += [f"/promo/tiers?edit={p}" for p in promos]
         paths += [f"/promo/tiers?line={r[0]}" for r in con.execute("SELECT line_id FROM incentive_plan_line WHERE recipient_level='fc' ORDER BY line_id LIMIT 5")]
@@ -195,14 +197,25 @@ def _open_all(c, con, ctx, tmp):
 
 
 # ================================================================ D-05 계약자와 피보험자 이름
+def _fill_names(path):
+    """샘플 양식의 계약자 이름은 이미 가린 꼴(가운데 *)이다. 그대로는 화면이 가렸는지 알아볼 수 없어 사본에 가짜 이름을 넣는다.
+    가짜 실제 양식은 가리지 않은 이름이 있어 손대지 않는다. 계약 번호로 만들어 이름마다 다르다."""
+    con = db.connect(path)
+    con.execute("""UPDATE contract SET policyholder_name='검사고객' || printf('%04d', contract_id) || '님' WHERE policyholder_name LIKE '%*%'""")
+    con.execute("""UPDATE contract SET insured_name='검사피보' || printf('%04d', contract_id) || '님' WHERE insured_name IS NULL OR insured_name LIKE '%*%'""")
+    con.commit()
+    con.close()
+
+
 def _holder_names(con) -> set:
+    """원장과 raw_row 의 계약자와 피보험자 이름. 이미 가린 값(가운데 *)은 이름이 아니라 뺀다."""
     names = set()
     for col in ("policyholder_name", "insured_name"):
         names |= {r[0].strip() for r in con.execute(f"SELECT DISTINCT {col} FROM contract WHERE {col} IS NOT NULL")}
     for (raw,) in con.execute("SELECT raw_json FROM raw_row"):
         row = json.loads(raw)
         names |= {str(row[k]).strip() for k in NAME_KEYS if row.get(k) not in (None, "")}
-    return {n for n in names if n and n != "-"}
+    return {n for n in names if n and n != "-" and "*" not in n}
 
 
 def _mask_holder_names(path):
@@ -218,24 +231,26 @@ def _mask_holder_names(path):
 
 
 def test_d05_no_holder_or_insured_name_on_any_screen(env):
-    """D-05. 계약자와 피보험자 이름은 어느 역할의 어느 화면에도 나오지 않는다. 지금은 이름을 보여 주는 화면이 없다.
+    """D-05. 계약자와 피보험자 이름은 계약 상세 밖의 어느 역할의 어느 화면에도 나오지 않는다. 계약 원장의 목록과 CSV 도 가린다.
 
     알아보는 법: 원장(contract)과 raw_row 에서 이름 값을 읽는다. DB 를 둘로 복사해 하나에서는 그 이름 칸만 지운다.
     같은 계정으로 두 사본의 같은 화면을 열어 이름마다 나온 횟수를 센다. 횟수가 다르면 그 화면이 계약자나 피보험자 칸을 그린 것이다.
     가짜 이름이 설계사 이름이나 조직 이름, 화면 문구와 우연히 같아도 두 사본에서 똑같이 나오므로 잘못 걸리지 않는다.
+    샘플의 이름은 이미 가린 꼴이라 사본에 가짜 이름을 넣고 본다(_fill_names).
 
-    나중에 계약 상세 화면을 만들 때: 계약자와 피보험자 이름은 그 계약의 담당 설계사(contract.agent_id)와 그 설계사의
-    직속 관리자에게만 보여야 한다. 직속 관리자는 계약 귀속 월에 담당 설계사가 속한 조직의 조직장과 그 기간의 대리다.
-    위 조직의 관리자, 다른 설계사, 목록 화면에서는 가린다. 메인 관리자를 어떻게 할지는 결정에 없으므로 그때 여쭙는다.
-    그 화면이 생기면 이 시험의 기대를 그대로 두지 말고, 담당 설계사와 직속 관리자는 상세에서 보고
-    나머지 계정과 모든 목록 화면은 보지 못하는 시험으로 나눈다.
+    계약 상세(/perf/contracts?id=)는 이름을 보여도 되는 유일한 화면이다. 그 범위는 아래
+    test_d05_contract_detail_names_only_for_agent_and_direct_heads 가 본다.
     """
-    con = db.connect(env["db"])
+    src = _copy(env, "d05_src")
+    _fill_names(src)
+    con = db.connect(src)
     names = _holder_names(con)
     people = _people(con)
     con.close()
     assert len(names) >= 20, "원장과 raw_row 에 계약자 이름이 있어야 시험이 뜻이 있다"
-    plain, masked = _copy(env, "d05_plain"), _copy(env, "d05_masked")
+    plain, masked = env["tmp"] / "d05_plain.db", env["tmp"] / "d05_masked.db"
+    shutil.copy(src, plain)
+    shutil.copy(src, masked)
     _mask_holder_names(masked)
     leaks = []
     for label, login_id in people:
@@ -268,16 +283,114 @@ def test_d05_fake_real_db_keeps_both_names_for_later(env):
         con.close()
 
 
-def test_d05_web_code_does_not_read_holder_names():
-    """D-05 의 걸림 줄. 지금 웹 코드는 계약자와 피보험자 칸을 읽지 않는다.
+# 이름 칸을 읽어도 되는 웹 코드는 계약 원장 하나다. 이름표 글자(계약자, 피보험자)는 그 화면과 변경 기록의 이름표에만 있다
+NAME_COLUMNS = re.compile(r"policyholder_name|insured_name|raw_json|raw_row")
+NAME_WORDS = re.compile(r"계약자|피보험자")
+LEDGER = "routes/contracts.py"
+NAME_READERS = {"_rows", "_holder_plain"}           # 계약 원장 안에서 이름 칸을 읽는 함수. _rows 는 읽자마자 가린다
 
-    계약 상세 화면을 만들어 이 시험이 걸리면, 위 docstring 의 규칙대로 담당 설계사와 직속 관리자만 보게 하고
-    그 범위를 확인하는 시험으로 이 시험을 바꾼다. 범위 검사는 app/web/deps.py 의 guard 와 ctx['agent_ids'] 로만 한다.
+
+def test_d05_web_code_reads_holder_names_only_in_contract_ledger():
+    """D-05 의 걸림 줄. 웹 코드 가운데 계약자와 피보험자 칸을 읽는 곳은 계약 원장(app/web/routes/contracts.py)뿐이다.
+
+    그 안에서도 칸을 읽는 함수는 _rows 와 _holder_plain 둘이다. 가리지 않은 이름을 돌려주는 _holder_plain 은 상세(_detail)에서만
+    부르고, 그 앞에서 name_access 로 담당 설계사, 직속 관리자, 사유를 적은 메인 관리자인지 본다. 범위는 guard 와 범위 목록으로 본다.
+    새 화면이 이 칸을 읽으면 이 시험이 걸린다. 그때는 D-05 규칙을 지키는지 보는 시험을 함께 만든다.
     """
+    import ast
     web = pathlib.Path(db.ROOT) / "app" / "web"
-    pat = re.compile(r"policyholder_name|insured_name|raw_json|raw_row|계약자|피보험자")
-    hits = [str(p.relative_to(web)) for p in sorted(web.rglob("*")) if p.suffix in (".py", ".html") and pat.search(p.read_text(encoding="utf-8"))]
-    assert not hits, hits
+    files = [p for p in sorted(web.rglob("*")) if p.suffix in (".py", ".html")]
+    cols = {str(p.relative_to(web)) for p in files if NAME_COLUMNS.search(p.read_text(encoding="utf-8"))}
+    words = {str(p.relative_to(web)) for p in files if NAME_WORDS.search(p.read_text(encoding="utf-8"))}
+    assert cols == {LEDGER}, cols
+    assert words <= {LEDGER, "templates/perf_contracts.html", "templates/perf_contract.html", "audit_view.py"}, words
+    tree = ast.parse((web / LEDGER).read_text(encoding="utf-8"))
+    readers, plain_callers = set(), set()
+    for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        body = ast.get_source_segment((web / LEDGER).read_text(encoding="utf-8"), fn) or ""
+        doc = ast.get_docstring(fn) or ""
+        if NAME_COLUMNS.search(body.replace(doc, "")):
+            readers.add(fn.name)
+        if any(isinstance(c, ast.Call) and getattr(c.func, "id", None) == "_holder_plain" for c in ast.walk(fn)):
+            plain_callers.add(fn.name)
+    assert readers == NAME_READERS, readers
+    assert plain_callers == {"_detail"}, plain_callers
+
+
+def _direct_heads_by_rule(con, contract_id) -> set:
+    """시험이 docstring 의 규칙대로 스스로 셈한 직속 관리자. 화면 코드의 함수를 부르지 않는다.
+    업적 귀속 월(perf_ym, 없으면 청약일의 달)에 담당 설계사가 속한 조직의 조직장과, 그 달과 기간이 겹치는 대리다."""
+    c = con.execute("""SELECT agent_id, COALESCE(perf_ym, REPLACE(SUBSTR(COALESCE(contract_date, application_date), 1, 7), '-', '')) ym
+                       FROM contract WHERE contract_id=?""", (contract_id,)).fetchone()
+    if not c["agent_id"] or not c["ym"]:
+        return set()
+    ym = c["ym"]
+    first, last = f"{ym[:4]}-{ym[4:]}-01", f"{ym[:4]}-{ym[4:]}-31"
+    out = set()
+    for (org,) in con.execute("SELECT org_id FROM agent_org_history WHERE agent_id=? AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)",
+                              (c["agent_id"], ym, ym)).fetchall():
+        out |= {r[0] for r in con.execute("SELECT agent_id FROM org_manager WHERE org_id=? AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)",
+                                          (org, ym, ym))}
+        out |= {r[0] for r in con.execute("""SELECT agent_id FROM org_deputy WHERE org_id=? AND date_from<=? AND date_to>=?
+                                             AND (ended_at IS NULL OR SUBSTR(ended_at, 1, 10)>=?)""", (org, last, first, first))}
+    return out
+
+
+def test_d05_contract_detail_names_only_for_agent_and_direct_heads(env):
+    """D-05 의 허용 화면. 계약 상세에서 이름을 보는 사람은 담당 설계사와 직속 관리자뿐이다.
+
+    알아보는 법: 사본에 가리지 않은 가짜 이름을 넣는다. 사람 고르기(_people)의 계정과 각 계약의 담당 설계사, 직속 관리자로
+    계약 상세를 연다. 범위 밖이면 403, 범위 안이면 200 이다. 이름이 나와야 하는 사람은 담당 설계사와 규칙대로 셈한 직속 관리자다.
+    위 조직의 관리자와 다른 설계사는 가린 채로 보거나 403 이다. 메인 관리자는 사유를 적기 전에는 가린 채로 본다.
+    직속 관리자가 있는 계약을 하나 이상 확인해야 시험이 뜻이 있다(샘플). 가짜 실제 양식에 조직장이 없으면 담당만 본다.
+    """
+    path = _copy(env, "d05_detail")
+    _fill_names(path)
+    con = db.connect(path)
+    try:
+        people = _people(con)
+        users = {r[0]: r[1] for r in con.execute("SELECT agent_id, login_id FROM user_account WHERE agent_id IS NOT NULL")}
+        rows = con.execute("""SELECT c.contract_id, c.agent_id FROM contract c JOIN agent a ON a.agent_id=c.agent_id AND a.status='active'
+                              WHERE c.policyholder_name IS NOT NULL ORDER BY c.contract_id""").fetchall()
+        picked, seen_agents = [], set()
+        for r in rows:                                          # 설계사마다 한 건, 직속 관리자가 있는 계약을 앞에
+            if r["agent_id"] not in seen_agents and r["agent_id"] in users:
+                seen_agents.add(r["agent_id"])
+                picked.append((r["contract_id"], r["agent_id"], _direct_heads_by_rule(con, r["contract_id"])))
+        picked.sort(key=lambda x: (not x[2], x[0]))
+        picked = picked[:12]
+        assert picked
+        clients, wrong, head_checked = {}, [], 0
+        for cid, agent, heads in picked:
+            name = con.execute("SELECT policyholder_name FROM contract WHERE contract_id=?", (cid,)).fetchone()[0]
+            viewers = [(lbl, lid) for lbl, lid in people] + [("agent:owner", users[agent])]
+            viewers += [("manager:direct", users[h]) for h in heads if h in users and h != agent]
+            for label, lid in viewers:
+                ctx = _ctx(con, lid)
+                in_scope = ctx["role"] == "main" or agent in ctx["agent_ids"]
+                may_see = ctx["agent_id"] == agent or (ctx["role"] == "manager" and ctx["agent_id"] in heads)
+                c = clients.get(lid) or clients.setdefault(lid, login(env, lid, path))
+                r = c.get(f"/perf/contracts?id={cid}")
+                if r.status_code != (200 if in_scope else 403):
+                    wrong.append(f"{label} 계약 {cid}: {r.status_code}")
+                    continue
+                if (name in r.text) != (in_scope and may_see):
+                    wrong.append(f"{label} 계약 {cid}: 이름 {'보임' if name in r.text else '가림'}")
+                head_checked += label == "manager:direct" and in_scope and may_see
+        assert not wrong, wrong
+        if env["kind"] == "sample":
+            assert head_checked, "직속 관리자로 이름을 본 경우를 하나도 확인하지 못했다"
+        # 메인 관리자: 사유를 적으면 보고, 사유와 본 일이 변경 기록에 남는다
+        cid = picked[0][0]
+        name = con.execute("SELECT policyholder_name FROM contract WHERE contract_id=?", (cid,)).fetchone()[0]
+        admin = clients.get("admin") or login(env, "admin", path)
+        before = con.execute("SELECT COUNT(*) FROM audit_log WHERE action='contract_name_view' AND actor='admin'").fetchone()[0]
+        r = admin.post("/perf/contracts", data={"action": "reveal", "id": cid, "reason": "결정 시험 사유 확인"})
+        assert r.status_code == 200 and name in r.text
+        logs = con.execute("SELECT target, after_json FROM audit_log WHERE action='contract_name_view' AND actor='admin' ORDER BY id").fetchall()
+        assert len(logs) == before + 1 and logs[-1][0] == f"contract:{cid}" and json.loads(logs[-1][1])["reason"] == "결정 시험 사유 확인"
+    finally:
+        con.close()
 
 
 # ================================================================ D-17 수수료와 시상 금액

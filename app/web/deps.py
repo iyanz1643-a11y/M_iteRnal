@@ -31,6 +31,31 @@ def _qs(params: dict, **kw) -> str:
 
 
 templates.env.globals["qs"] = _qs
+
+
+BASIS_LEAD = "보험사 기준이라 업적 집계와 다를 수 있습니다."
+
+
+def basis_note(p: dict, r: dict | None, ref) -> str:
+    """프로모션 달성 현황의 기준 안내. 달성 현황(팀원과 내 현황)과 내 시상 진척이 함께 쓴다. D-08 제안대로 둔 가정이다.
+
+    calc-engine 이 progress() 결과에 basis 설명 칸을 더하면 그 글을 쓴다. 글이거나 text 또는 note 열쇠를 가진 dict 를 받는다.
+    칸이 없으면 프로모션의 기준일 종류와 화면의 기준일로 글을 만든다. 철회 제외는 엔진의 COUNTED 와 같은 뜻이다.
+    """
+    eng = (r or {}).get("basis") if isinstance(r, dict) else None
+    if isinstance(eng, dict):
+        eng = eng.get("text") or eng.get("note") or eng.get("ko")
+    day = date.fromisoformat(ref) if isinstance(ref, str) and ref else (ref or None)
+    until = f"{day.month}월 {day.day}일까지 셉니다." if day else ""
+    if isinstance(eng, str) and eng.strip():
+        eng = eng.strip()
+        lead = "" if "업적 집계" in eng else BASIS_LEAD + " "          # 엔진 글에 같은 말이 있으면 두 번 적지 않는다
+        return f"{lead}{eng} {until}".strip()
+    kind = pm.BASIS_KO.get(p.get("date_basis"), p.get("date_basis") or "계약일자")
+    return f"{BASIS_LEAD} 기준일은 {kind}이고 {until} 성립한 계약만 세고 철회한 계약은 뺍니다."
+
+
+templates.env.globals["basis_note"] = basis_note
 templates.env.globals["group_entry"] = menu.entry
 
 

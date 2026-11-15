@@ -71,6 +71,9 @@ ACTION_KO = {
     "board_update": "공지·자료 고침",
     "board_withdraw": "공지·자료 내림",
     "board_download": "자료실 첨부 내려받음",
+    # 계약 원장. 행위 코드는 app/web/routes/contracts.py 와 같다
+    "contract_name_view": "계약자·피보험자 이름 조회",
+    "contract_export": "계약 원장 내려받음",
     # 기존 운영 도구
     "quality_resolve": "품질검증 처리",
     "diff_update": "대사 차이 처리",
@@ -94,6 +97,7 @@ PROMO_FIELD_KO = {
 OP_KO = {"approve": "요청 승인", "reject": "요청 반려", "grant": "권한 켜기", "revoke": "권한 끄기", "request": "권한 요청"}
 FORM_ACTION_KO = {"save": "저장", "withdraw": "내리기", "edit": "고치기 폼", "active": "다시 열기", "inactive": "닫기", "confirm": "확정", "card_request": "명함 승인 권한 요청"}
 
+DENIED_KO = {"post": "글", "file": "첨부", "contract": "계약"}    # 권한 밖 접근 시도의 대상 꼴
 _KV = re.compile(r"(\w+)=(\S+)")
 
 
@@ -158,6 +162,9 @@ class _Names:
     def board_file(self, fid):
         return self._one("board_file", "SELECT name FROM board_file WHERE file_id=?", fid)
 
+    def contract(self, cid):
+        return self._one("contract", "SELECT COALESCE(policy_no, application_no) FROM contract WHERE contract_id=?", cid)
+
     def agent_code(self, aid):
         return self._one("agent", "SELECT internal_code FROM agent WHERE agent_id=?", aid)
 
@@ -205,6 +212,13 @@ def target_ko(action: str, target, names: _Names) -> str:
             return _edu_target(action, t, names)
         if action.startswith("board_"):
             return _board_target(action, t, names)
+        if action == "contract_name_view":
+            m = re.fullmatch(r"contract:(\d+)", t)
+            no = names.contract(int(m.group(1))) if m else None
+            return f"계약: {no}" if no else t
+        if action == "contract_export":
+            m = re.fullmatch(r"rows:(\d+)", t)
+            return f"{m.group(1)}건, 이름 가림" if m else t
         if action == "card_code_issue":
             _, course, ym = (t.split(":") + ["", "", ""])[:3]
             out = "명함 수료 코드"
@@ -217,9 +231,9 @@ def target_ko(action: str, target, names: _Names) -> str:
             path, _, rest = t.partition(" ")
             item = menu.find(path)
             out = f"화면: {item['name']}" if item else f"주소: {path}"
-            m = re.fullmatch(r"(post|file):(\d+)", rest)
-            if m:                                 # 공지와 자료실에서 대상 밖 글이나 첨부를 연 시도
-                return out + f" · {'글' if m.group(1) == 'post' else '첨부'} {m.group(2)}번"
+            m = re.fullmatch(r"(post|file|contract):(\d+)", rest)
+            if m:                                 # 공지와 자료실의 대상 밖 글이나 첨부, 계약 원장의 범위 밖 계약을 연 시도
+                return out + f" · {DENIED_KO[m.group(1)]} {m.group(2)}번"
             return out + (f" · {FORM_ACTION_KO.get(rest, rest)}" if rest else "")
         if action == "login_fail":
             return f"까닭: {t}"

@@ -1,0 +1,50 @@
+{% extends "base.html" %}{% import "_perf.html" as pf %}
+{% block body %}
+<p class="eyebrow">{{ (f.ym|ymko) if f.ym and f.ym != 'all' else '전체 기간' }} · {{ SCOPES[ctx.scope] }}{% if sel %} · {{ sel.name }}{% endif %}</p>
+<h1 class="display">계약 원장</h1>
+<p class="lede">{{ '범위 안' if ctx.scope != 'self' else '내' }} 계약의 목록과 상태입니다. 계약자와 피보험자 이름은 목록에서 가립니다.</p>
+{{ pf.fresh_line(fresh) }}
+
+<form class="perf-pick contract-pick" method="get" action="{{ path }}">
+  <label class="f">업적 귀속 월<select name="ym"><option value="all" {{ 'selected' if f.ym == 'all' }}>전체 기간</option>{% for m in months %}<option value="{{ m }}" {{ 'selected' if m == f.ym }}>{{ m|ymko }}</option>{% endfor %}</select></label>
+  <label class="f">보험사<select name="insurer"><option value="">전체</option>{% for i in opts.insurers %}<option value="{{ i.insurer_id }}" {{ 'selected' if i.insurer_id == f.insurer }}>{{ i.name }}</option>{% endfor %}</select></label>
+  <label class="f">구분<select name="cat"><option value="">전체</option>{% for c in opts.cats %}<option value="{{ c.code }}" {{ 'selected' if c.code == f.cat }}>{{ c.name }}</option>{% endfor %}</select></label>
+  <label class="f">업권<select name="sector"><option value="">전체</option>{% for k, v in SECTOR_KO.items() %}<option value="{{ k }}" {{ 'selected' if k == f.sector }}>{{ v }}</option>{% endfor %}</select></label>
+  <label class="f">상태<select name="status"><option value="">전체</option>{% for k, v in STATUS_KO.items() %}<option value="{{ k }}" {{ 'selected' if k == f.status }}>{{ v }}</option>{% endfor %}</select></label>
+  {% if orgs %}<label class="f">조직<select name="org"><option value="">범위 전체</option>{% for o in orgs %}<option value="{{ o.org_id }}" {{ 'selected' if sel and sel.org_id == o.org_id }}>{{ '　' * o.depth }}{{ o.name }} · {{ o.level_ko }}</option>{% endfor %}</select></label>{% endif %}
+  <label class="f">증권번호<input class="sm" type="search" name="q" value="{{ f.q }}" placeholder="일부만 적어도 됩니다" inputmode="text"></label>
+  <button class="ghost perf-go" type="submit">보기</button>
+</form>
+
+<div class="grid g3 keep" style="margin-top:24px">
+  <div class="card"><div class="k">계약</div><div class="mid">{{ total }}<span class="unit">건</span></div><div class="cap">거른 결과</div></div>
+  <div class="card"><div class="k"><span class="dot"></span>정상</div><div class="mid">{{ by_status.get('inforce', 0) }}<span class="unit">건</span></div><div class="cap">청약 {{ by_status.get('applied', 0) }}건</div></div>
+  <div class="card"><div class="k"><span class="dot bad"></span>철회</div><div class="mid">{{ by_status.get('withdrawn', 0) }}<span class="unit">건</span></div><div class="cap">반송 {{ by_status.get('declined', 0) }}건 · 실효·해지 {{ by_status.get('lapsed', 0) + by_status.get('cancelled', 0) }}건</div></div>
+</div>
+
+<div class="contract-acts"><a class="ghost" href="{{ path }}{{ qs(f, export='csv', page='') }}" download>CSV 내려받기</a>
+  <span class="cap">거른 목록 {{ total }}건 전부를 내려받습니다. 이름은 가린 채로 담기고, 내려받은 일은 변경 기록에 남습니다.</span></div>
+
+{% if rows %}
+<div class="card tablecard" style="margin-top:12px"><table class="contract-table">
+<tr><th>증권번호</th><th class="hide-sm">보험사</th><th class="hide-sm hide-md">상품</th><th class="hide-sm">구분</th><th class="hide-sm">계약일</th><th>상태</th>
+  <th class="num">인정보험료</th><th class="num hide-sm">건수</th>{% if ctx.scope != 'self' %}<th class="hide-sm hide-md">담당</th>{% endif %}<th class="hide-sm hide-md">계약자</th><th class="hide-sm hide-md">피보험자</th></tr>
+{% for r in rows %}
+<tr data-contract="{{ r.contract_id }}"><td class="strong"><a href="{{ path }}?id={{ r.contract_id }}">{{ r.no }}</a>
+    <div class="sm-sub"><span>{{ r.insurer }} · {{ r.category }}</span><span>{{ r.date|md }}{% if ctx.scope != 'self' %} · {{ r.agent_name or '담당 미확인' }}{% endif %} · 계약자 {{ r.holder }}</span></div></td>
+  <td class="hide-sm">{{ r.insurer }}</td><td class="hide-sm hide-md wrap">{{ r.product or '-' }}</td><td class="hide-sm">{{ r.category }}</td><td class="hide-sm">{{ r.date or '-' }}</td>
+  <td><span class="chip {{ r.status_class }}">{{ r.status_ko }}</span></td>
+  <td class="num">{{ r.converted_premium|won }}</td><td class="num hide-sm">{{ r.policy_count|n }}</td>
+  {% if ctx.scope != 'self' %}<td class="hide-sm hide-md">{{ r.agent_name or '미확인' }}</td>{% endif %}
+  <td class="hide-sm hide-md" data-col="holder">{{ r.holder }}</td><td class="hide-sm hide-md" data-col="insured">{{ r.insured }}</td></tr>
+{% endfor %}
+</table></div>
+{% if pages > 1 %}<nav class="pager" aria-label="쪽">
+  {% if pg > 1 %}<a class="ghost" href="{{ path }}{{ qs(f, page=pg - 1) }}">앞 쪽</a>{% endif %}
+  <span class="cap">{{ pg }} / {{ pages }}쪽</span>
+  {% if pg < pages %}<a class="ghost" href="{{ path }}{{ qs(f, page=pg + 1) }}">다음 쪽</a>{% endif %}</nav>{% endif %}
+{% else %}<div class="card" style="margin-top:12px"><div class="k">조건에 맞는 계약이 없습니다</div><div class="cap">거르기를 풀거나 업적 귀속 월을 전체 기간으로 바꿔 보세요.</div></div>{% endif %}
+
+<p class="cap">계약일은 성립일이고, 성립 전 청약은 청약일입니다. 인정보험료는 계약마다의 값이며 합계는 기간별 업적에서 봅니다. 업적은 성립한 달에 더하고 철회한 달에 뺍니다.
+  수수료와 시상 금액은 이 화면에 없습니다.</p>
+{% endblock %}

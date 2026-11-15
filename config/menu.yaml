@@ -61,7 +61,7 @@ groups:
          desc: "월·분기·반기·연. 청약, 성립, 철회, 순건수, 보험료, 인정보험료"}
       - {id: perf-category, name: 구분별 집계, path: /perf/category, roles: {main: all, manager: org, agent: self}, phase: 1, status: built,
          desc: "종신, 건강, 저축, 연금, 재물, 자동차, 일반"}
-      - {id: perf-contracts, name: 계약 원장, path: /perf/contracts, roles: {main: all, manager: org, agent: self}, phase: 1, status: legacy,
+      - {id: perf-contracts, name: 계약 원장, path: /perf/contracts, roles: {main: all, manager: org, agent: self}, phase: 1, status: built,
          desc: "권한 범위의 계약 목록과 상태 이력"}
       - {id: perf-persistency, name: 유지율, path: /perf/persistency, roles: {main: all, manager: org}, phase: 1, status: legacy,
          desc: "13회차·25회차, 보험사별과 조직별"}

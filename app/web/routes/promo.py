@@ -4,6 +4,8 @@
   D-21 제안대로 원안은 메인 관리자에게만 넘긴다. 설계사와 관리자에게는 줄에서 원안 칸을 떼고 넘긴다.
 - 지난 프로모션(/promo/archive)은 pm.past 로 낸 마감 전 예상이다. 설계사는 본인 줄만, 관리자는 범위 안 사람의 달성 여부만 본다.
   D-17 에 따라 관리자 화면으로는 금액과 보상 글을 넘기지 않는다. 메인 관리자는 전부 본다.
+- 조직 부문 시상(/promo/org-awards)의 순위별 시상 내용은 D-45 제안대로(가정) 모두에게 공개하는 상품표다.
+  규칙은 app/web/awards.py 한 곳이고 명예의전당과 같다. 합계는 만들지 않는다.
 """
 from datetime import date
 from urllib.parse import quote
@@ -14,7 +16,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from app import db
 from app.engine import org_award as oa
 from app.engine import promotion as pm
-from app.web import auth
+from app.web import auth, awards
 from app.web.deps import _cards, _in, _period_text, _q, get_con, guard, page
 
 router = APIRouter()
@@ -243,8 +245,9 @@ def org_awards(request: Request, edit: int | None = None, new: int | None = None
         rows = oa.standing(con, d, ym)
         done = oa.confirmed(con, d["division_id"], ym)
         me = next((r for r in rows if r["agent_id"] == ctx["agent_id"]), None) if ctx["agent_id"] else None
-        blocks.append({**d, "rows": oa.view_rows(rows, ctx), "total": len(rows), "podium": (done or [r for r in rows if r["winner"]])[:3], "confirmed": done,
-                       "me": me, "top": rows[0]["value"] if rows else 0, "can_manage": mine})
+        blocks.append({**d, "rows": awards.label_rows(oa.view_rows(rows, ctx)), "total": len(rows), "podium": (done or [r for r in rows if r["winner"]])[:3],
+                       "confirmed": done, "me": me, "top": rows[0]["value"] if rows else 0, "can_manage": mine,
+                       "prizes": awards.prizes(d["rewards"], d["top_n"])})
     form = None
     if manage and (edit or new):
         d = oa.load(con, edit) if edit else None
@@ -252,7 +255,7 @@ def org_awards(request: Request, edit: int | None = None, new: int | None = None
             raise HTTPException(403, "이 부문을 고칠 권한이 없습니다.")
         form = d or {"division_id": "", "org_id": None, "name": "", "metric": "converted_premium", "sector": None, "category_list": [], "top_n": 3,
                      "min_value": None, "effective_from": ym, "effective_to": None, "note": "", "rewards": {}}
-    return page(request, ctx, "org_awards.html", blocks=blocks, form=form, manage=manage, msg=msg, err=err, oa=oa,
+    return page(request, ctx, "org_awards.html", blocks=blocks, form=form, manage=manage, msg=msg, err=err, oa=oa, prize_note=awards.PUBLIC_NOTE,
                 orgs=_manageable_orgs(con, ctx), cats=_q(con, "SELECT code, name FROM product_category ORDER BY sort_order"))
 
 

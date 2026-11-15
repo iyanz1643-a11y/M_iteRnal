@@ -7,7 +7,7 @@
 | 올리기, 고치기, 내리기 | 메인 관리자만. docs/09 2.4 에 관리자의 공지 올리기가 없어서다 |
 | 대상 | 조직과 역할을 함께 고른다. 조직은 그 아래까지다. 비우면 모두다 |
 | 보는 사람 | 메인 관리자는 모두. 그 밖에는 게시 중이고 대상 안인 사람만 |
-| 대상 안 | 역할이 맞고, 소속 조직이나 맡은 조직이 대상 조직과 같거나 그 아래다. 대상 조직보다 위의 관리자는 대상 밖이다(가정) |
+| 대상 안 | 역할이 맞고, 소속 조직이나 맡은 조직이 대상 조직과 같거나 그 아래다. 관리자는 맡은 조직이 대상 조직의 위여도 대상 안이다. 지점 공지를 본부장도 본다(가정, 2026-11-15) |
 | 시상안 원문 | 올릴 때 설계사에게 보여도 되는 FC 몫만 담긴 파일인지 고른다. 아니면 메인 관리자만 본다(D-18 제안) |
 | 첨부 | pdf, 그림, 엑셀, 한글, 워드. 한 파일 20MB, 한 글에 5개까지. 확장자와 파일 머리의 꼴이 함께 맞아야 받는다 |
 | 파일 위치 | APP_BOARD_DIR, 없으면 data/board. 이름은 내용의 SHA-256 이다. 같은 내용은 한 번만 둔다 |
@@ -170,7 +170,11 @@ def viewer_orgs(con, ctx) -> set:
 
 
 def can_see(ctx, post: dict, up: set) -> bool:
-    """이 사람이 이 글과 그 첨부를 보는가. up 은 viewer_orgs 의 값이다."""
+    """이 사람이 이 글과 그 첨부를 보는가. up 은 viewer_orgs 의 값이다.
+
+    대상 조직의 아래에 있는 사람은 역할이 맞으면 본다. 대상 조직의 위에 있는 사람은 관리자만 본다.
+    설계사는 지금처럼 자기 소속이 대상 안일 때만 본다.
+    """
     if ctx["role"] == "main":
         return True
     if post["status"] != "posted":
@@ -180,7 +184,8 @@ def can_see(ctx, post: dict, up: set) -> bool:
     if post["target_role"] and post["target_role"] != ctx["role"]:
         return False
     if post["target_org_id"] is not None and post["target_org_id"] not in up:
-        return False
+        # 관리자는 대상 조직의 위에서 맡고 있어도 본다. ctx['org_ids'] 는 맡은 조직과 그 아래 전부다(가정)
+        return ctx["role"] == "manager" and post["target_org_id"] in (ctx.get("org_ids") or set())
     return True
 
 
