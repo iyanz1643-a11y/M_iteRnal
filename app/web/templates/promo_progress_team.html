@@ -9,7 +9,7 @@
 <div class="grid g4" style="margin-top:20px">
   <div class="card"><div class="k">대상</div><div class="mid">{{ summary.n }}<span class="unit">명</span></div><div class="cap">{{ sel.insurer_name or '전 보험사' }} · {{ sel.kind_ko }}</div></div>
   <div class="card"><div class="k"><span class="dot"></span>{{ '실적 있음' if sel.kind == 'rate' else '구간 달성' }}</div><div class="mid">{{ summary.achieved }}<span class="unit">명</span></div><div class="cap">{{ sel.period_text }}</div></div>
-  <div class="card"><div class="k"><span class="dot warn"></span>구간 근접</div><div class="mid">{{ summary.near }}<span class="unit">명</span></div><div class="cap">다음 구간까지 30% 이내</div></div>
+  <div class="card"><div class="k"><span class="dot warn"></span>구간 근접</div><div class="mid">{{ summary.near }}<span class="unit">명</span></div><div class="cap">다음 구간까지 {{ summary.near_text }} 이내</div></div>
   <div class="card"><div class="k"><span class="dot {{ 'bad' if summary.missed else 'off' }}"></span>무효</div><div class="mid">{{ summary.missed }}<span class="unit">명</span></div><div class="cap">{{ sel.due }}</div></div>
 </div>
 <div class="card tablecard" style="margin-top:16px"><table>

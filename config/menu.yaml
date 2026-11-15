@@ -128,27 +128,27 @@ groups:
       - {id: sales-cardnews, name: 카드뉴스, path: /sales/cardnews, roles: {main: all}, phase: 3, status: planned,
          desc: "리포트를 카드뉴스로 만들어 심사 뒤 게시한다"}
       - {id: sales-card, name: 모바일 명함, path: /sales/card, roles: {manager: self, agent: self}, phase: 3, status: built,
-         desc: "내 명함의 상태와 링크, 마지막 확인 시각. 반려 사유는 보이지 않는다. 인증과 수상 배지, 공유는 3단계. D-39"}
+         desc: "내 명함의 상태와 링크, 마지막 확인 시각. 반려 사유는 보이지 않는다. 명함에 올릴 수 있는 본인 배지와 유효기간, 만료 안내. 공유는 3단계. D-39"}
       - {id: sales-card-approve, name: 명함 승인, path: /sales/card-approve, roles: {main: all, manager: org}, requires: card_approver, phase: 2, status: built,
-         desc: "명함 신청본을 앱에서 미리 보고 승인하거나 반려한다. 권한 승인 요청을 메인 관리자가 승인한 관리자만 범위 안 설계사의 요청을 처리하고, 관리자 본인의 명함은 메인 관리자가 처리한다. 메인 관리자는 설계사와 이어지지 않은 요청도 잇고 처리한다. D-44"}
+         desc: "명함 신청본을 앱에서 미리 보고 승인하거나 반려한다. 권한 승인 요청을 메인 관리자가 승인한 관리자만 범위 안 설계사의 요청을 처리하고, 관리자 본인의 명함은 메인 관리자가 처리한다. 메인 관리자는 설계사와 이어지지 않은 요청도 잇고 처리한다. 메인 관리자 전용 묶음에 배지 만료 예정과 해촉자 명함 내리기가 있다. D-44"}
 
   - id: data
     name: 데이터
     icon: "⇪"
     items:
-      - {id: data-contracts, name: 계약 엑셀, path: /data/contracts, roles: {main: all}, phase: 1, status: legacy,
+      - {id: data-contracts, name: 계약 엑셀, path: /data/contracts, roles: {main: all}, phase: 1, status: built,
          desc: "본부 계약현황을 올려 계약 원장에 반영한다"}
       - {id: data-staff, name: 사원현황, path: /data/staff, roles: {main: all}, phase: 1, status: built,
          desc: "조직, 설계사, 조직장, 인사 이동, 퇴사를 미리보기한 뒤 반영한다. 계약현황의 조직 경로로 조직도 만든다"}
-      - {id: data-plan, name: 시상안, path: /data/plan, roles: {main: all}, phase: 1, status: legacy,
+      - {id: data-plan, name: 시상안, path: /data/plan, roles: {main: all}, phase: 1, status: built,
          desc: "보험사별 시상안을 원장에 쌓고 해석하고 승인한다"}
       - {id: data-courses, name: 수료자 명부, path: /data/courses, roles: {main: all}, phase: 2, status: built,
          desc: "교육 수료 기록 화면으로 안내한다. 명부 올리기는 수료 기록 한 곳에서 한다"}
-      - {id: data-statement, name: 정산서와 유지율, path: /data/statement, roles: {main: all}, phase: 3, status: legacy,
+      - {id: data-statement, name: 정산서와 유지율, path: /data/statement, roles: {main: all}, phase: 3, status: built,
          desc: "원수사 정산서와 유지율 현황"}
-      - {id: data-quality, name: 품질검증, path: /data/quality, roles: {main: all}, phase: 1, status: legacy,
+      - {id: data-quality, name: 품질검증, path: /data/quality, roles: {main: all}, phase: 1, status: built,
          desc: "차단과 경고 목록, 처리 기록"}
-      - {id: data-batches, name: 적재 이력, path: /data/batches, roles: {main: all}, phase: 1, status: legacy,
+      - {id: data-batches, name: 적재 이력, path: /data/batches, roles: {main: all}, phase: 1, status: built,
          desc: "파일별 적재 결과와 재적재"}
       - {id: data-jobs, name: 뒤에서 하는 작업, path: /data/jobs, roles: {main: all}, phase: 1, status: built,
          desc: "업적 run, 랭킹 run, 알림 정리, 연결 가져오기를 작업으로 넣고 상태만 본다. 처리는 워커 python -m app.worker 가 한다"}
@@ -157,15 +157,15 @@ groups:
     name: 수수료·점검
     icon: "₩"
     items:
-      - {id: settle-commission, name: 수수료 내역, path: /settle/commission, roles: {main: all, manager: self, agent: self}, phase: 3, status: legacy,
+      - {id: settle-commission, name: 수수료 내역, path: /settle/commission, roles: {main: all, manager: self, agent: self}, phase: 3, status: built,
          desc: "계약별 초회·계속·시책. 본인 것과 메인 관리자만 본다"}
-      - {id: settle-clawback, name: 환수, path: /settle/clawback, roles: {main: all, manager: self, agent: self}, phase: 3, status: legacy,
+      - {id: settle-clawback, name: 환수, path: /settle/clawback, roles: {main: all, manager: self, agent: self}, phase: 3, status: built,
          desc: "환수 대상과 금액"}
-      - {id: settle-recon, name: 대사, path: /settle/recon, roles: {main: all}, phase: 3, status: legacy,
+      - {id: settle-recon, name: 대사, path: /settle/recon, roles: {main: all}, phase: 3, status: built,
          desc: "정산서와 자체 계산의 차이"}
-      - {id: settle-adjust, name: 조정, path: /settle/adjust, roles: {main: all}, phase: 3, status: legacy,
+      - {id: settle-adjust, name: 조정, path: /settle/adjust, roles: {main: all}, phase: 3, status: built,
          desc: "차이의 처리 기록"}
-      - {id: settle-close, name: 마감, path: /settle/close, roles: {main: all}, phase: 3, status: legacy,
+      - {id: settle-close, name: 마감, path: /settle/close, roles: {main: all}, phase: 3, status: built,
          desc: "월 잠금과 해제 기록"}
 
   - id: org
@@ -180,7 +180,7 @@ groups:
          desc: "계정 발급, 초기 비밀번호, 재설정, 잠금 해제, 중지, 퇴사자 중지 후보"}
       - {id: org-settings, name: 조직별 설정, path: /org/settings, roles: {main: all, manager: org}, phase: 3, status: built,
          desc: "알림 종류별 켜고 끄기와 날짜 수, 구간 근접 비율, 부문 시상 기본 선발 인원, 홈 카드, 필수 과정 추가. GA 에서 상속, 적용 월, 막기, 이력"}
-      - {id: org-masters, name: 마스터, path: /org/masters, roles: {main: all}, phase: 1, status: legacy,
+      - {id: org-masters, name: 마스터, path: /org/masters, roles: {main: all}, phase: 1, status: built,
          desc: "보험사, 상품, 구분"}
       - {id: org-audit, name: 변경 기록, path: /org/audit, roles: {main: all}, phase: 1, status: built,
          desc: "누가 언제 무엇을 바꿨는지, 로그인과 접근 거부 기록"}

@@ -5,14 +5,14 @@
 {% if not me %}
 <p class="lede">이 계정은 설계사와 이어져 있지 않아 교육 기록이 없습니다.</p>
 {% else %}
-<p class="lede">{% if me.required_total %}필수 과정 {{ me.required_total }}개 가운데 {{ me.required_done }}개를 마쳤습니다.{% if me.soon %} 기한이 {{ soon_days }}일 안에 오는 과정이 {{ me.soon }}개 있습니다.{% endif %}{% else %}지금 들어야 하는 필수 과정이 없습니다.{% endif %}</p>
+<p class="lede">{% if me.required_total %}필수 과정 {{ me.required_total }}개 가운데 {{ me.required_done }}개를 마쳤습니다.{% if me.soon %} 기한이 {{ soon_days }} 안에 오는 과정이 {{ me.soon }}개 있습니다.{% endif %}{% else %}지금 들어야 하는 필수 과정이 없습니다.{% endif %}</p>
 
 <div class="grid g2" style="margin-top:32px">
   <div class="card"><div class="ringbox">{{ ui.ring((me.rate or 0) * 100, '필수 과정 수료율', color='var(--fill-green)') }}
     <div><div class="k">필수 과정 수료</div><div class="mid">{{ me.required_done }}<span class="unit">/ {{ me.required_total }}개</span></div>
     <div class="cap">수료자 명부와 관리자 확인으로 반영합니다</div></div></div></div>
   <div class="grid g2 keep-2">
-    <div class="card"><div class="k"><span class="dot {{ 'bad' if me.soon else 'off' }}"></span>기한 임박</div><div class="mid">{{ me.soon }}<span class="unit">개</span></div><div class="cap">{{ soon_days }}일 안</div></div>
+    <div class="card"><div class="k"><span class="dot {{ 'bad' if me.soon else 'off' }}"></span>기한 임박</div><div class="mid">{{ me.soon }}<span class="unit">개</span></div><div class="cap">{{ soon_days }} 안</div></div>
     <div class="card"><div class="k"><span class="dot {{ 'bad' if me.overdue else 'off' }}"></span>기한 지남</div><div class="mid">{{ me.overdue }}<span class="unit">개</span></div><div class="cap">아직 수료 전</div></div>
   </div>
 </div>

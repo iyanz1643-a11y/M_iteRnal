@@ -1,0 +1,61 @@
+{% extends "base.html" %}{% import "_perf.html" as pf %}{% import "_settle.html" as sx %}
+{% block body %}
+<p class="eyebrow">{{ ym|ymko }} · {% if everyone %}전체{% elif who %}{{ who.name or '이름 미확인' }} {{ who.code or '' }}{% else %}본인{% endif %}</p>
+<h1 class="display">수수료 내역</h1>
+<p class="lede">{% if everyone %}설계사별 그 달 수수료입니다. 이름을 누르면 계약별 초회, 계속, 시책을 봅니다.{% else %}계약별 초회, 계속, 시책과 환수입니다.{% endif %}</p>
+{{ sx.stamp_line(stamps) }}
+{% if not has_agent %}
+<div class="card" style="margin-top:24px"><div class="k">설계사 정보가 이어지지 않은 계정입니다</div><div class="cap">메인 관리자에게 계정과 사번 연결을 요청하세요.</div></div>
+{% else %}
+{% set mixed = m.confirmed.lines and m.expected.lines %}
+<div class="card" style="margin-top:24px" data-hero="net">
+  <div class="k">{{ ym|ymko }} 순액 {{ sx.basis(m.estimated, mixed) }}</div>
+  {% if m.total.lines %}<div class="big">{{ m.total.net|won }}<span class="unit">원</span></div>
+  <div class="cap">지급 {{ m.total.paid|won }}원 · 환수 {{ m.total.clawback|won }}원 · {{ m.total.lines }}줄</div>
+  {% if mixed %}<div class="cap">정산서 기준 {{ m.confirmed.net|won }}원 · 예상 {{ m.expected.net|won }}원</div>{% endif %}
+  {% else %}<div class="big na">자료 없음</div><div class="cap">이 달에는 정산서도 자체 계산도 없습니다. 금액을 지어내지 않습니다.</div>{% endif %}
+</div>
+{% if who %}<p class="cap"><a href="{{ path }}?ym={{ ym }}">전체 설계사로 돌아가기</a></p>{% endif %}
+
+{% if by_type %}
+<h2 class="sec">구분별</h2>
+<div class="card">{{ pf.bars(by_type, 'commission_type_ko', 'basis_ko', 'amount') }}
+  <div class="cap">환수는 음수라 막대를 그리지 않고 금액만 적습니다.</div></div>
+{% endif %}
+
+{% if m.by_insurer %}
+<h2 class="sec">보험사별</h2>
+<div class="card tablecard"><table>
+<tr><th>보험사</th><th>기준</th><th class="num hide-sm">지급</th><th class="num hide-sm">환수</th><th class="num">순액</th></tr>
+{% for r in m.by_insurer %}<tr data-insurer="{{ r.insurer_id }}"><td class="strong">{{ r.insurer or '보험사 미확인' }}<div class="sm-sub"><span>지급 {{ r.paid|won }}원 · 환수 {{ r.clawback|won }}원</span></div></td>
+<td>{{ sx.basis(r.estimated) }}</td><td class="num hide-sm">{{ r.paid|won }}</td><td class="num hide-sm">{{ r.clawback|won }}</td><td class="num">{{ r.net|won }}</td></tr>{% endfor %}
+</table></div>
+{% endif %}
+
+{% if everyone %}
+<h2 class="sec">설계사 {{ people|length }}명</h2>
+{% if people %}<div class="card tablecard"><table>
+<tr><th>설계사</th><th class="num hide-sm">지급</th><th class="num hide-sm">환수</th><th class="num">순액</th><th class="hide-sm">기준</th><th></th></tr>
+{% for p in people %}<tr data-agent="{{ p.agent_id }}"><td class="strong">{{ p.name or '이름 미확인' }}<div class="sm-sub"><span>{{ p.code or '' }} · {{ '예상 포함' if p.estimated else '정산서 기준' }}</span></div>
+  <span class="cap hide-sm" style="margin-left:6px">{{ p.code or '' }}</span></td>
+<td class="num hide-sm">{{ p.paid|won }}</td><td class="num hide-sm">{{ p.clawback|won }}</td><td class="num">{{ p.net|won }}</td>
+<td class="hide-sm">{{ sx.basis(p.estimated) }}</td><td class="acts"><a class="ghost" href="{{ path }}?ym={{ ym }}&agent={{ p.agent_id }}">보기</a></td></tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">이 달 수수료 줄이 있는 설계사가 없습니다</div></div>{% endif %}
+{% else %}
+<h2 class="sec">계약별 {{ m.lines|length }}줄</h2>
+{% if lines %}<div class="card tablecard"><table>
+<tr><th>계약</th><th class="hide-sm">구분</th><th class="num hide-sm">회차</th><th class="num">금액</th><th class="hide-sm">기준</th></tr>
+{% for r in lines %}{% set c = chip(r) %}<tr data-type="{{ r.commission_type }}"><td class="strong wrap-sm">{{ sx.tail(r) }}<div class="sm-sub"><span>{{ r.commission_type_ko }}{% if r.installment_no %} · {{ r.installment_no }}회차{% endif %}</span><span><span class="chip {{ c[0] }}">{{ c[1] }}</span></span></div></td>
+<td class="hide-sm">{{ r.commission_type_ko }}</td><td class="num hide-sm">{{ r.installment_no or '-' }}</td><td class="num">{{ r.amount|won }}</td>
+<td class="hide-sm"><span class="chip {{ c[0] }}">{{ c[1] }}</span></td></tr>{% endfor %}
+</table></div>
+{% if more %}<p class="cap">줄이 많아 앞 {{ lines|length }}줄만 보입니다. {{ more }}줄이 더 있습니다.</p>{% endif %}
+{% else %}<div class="card"><div class="k">이 달 계약별 수수료 줄이 없습니다</div></div>{% endif %}
+{% endif %}
+{% endif %}
+
+{% if yms|length > 1 %}<h2 class="sec">다른 달 보기</h2>{{ pf.pick_form(path, f, yms, ym) }}{% endif %}
+<p class="cap" style="margin-top:20px">{{ m.note }} 정산서가 들어오면 그 보험사는 정산서 금액으로 바뀝니다. 초년도 지급 한도 점검은 규정을 확인한 뒤 넣습니다.
+{% if ctx.scope == 'self' %} 수수료는 본인과 메인 관리자만 봅니다.{% endif %}{% if closed %} 이 달은 마감했습니다.{% endif %}</p>
+{% endblock %}

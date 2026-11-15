@@ -1,4 +1,8 @@
-"""홈. 역할마다 다른 카드를 보여 준다."""
+"""홈. 역할마다 다른 카드를 보여 준다.
+
+홈에 보일 카드(마감이 가까운 프로모션, 내 순위, 목표, 인정보험료 상위)는 조직별 설정 home.cards 를 따른다.
+보는 사람의 소속 조직 값이다(app/web/org_values.py). 이번 달 인정보험료, 가동률, 할 일, 운영 상태는 끌 수 없다.
+끈 카드는 화면에 그리지 않고 그 값도 읽지 않는다."""
 import sqlite3
 from datetime import date, datetime
 
@@ -8,6 +12,7 @@ from fastapi.responses import HTMLResponse
 from app.engine import promotion as pm
 from app.org import card_grant as cg
 from app.periods import period_key
+from app.web import org_values
 from app.web.deps import _cards, _last_load, _perf, _q, get_con, guard, page
 from app.web.routes import card, me
 from app.web.routes import edu as edu_routes
@@ -63,23 +68,25 @@ def _goal(con, ym, agent_id):
 @router.get("/", response_class=HTMLResponse)
 def home(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
     ym, role = ctx["ym"], ctx["role"]
-    data = {"last_load": _last_load(con)}
+    show = set(org_values.for_ctx(con, ctx, org_values.HOME_KEY) or [])
+    data = {"last_load": _last_load(con), "show": show}
     if data["last_load"]:
         t = datetime.strptime(data["last_load"], "%Y-%m-%d %H:%M:%S")
         data["last_load_label"] = f"{t.month}월 {t.day}일 {t.hour}시 {t.minute:02d}분"
-    cards, _ = _cards(con, ctx)
-    data["cards"] = [c for c in cards if c["recipient_level"] == "fc" and c["phase"] != "ended"][:6] or [c for c in cards if c["recipient_level"] == "fc"][:6]
-    data["promos"], data["promo_total"] = ([], 0) if data["cards"] else _promos(con, ym)
+    if "promos" in show:
+        cards, _ = _cards(con, ctx)
+        data["cards"] = [c for c in cards if c["recipient_level"] == "fc" and c["phase"] != "ended"][:6] or [c for c in cards if c["recipient_level"] == "fc"][:6]
+        data["promos"], data["promo_total"] = ([], 0) if data["cards"] else _promos(con, ym)
     if ctx["agent_id"]:
         mine = _perf(con, ym, [ctx["agent_id"]])
         data["mine"] = mine[0] if mine else None
-        r = con.execute("""SELECT s.rank_no FROM ranking_snapshot s JOIN calc_run r ON r.run_id=s.run_id AND r.status='done' AND r.period_ym=?
+        r = None if "my_rank" not in show else con.execute("""SELECT s.rank_no FROM ranking_snapshot s JOIN calc_run r ON r.run_id=s.run_id AND r.status='done' AND r.period_ym=?
                            WHERE s.period_type='month' AND s.period_key=? AND s.metric='recognized_premium' AND s.scope='all' AND s.agent_id=?""",
                         (ym, ym, ctx["agent_id"])).fetchone()
         data["my_rank"] = r["rank_no"] if r else None
-        data["rank_total"] = con.execute("""SELECT COUNT(*) FROM ranking_snapshot s JOIN calc_run r ON r.run_id=s.run_id AND r.status='done' AND r.period_ym=?
+        data["rank_total"] = 0 if "my_rank" not in show else con.execute("""SELECT COUNT(*) FROM ranking_snapshot s JOIN calc_run r ON r.run_id=s.run_id AND r.status='done' AND r.period_ym=?
                                             WHERE s.period_type='month' AND s.period_key=? AND s.metric='recognized_premium' AND s.scope='all'""", (ym, ym)).fetchone()[0]
-        data["goal"] = _goal(con, ym, ctx["agent_id"])
+        data["goal"] = _goal(con, ym, ctx["agent_id"]) if "goal" in show else None
     if role in ("manager", "main"):
         team = _perf(con, ym, ctx["agent_ids"] if role == "manager" else [r["agent_id"] for r in con.execute("SELECT agent_id FROM agent")])
         # 합계와 가동에는 그 달 중간에 퇴사한 사람의 퇴사 전 실적도 넣는다. 상위 목록은 경쟁 표시라 퇴사자를 뺀다

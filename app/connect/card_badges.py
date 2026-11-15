@@ -17,7 +17,7 @@
 - CFP, AFPK, 개인보험심사역, 손해사정사는 앱에 자료가 없어 판정하지 않는다.
 - 임원제도 executive_fc, executive_manager 는 직함이라 배지로 보지 않는다. 가정이다.
 - 해촉자와 재직이 아닌 설계사는 판정하지 않는다. 그 명함은 card_remove 의 내리기 후보다.
-- 계산은 하지 않는다. 인증은 certification.run 이 남긴 표를 읽고, 조직 부문 수상은 org_award.load 와 org_award.confirmed 를 부른다.
+- 계산은 하지 않는다. 인증은 certification.run 이 남긴 표를 certification.awards 와 certification.latest_status 로 읽고, 조직 부문 수상은 org_award.load 와 org_award.confirmed 를 부른다.
 - 이름, 실적 값, 시상 내용, 금액은 결과에 담지 않는다. 시상 내용 공개는 D-45 라 부문 이름과 순위만 쓴다.
 
 유효기간. 결정에 없어 둔 가정이다
@@ -215,24 +215,18 @@ def judge_badges(con, agent_ids: Iterable, *, today: date | None = None) -> list
     q = ",".join("?" * len(ids))
     found: dict = {}
 
-    # 인증 확정 기록
-    for r in con.execute(f"""SELECT w.agent_id, w.year, w.awarded_at, p.code, p.name, p.category
-                             FROM agent_certification_award w JOIN certification_program p ON p.program_id=w.program_id
-                             WHERE w.agent_id IN ({q})""", ids):
-        b = _cert_badge(r[0], r[3], r[4], r[5], r[1], r[2], BASIS_AWARD, today)
+    # 인증 확정 기록. 읽기는 certification.awards 한 곳에서 한다
+    from app.engine import certification
+    for r in certification.awards(con, ids):
+        b = _cert_badge(r["agent_id"], r["code"], r["name"], r["category"], r["year"], r["awarded_at"], BASIS_AWARD, today)
         if b:
             _merge(found, b)
 
-    # 인증 계산의 달성. 가장 늦은 기준월의 완료 run 하나만 본다
-    run = con.execute("""SELECT run_id FROM calc_run WHERE run_type='certification' AND status='done'
-                         ORDER BY period_ym DESC, run_id DESC LIMIT 1""").fetchone()
-    if run:
-        for r in con.execute(f"""SELECT s.agent_id, s.year, p.code, p.name, p.category
-                                 FROM agent_certification_status s JOIN certification_program p ON p.program_id=s.program_id
-                                 WHERE s.run_id=? AND s.achieved=1 AND s.agent_id IN ({q})""", [run[0], *ids]):
-            b = _cert_badge(r[0], r[2], r[3], r[4], r[1], None, BASIS_CALC, today)
-            if b:
-                _merge(found, b)
+    # 인증 계산의 달성. 가장 늦은 기준월의 완료 run 하나만 본다. certification.latest_status 가 고른다
+    for r in certification.latest_status(con, ids, achieved_only=True):
+        b = _cert_badge(r["agent_id"], r["code"], r["name"], r["category"], r["year"], None, BASIS_CALC, today)
+        if b:
+            _merge(found, b)
 
     # 조직 부문 수상 확정. 이름과 실적 값과 시상 내용은 버린다
     from app.engine import org_award

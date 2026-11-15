@@ -23,13 +23,16 @@ from app.ops import schema as ops_schema
 from app.web.deps import HERE, PASSWORD_PATH, NeedLogin, NeedPasswordChange, csrf_protect, guard, page, templates
 from app.web.routes import auth, board, card, home, me, notify, org, promo, schedule, staff, team
 from app.web.routes import contracts as contract_routes
+from app.web.routes import data as data_routes
 from app.web.routes import edu as edu_routes
 from app.web.routes import jobs as job_routes
 from app.web.routes import landing as landing_routes
+from app.web.routes import masters as master_routes
 from app.web.routes import my as my_routes
 from app.web.routes import org_settings as settings_routes
 from app.web.routes import perf as perf_routes
 from app.web.routes import persistency as persist_routes
+from app.web.routes import settle as settle_routes
 
 
 def _db_path() -> str:
@@ -110,7 +113,10 @@ for r in (perf_routes, contract_routes, my_routes, persist_routes):   # 실적 �
 app.include_router(edu_routes.router)         # 교육 묶음, 내 교육, 교육 진척도, 수료자 명부 안내
 app.include_router(landing_routes.router)     # 로그인 전 공개 화면: 앱 소개 /welcome, 초대 링크 /invite. guard 예외 목록에 함께 적는다
 app.include_router(job_routes.router)         # 데이터 묶음의 뒤에서 하는 작업 /data/jobs. 작업을 넣고 상태만 본다
+app.include_router(data_routes.router)        # 데이터 묶음의 계약 엑셀, 시상안, 품질검증, 적재 이력. 기존 운영 도구에서 옮김
+app.include_router(master_routes.router)      # 조직·설정 묶음의 마스터 /org/masters. 보험사, 상품, 구분
 app.include_router(settings_routes.router)      # 조직·설정 묶음의 조직별 설정 /org/settings. 파트 H
+app.include_router(settle_routes.router)        # 수수료·점검 묶음 다섯 화면과 데이터 묶음의 정산서와 유지율 /data/statement. 파트 G
 
 
 @app.get("/favicon.ico", include_in_schema=False)

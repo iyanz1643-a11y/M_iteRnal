@@ -347,7 +347,7 @@ def test_account_issue_shows_password_once_and_forces_change(env):
     assert r.status_code == 303 and r.headers["location"] == "/me"
     assert c.get("/").headers["location"] == "/me" and c.get("/promo/list").status_code == 303
     assert c.get("/me").status_code == 200
-    assert "바꿨습니다" in c.post("/me", data={"old": pw, "new": "n0001-new-pass", "new2": "n0001-new-pass"}).text
+    assert "바꿨습니다" in c.post("/me", data={"old": pw, "new": "first-pass-5678", "new2": "first-pass-5678"}).text
     assert c.get("/").status_code == 200
     # 재설정하면 새 초기 비밀번호가 나오고 앞의 것은 듣지 않는다
     r = admin.post("/org/accounts", data={"action": "reset", "user_id": uid_of(con, "N0001")})

@@ -531,10 +531,64 @@ def _public(con, ym, ids=None) -> set:
     return out
 
 
+def _own_subtotals(con, agent_id) -> set:
+    """본인 수수료의 보험사별, 구분별, 달별 소계. 수수료 내역 /settle/commission 이 본인에게 보여 주는 소계다.
+
+    본인 금액에만 넣는다. 다른 사람의 금액(_secrets)에는 넣지 않아 보지 않는 값이 이만큼만 는다.
+    엔진을 부르지 않고 저장 표에서 본인 줄만 직접 읽는다. 엔진이 남의 줄을 섞더라도 그 값이 본인 소계로 들어오지 않게 하려는 것이다.
+    줄은 세 가지로 본다. 정산서 줄(반영된 적재분), 달마다 마지막 수수료 run 의 자체 계산 줄, 그리고 화면처럼 정산서가 들어온
+    보험사는 정산서 줄, 나머지는 자체 계산 줄로 섞은 것이다. 소계마다 지급, 환수, 순액을 본다. 환수는 구분이 clawback 인 줄이다.
+    """
+    out = set()
+    if agent_id is None:
+        return out
+    live = ("active", "loaded")
+    stmt, calc = {}, {}
+    for r in con.execute(f"""SELECT s.period_ym, s.insurer_id, s.commission_type, s.amount FROM commission_statement_line s
+                             JOIN import_batch b ON b.batch_id=s.batch_id WHERE s.agent_id=? AND b.status IN ({','.join('?' * len(live))})""",
+                         (agent_id, *live)):
+        stmt.setdefault(r["period_ym"], []).append(dict(r))
+    for (ym_,) in con.execute("SELECT DISTINCT period_ym FROM commission_calc WHERE agent_id=?", (agent_id,)).fetchall():
+        run_id = db.latest_run(con, "commission", ym_)
+        calc[ym_] = [dict(r) for r in con.execute(
+            """SELECT c.period_ym, k.insurer_id, c.commission_type, c.amount FROM commission_calc c JOIN contract k ON k.contract_id=c.contract_id
+               WHERE c.run_id=? AND c.agent_id=?""", (run_id, agent_id))]
+
+    def add_sums(rows):
+        paid = sum(r["amount"] or 0 for r in rows if r["commission_type"] != "clawback")
+        claw = sum(r["amount"] or 0 for r in rows if r["commission_type"] == "clawback")
+        for v in (paid, claw, paid + claw):
+            out.update(_ints(v))
+
+    def add_groups(rows):
+        add_sums(rows)                                                   # 달별 소계
+        for key in ("insurer_id", "commission_type"):                    # 보험사별, 구분별 소계
+            groups = {}
+            for r in rows:
+                groups.setdefault(r[key], []).append(r)
+            for g in groups.values():
+                add_sums(g)
+    for ym_ in set(stmt) | set(calc):
+        loaded = {r[0] for r in con.execute(
+            f"""SELECT DISTINCT insurer_id FROM import_batch WHERE data_type='statement' AND period_ym=? AND status IN ({','.join('?' * len(live))})""",
+            (ym_, *live))}
+        mixed = stmt.get(ym_, []) + [r for r in calc.get(ym_, []) if r["insurer_id"] not in loaded]
+        for rows in (stmt.get(ym_, []), calc.get(ym_, []), mixed):
+            add_groups(rows)
+    return out
+
+
 def _checkable(con, ctx, others, ym):
-    """이 계정이 보면 안 되는 금액에서, 본인 금액과 이 계정의 화면에 나와도 되는 숫자와 겹치는 값을 뺀다."""
+    """이 계정이 보면 안 되는 금액에서, 본인 금액과 이 계정의 화면에 나와도 되는 숫자와 겹치는 값을 뺀다.
+    본인 금액은 _secrets 의 본인 것과 수수료 내역의 본인 소계(_own_subtotals)다.
+    본인을 넣어 더한 범위 합계도 다른 사람의 금액이 섞여 있어 보면 안 되는 금액에 넣는다. 범위 합계 칸만 가져온다."""
     secret = _secrets(con, others, ym)
-    own = _secrets(con, {ctx["agent_id"]} if ctx["agent_id"] else set(), ym)
+    if ctx["agent_id"] is not None and others:
+        for v, f in _secrets(con, set(others) | {ctx["agent_id"]}, ym).items():
+            scope = {x + " 본인 포함" for x in f if "범위" in x}
+            if scope:
+                secret.setdefault(v, set()).update(scope)
+    own = set(_secrets(con, {ctx["agent_id"]} if ctx["agent_id"] else set(), ym)) | _own_subtotals(con, ctx["agent_id"])
     public = _public(con, ym, ctx["agent_ids"])
     return {v: f for v, f in secret.items() if v not in public and v not in own}
 

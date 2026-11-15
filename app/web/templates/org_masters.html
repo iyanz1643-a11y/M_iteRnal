@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block body %}
+<p class="eyebrow">조직·설정 · 전체</p>
+<h1 class="display">마스터</h1>
+<p class="lede">보험사, 상품, 구분을 보고 고칩니다. 고친 일은 전과 뒤를 함께 변경 이력에 남깁니다. 상품종류 분류표는 파일로 고치고 계약현황을 다시 적재합니다.</p>
+{% if err %}<div class="alert" style="margin-top:20px">{{ err }}</div>{% endif %}
+{% if msg %}<div class="okmsg" style="margin-top:20px">{{ msg }}</div>{% endif %}
+
+<nav class="seg" aria-label="마스터 종류">{% for k, v in TABS.items() %}<a class="{{ 'on' if tab == k }}" href="/org/masters?tab={{ k }}">{{ v }}{% if k == 'insurer' and loader_n %} · 확인 {{ loader_n }}{% endif %}</a>{% endfor %}</nav>
+
+{% set csrf %}<input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">{% endset %}
+
+{% if tab == 'insurer' %}
+{% if edit or new %}{% set e = edit or form or {} %}
+<form class="card wide" method="post" action="/org/masters" style="margin-top:12px">{{ csrf }}<input type="hidden" name="action" value="insurer_save"><input type="hidden" name="id" value="{{ e.insurer_id or '' }}">
+  <div class="k">{{ '보험사 고치기 · ' ~ e.code if edit else '보험사 새로 만들기' }}</div>
+  <div class="frow">
+    {% if not edit %}<label class="f">코드<input class="sm" type="text" name="code" value="{{ e.code or '' }}" maxlength="16" required></label>{% endif %}
+    <label class="f">이름<input class="sm" type="text" name="name" value="{{ e.name or '' }}" maxlength="60" required></label>
+    <label class="f">업권<select name="sector">{% for k, v in SECTOR_KO.items() %}<option value="{{ k }}" {{ 'selected' if e.sector == k }}>{{ v }}</option>{% endfor %}</select></label>
+  </div>
+  <div class="checks"><label><input type="checkbox" name="active" value="1" {{ 'checked' if e.active in (1, '1') or not edit }}> 사용</label></div>
+  <p class="cap">보험사 이름은 계약현황의 보험사명과 맞춰 찾습니다. 이름을 바꾸면 다음 적재에서 새 보험사로 잡힐 수 있습니다.</p>
+  <div class="actions"><button class="primary" type="submit">저장</button><a class="ghost" href="/org/masters?tab=insurer">그만두기</a></div>
+</form>
+{% else %}<p style="margin:12px 0 0"><a class="ghost" href="/org/masters?tab=insurer&amp;new=1">보험사 새로 만들기</a></p>{% endif %}
+{% if loader_n %}<div class="alert" style="margin-top:16px">적재기가 임시로 등록한 보험사가 {{ loader_n }}곳 있습니다. 이름과 업권을 확인한 뒤 확정하세요.</div>{% endif %}
+<div class="card tablecard" style="margin-top:12px"><table>
+<tr><th>보험사</th><th class="hide-sm">코드</th><th class="hide-sm">업권</th><th class="num hide-sm hide-md">상품</th><th class="num hide-sm hide-md">계약</th><th class="hide-sm">상태</th><th></th></tr>
+{% for i in insurers %}<tr><td class="strong wrap-sm">{{ i.name }}<div class="sm-sub"><span>{{ i.code }} · {{ SECTOR_KO.get(i.sector, i.sector) }}</span><span>{% if i.origin == 'loader' %}<span class="chip warn">임시 등록</span>{% elif not i.active %}<span class="chip">쓰지 않음</span>{% endif %}</span></div></td>
+<td class="hide-sm">{{ i.code }}</td><td class="hide-sm">{{ SECTOR_KO.get(i.sector, i.sector) }}</td><td class="num hide-sm hide-md">{{ i.products }}</td><td class="num hide-sm hide-md">{{ i.contracts }}</td>
+<td class="hide-sm">{% if i.origin == 'loader' %}<span class="chip warn">임시 등록</span>{% elif i.active %}<span class="chip good">사용</span>{% else %}<span class="chip">쓰지 않음</span>{% endif %}</td>
+<td class="acts"><form method="post" action="/org/masters">{{ csrf }}<input type="hidden" name="id" value="{{ i.insurer_id }}">
+  <a class="ghost" href="/org/masters?tab=insurer&amp;edit={{ i.insurer_id }}">고치기</a>
+  {% if i.origin == 'loader' %}<button class="ghost" name="action" value="insurer_confirm">확정</button>{% endif %}</form></td></tr>{% endfor %}
+</table></div>
+
+{% elif tab == 'product' %}
+{% if edit or new %}{% set e = edit or form or {} %}
+<form class="card wide" method="post" action="/org/masters" style="margin-top:12px">{{ csrf }}<input type="hidden" name="action" value="product_save"><input type="hidden" name="id" value="{{ e.product_id or '' }}">
+  <div class="k">{{ '상품 고치기' if edit else '상품 새로 만들기' }}</div>
+  <div class="frow">
+    <label class="f">보험사<select name="insurer_id">{% for i in insurers %}<option value="{{ i.insurer_id }}" {{ 'selected' if e.insurer_id|string == i.insurer_id|string }}>{{ i.name }} · {{ i.code }}</option>{% endfor %}</select></label>
+    <label class="f">상품 코드<input class="sm" type="text" name="product_code" value="{{ e.product_code or '' }}" maxlength="40" required></label>
+    <label class="f">상품명<input class="sm" type="text" name="product_name" value="{{ e.product_name or '' }}" maxlength="120" required></label>
+    <label class="f">구분<select name="product_category">{% for c in cats %}<option value="{{ c.code }}" {{ 'selected' if e.product_category == c.code }}>{{ c.name }}</option>{% endfor %}</select></label>
+    <label class="f">인정률<input class="sm" type="text" name="conversion_rate" value="{{ e.conversion_rate if e.conversion_rate is not none and e.conversion_rate != '' else '1' }}" inputmode="decimal" required></label>
+    <label class="f">적용 시작<input class="sm" type="text" name="effective_from" value="{{ e.effective_from or '' }}" pattern="20[0-9]{4}" inputmode="numeric" required></label>
+    <label class="f">적용 끝 · 비우면 지금도 씀<input class="sm" type="text" name="effective_to" value="{{ e.effective_to or '' }}" pattern="20[0-9]{4}" inputmode="numeric"></label>
+  </div>
+  {% if edit %}<div class="checks"><label><input type="checkbox" name="ack" value="1"> 인정률은 계산 기준입니다. 바꾸는 것을 확인했습니다</label></div>
+  <p class="cap">인정률을 바꾸면 이미 낸 업적 run 은 뒤에서 하는 작업에서 다시 돌려야 반영됩니다.</p>{% endif %}
+  <div class="actions"><button class="primary" type="submit">저장</button><a class="ghost" href="/org/masters?tab=product">그만두기</a></div>
+</form>
+{% else %}<p style="margin:12px 0 0"><a class="ghost" href="/org/masters?tab=product&amp;new=1">상품 새로 만들기</a></p>{% endif %}
+<form class="card wide" method="get" action="/org/masters" style="margin-top:12px"><input type="hidden" name="tab" value="product">
+  <div class="frow"><label class="f">보험사<select name="ins"><option value="">전체</option>{% for i in insurers %}<option value="{{ i.insurer_id }}" {{ 'selected' if ins == i.insurer_id|string }}>{{ i.name }}</option>{% endfor %}</select></label></div>
+  <div><button class="ghost" type="submit">보기</button></div></form>
+{% if products %}<div class="card tablecard" style="margin-top:12px"><table>
+<tr><th>상품</th><th class="hide-sm">보험사</th><th class="hide-sm hide-md">코드</th><th class="hide-sm">구분</th><th class="num">인정률</th><th class="hide-sm hide-md">적용</th><th></th></tr>
+{% for p in products %}<tr><td class="strong wrap-sm">{{ p.product_name }}<div class="sm-sub"><span>{{ p.insurer_name }} · {{ p.category_name or p.product_category }}</span></div></td>
+<td class="hide-sm">{{ p.insurer_name }}</td><td class="hide-sm hide-md">{{ p.product_code }}</td><td class="hide-sm">{{ p.category_name or p.product_category }}</td>
+<td class="num">{{ p.conversion_rate|n }}</td><td class="hide-sm hide-md">{{ p.effective_from|ymko }}{% if p.effective_to %} ~ {{ p.effective_to|ymko }}{% else %}부터{% endif %}</td>
+<td class="acts"><a class="ghost" href="/org/masters?tab=product&amp;edit={{ p.product_id }}">고치기</a></td></tr>{% endfor %}
+</table></div>{% else %}<div class="card" style="margin-top:12px"><div class="k">상품이 없습니다</div></div>{% endif %}
+
+{% elif tab == 'category' %}
+{% if edit %}{% set e = edit %}
+<form class="card wide" method="post" action="/org/masters" style="margin-top:12px">{{ csrf }}<input type="hidden" name="action" value="category_save"><input type="hidden" name="id" value="{{ e.code }}">
+  <div class="k">구분 고치기 · {{ e.name }}</div>
+  <div class="frow"><label class="f">순서<input class="sm" type="text" name="sort_order" value="{{ e.sort_order }}" inputmode="numeric"></label></div>
+  <div class="checks"><label><input type="checkbox" name="incentive_eligible" value="1" {{ 'checked' if e.incentive_eligible in (1, '1') }}> 시상 대상 기본값</label>
+    <label><input type="checkbox" name="ack" value="1"> 시상 대상 기본값은 계산 기준입니다. 바꾸는 것을 확인했습니다</label></div>
+  <p class="cap">구분의 이름과 코드는 적재기와 분류표가 함께 쓰므로 여기서 바꾸지 않습니다. 시상 규칙에 대상 구분이 따로 있으면 그쪽이 먼저입니다.</p>
+  <div class="actions"><button class="primary" type="submit">저장</button><a class="ghost" href="/org/masters?tab=category">그만두기</a></div>
+</form>{% endif %}
+<div class="card tablecard" style="margin-top:12px"><table>
+<tr><th>구분</th><th class="hide-sm">코드</th><th>시상 대상 기본값</th><th class="num hide-sm">상품</th><th></th></tr>
+{% for c in cats %}<tr><td class="strong">{{ c.name }}</td><td class="hide-sm">{{ c.code }}</td><td><span class="chip {{ 'good' if c.incentive_eligible }}">{{ '대상' if c.incentive_eligible else '대상 아님' }}</span></td>
+<td class="num hide-sm">{{ c.products }}</td><td class="acts"><a class="ghost" href="/org/masters?tab=category&amp;edit={{ c.code }}">고치기</a></td></tr>{% endfor %}
+</table></div>
+
+{% elif tab == 'map' %}{% set m = map %}
+{% if m.err %}<div class="alert" style="margin-top:12px">{{ m.err }}</div>{% else %}
+<div class="grid g3 keep" style="margin-top:12px">
+  <div class="card"><div class="k">상품종류</div><div class="mid">{{ m.rows|length }}<span class="unit">개</span></div></div>
+  <div class="card"><div class="k">상태</div><div class="mid">{{ '확정' if m.meta.status == 'confirmed' else '초안' }}</div><div class="cap">{{ m.meta.decision or '' }} · {{ m.meta.version or '' }}판</div></div>
+  <div class="card"><div class="k"><span class="dot {{ 'warn' if m.missing else '' }}"></span>표에 없음</div><div class="mid">{{ m.missing|length }}<span class="unit">개</span></div></div>
+</div>
+<div class="card" style="margin-top:12px"><div class="k">고치는 법</div>
+  <div class="cap">이 표는 보기만 합니다. config/mapping/product_category_map.yaml 을 고치고 판을 올린 뒤, <a href="/data/batches?type=org_contract">적재 이력</a>에서 가장 최근 계약현황을 다시 적재하면 원장의 구분이 새 표를 따릅니다.{% if m.meta.confirmed %} 표는 {{ m.meta.confirmed }}에 확정했습니다.{% endif %}</div></div>
+{% if m.missing %}<h2 class="sec">분류표에 없는 상품종류</h2>
+<div class="card tablecard"><table><tr><th>상품종류</th><th class="num">원장 계약</th></tr>
+{% for x in m.missing %}<tr><td class="strong wrap-sm">{{ x.t }}</td><td class="num">{{ x.n }}</td></tr>{% endfor %}</table></div>{% endif %}
+<h2 class="sec">분류표</h2>
+<div class="card tablecard"><table>
+<tr><th>상품종류</th><th>구분</th><th class="hide-sm">업권</th><th class="num hide-sm">원장 계약</th><th class="hide-sm hide-md">확정</th></tr>
+{% for r in m.rows %}<tr><td class="strong wrap-sm">{{ r.type }}<div class="sm-sub"><span>{{ r.sector }} · 원장 {{ r.n }}건</span></div></td><td>{{ r.category }}</td><td class="hide-sm">{{ r.sector }}</td><td class="num hide-sm">{{ r.n }}</td><td class="hide-sm hide-md">{{ r.confirmed or '초안' }}</td></tr>{% endfor %}
+</table></div>
+{% endif %}
+
+{% else %}
+{% if history %}<div class="card tablecard" style="margin-top:12px"><table>
+<tr><th>때</th><th>대상</th><th class="hide-sm">한 일</th><th class="hide-sm">바뀐 칸</th></tr>
+{% for h in history %}<tr><td>{{ h.at|when }}<div class="sm-sub"><span>{{ h.actor }}</span></div></td>
+<td class="wrap-sm" style="word-break:break-all">{{ h.target }}<div class="sm-sub">{% for c in h.changes %}<span>{{ c.field }}: {{ c.before if c.before is not none else '-' }} → {{ c.after if c.after is not none else '-' }}</span>{% endfor %}</div></td>
+<td class="hide-sm">{{ h.action_ko }} · {{ h.actor }}</td>
+<td class="cell-wrap hide-sm">{% for c in h.changes %}<div>{{ c.field }}: {{ c.before if c.before is not none else '-' }} → {{ c.after if c.after is not none else '-' }}</div>{% endfor %}</td></tr>{% endfor %}
+</table></div><p class="cap">최근 100건입니다.</p>
+{% else %}<div class="card" style="margin-top:12px"><div class="k">아직 고친 일이 없습니다</div></div>{% endif %}
+{% endif %}
+{% endblock %}

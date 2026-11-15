@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block body %}
+<p class="eyebrow">데이터 · 전체</p>
+<h1 class="display">시상안</h1>
+<p class="lede">보험사별 시상안을 원문 그대로 원장에 쌓고, 줄마다 읽어 낸 유형과 지급률을 사람이 확인해 승인합니다. 금액이 원문의 표나 그림에만 있으면 숫자를 만들지 않고 원문 확인으로 둡니다.</p>
+{% if err %}<div class="alert" style="margin-top:20px">{{ err }}</div>{% endif %}
+{% if msg %}<div class="okmsg" style="margin-top:20px">{{ msg }}</div>{% endif %}
+
+{% if preview %}{% set p = preview %}
+<h2 class="sec">미리보기</h2>
+<p class="cap" style="margin:-8px 0 12px">{{ p.file }} · {{ p.ym|ymko }} 귀속. 아직 아무것도 바뀌지 않았습니다.</p>
+<div class="grid g4">
+  <div class="card"><div class="k">원장 줄</div><div class="mid">{{ p.lines }}<span class="unit">줄</span></div></div>
+  <div class="card"><div class="k"><span class="dot"></span>자동 해석</div><div class="mid">{{ p.auto }}<span class="unit">줄</span></div></div>
+  <div class="card"><div class="k"><span class="dot warn"></span>사람 확인 필요</div><div class="mid">{{ p.manual }}<span class="unit">줄</span></div></div>
+  <div class="card"><div class="k">보험사</div><div class="mid">{{ p.insurers }}<span class="unit">곳</span></div><div class="cap">마스터와 이름이 맞음 {{ p.matched }}곳</div></div>
+</div>
+{% if p.skipped %}<div class="card" style="margin-top:12px"><div class="k">적재하지 않는 시트 {{ p.skipped|length }}개</div>
+{% for s in p.skipped %}<div class="cap">{{ s.sheet }}: {{ s.reason }}</div>{% endfor %}</div>{% endif %}
+{% if p.by_note %}<div class="card" style="margin-top:12px"><div class="k">사람이 확인할 까닭</div>
+{% for x in p.by_note %}<div class="cap">{{ x.parse_note }} · {{ x.n }}줄</div>{% endfor %}</div>{% endif %}
+{% if p.replaces %}<div class="alert" style="margin-top:16px">{{ p.ym|ymko }}에 이미 쌓은 시상안 {{ p.replaces }}개는 대체됨이 됩니다. 지우지는 않습니다.</div>{% endif %}
+<form method="post" action="/data/plan" class="actions" style="margin-top:16px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  <button class="primary" name="action" value="apply">이대로 원장에 쌓기</button><button class="second" name="action" value="cancel">취소</button></form>
+{% endif %}
+
+{% if doc %}
+<h2 class="sec">원장 · 시상안 {{ doc.plan_doc_id }}번</h2>
+<form class="card wide" method="get" action="/data/plan">
+  <div class="frow">
+    <label class="f">시상안<select name="doc">{% for d in docs %}<option value="{{ d.plan_doc_id }}" {{ 'selected' if d.plan_doc_id == doc.plan_doc_id }}>{{ d.plan_doc_id }} · {{ d.period_ym|ymko }} · {{ d.title or d.file_name }}{% if d.status == 'superseded' %} · 대체됨{% endif %}</option>{% endfor %}</select></label>
+    <label class="f">보험사<select name="ins"><option value="">전체</option>{% for v in opts.ins %}<option value="{{ v }}" {{ 'selected' if f.ins == v }}>{{ v }}</option>{% endfor %}</select></label>
+    <label class="f">수령 계층<select name="lv"><option value="">전체</option>{% for v in opts.lv %}<option value="{{ v }}" {{ 'selected' if f.lv == v }}>{{ LEVEL_KO.get(v, v) }}</option>{% endfor %}</select></label>
+    <label class="f">유형<select name="kind"><option value="">전체</option>{% for v in opts.kind %}<option value="{{ v }}" {{ 'selected' if f.kind == v }}>{{ KIND_KO.get(v, v) }}</option>{% endfor %}</select></label>
+    <label class="f">해석<select name="ps"><option value="">전체</option>{% for v in opts.ps %}<option value="{{ v }}" {{ 'selected' if f.ps == v }}>{{ PS_KO.get(v, v) }}</option>{% endfor %}</select></label>
+    <label class="f">검토<select name="rv"><option value="">전체</option>{% for k, v in REVIEW_KO.items() %}<option value="{{ k }}" {{ 'selected' if f.rv == k }}>{{ v }}</option>{% endfor %}</select></label>
+  </div>
+  <div><button class="ghost" type="submit">보기</button></div>
+</form>
+
+<div class="grid g4" style="margin-top:16px">
+  <div class="card"><div class="k">원장 줄</div><div class="mid">{{ sm.doc.row_count }}<span class="unit">줄</span></div><div class="cap">{{ sm.doc.loaded_at|when }} 적재</div></div>
+  <div class="card"><div class="k"><span class="dot warn"></span>사람 확인 필요</div><div class="mid">{{ sm.manual }}<span class="unit">줄</span></div><div class="cap">자동 해석 {{ sm.auto }} · 비고 {{ sm.note }}</div></div>
+  <div class="card"><div class="k"><span class="dot"></span>승인</div><div class="mid">{{ sm.approved }}<span class="unit">줄</span></div></div>
+  <div class="card"><div class="k"><span class="dot bad"></span>반려</div><div class="mid">{{ sm.rejected }}<span class="unit">줄</span></div></div>
+</div>
+{% if sm.skipped %}<p class="cap">적재하지 않은 시트: {% for s in sm.skipped %}{{ s.sheet }}{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
+
+{% if lines %}
+<form method="post" action="/data/plan" style="margin-top:16px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="doc" value="{{ doc.plan_doc_id }}">
+<div class="card tablecard"><table>
+<tr><th>보험사와 분류</th><th class="hide-sm">수령</th><th class="hide-sm hide-md">기간</th><th class="hide-sm">시상내용 원문</th><th class="hide-sm">읽어 낸 지급률</th><th>검토</th></tr>
+{% for ln in lines %}{% set rv = 'good' if ln.review_status == 'approved' else ('bad' if ln.review_status == 'rejected' else '') %}
+<tr><td class="strong wrap-sm" style="min-width:160px"><label style="display:flex;gap:10px;align-items:flex-start"><input type="checkbox" name="ids" value="{{ ln.line_id }}" aria-label="{{ ln.line_id }}번 줄 고르기" style="width:20px;height:20px;flex:none;margin-top:2px"><span>{{ ln.insurer_name }}<span class="cap" style="display:block;margin:2px 0 0;font-weight:400">{{ ln.category_raw or '-' }}</span>
+  <span class="sm-sub"><span>{{ LEVEL_KO.get(ln.recipient_level, ln.recipient_level) }} · {{ KIND_KO.get(ln.line_kind, ln.line_kind) }}</span>
+  <span>{% if ln.original %}<span class="chip warn">원문 확인</span>{% elif ln.comps %}{{ ln.comps|join(' / ') }}{% endif %}</span></span></span></label></td>
+<td class="hide-sm">{{ LEVEL_KO.get(ln.recipient_level, ln.recipient_level) }}</td>
+<td class="hide-sm hide-md cell-wrap" style="min-width:140px">{{ ln.period_raw or '-' }}</td>
+<td class="cell-wrap hide-sm">{{ ln.reward_raw or ln.criteria_raw or '-' }}</td>
+<td class="cell-wrap hide-sm" style="min-width:160px">{% if ln.recipient_level == 'note' %}<span class="cap">비고</span>{% elif ln.original %}<span class="chip warn">원문 확인</span>{% endif %}
+  {% for c in ln.comps %}<div>{{ c }}</div>{% endfor %}
+  {% if ln.parse_status == 'manual' %}<div class="cap">{{ ln.parse_note or '사람 확인 필요' }}</div>{% endif %}</td>
+<td><span class="chip {{ rv }}">{{ REVIEW_KO.get(ln.review_status, ln.review_status) }}</span>{% if ln.reviewed_by %}<div class="cap hide-sm" style="margin:2px 0 0">{{ ln.reviewed_by }}</div>{% endif %}</td></tr>{% endfor %}
+</table></div>
+<p class="cap">{{ lines|length }}줄 · 지급률은 시상내용 원문에서 읽은 것이라 승인 전에 원문과 맞춰 보세요. 해석 보조는 다음 단계에 붙습니다.</p>
+<div class="actions" style="margin-top:12px"><button class="primary" name="action" value="approve">고른 줄 승인</button><button class="second" name="action" value="reject">고른 줄 반려</button></div>
+</form>
+{% else %}<div class="card" style="margin-top:16px"><div class="k">조건에 맞는 줄이 없습니다</div></div>{% endif %}
+<p class="cap">승인한 설계사 몫 줄은 <a href="/promo/publish">게시 관리</a>에서 프로모션으로 게시합니다.</p>
+{% else %}
+<div class="card" style="margin-top:28px"><div class="k">아직 쌓은 시상안이 없습니다</div></div>
+{% endif %}
+
+<h2 class="sec">시상안 올리기</h2>
+<form class="card wide" method="post" action="/data/plan" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  <div class="frow">
+    <label class="f">시상안 파일<input type="file" name="file" accept=".xlsx,.xlsm,.json,.txt" required></label>
+    <label class="f">귀속월<input class="sm" type="text" name="ym" value="{{ form_ym }}" pattern="20[0-9]{4}" inputmode="numeric" required></label>
+    <label class="f">제목 · 비우면 파일 이름<input class="sm" type="text" name="title" maxlength="80"></label>
+  </div>
+  <div><button class="primary" name="action" value="preview">미리보기</button></div>
+  <p class="cap">표준 6열(보험사, 시상대상, 분류, 기간, 달성기준, 시상내용) 시트만 쌓고, 다른 시트는 사유만 남깁니다. 원본 파일은 보관하고 지우지 않습니다.</p>
+</form>
+{% endblock %}

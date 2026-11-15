@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block body %}
+<p class="eyebrow">데이터 · 전체</p>
+<h1 class="display">적재 이력</h1>
+<p class="lede">파일마다 언제 누가 무엇을 넣었고 결과가 어땠는지 봅니다. 계약현황은 여기서 다시 적재합니다. 이전 배치와 원본 파일은 지우지 않습니다.</p>
+{% if err %}<div class="alert" style="margin-top:20px">{{ err }}</div>{% endif %}
+{% if done %}<div class="okmsg" style="margin-top:20px">{{ done }}</div>{% endif %}
+
+<div class="grid g4" style="margin-top:28px">
+  {% for s in ('active', 'failed', 'superseded') %}<div class="card"><div class="k">{% if s == 'failed' %}<span class="dot bad"></span>{% elif s == 'active' %}<span class="dot"></span>{% endif %}{{ BATCH_STATUS_KO[s] }}</div><div class="mid">{{ counts.get(s, 0) }}<span class="unit">개</span></div></div>{% endfor %}
+  <div class="card"><div class="k">모두</div><div class="mid">{{ counts.values()|sum }}<span class="unit">개</span></div></div>
+</div>
+
+{% if sel %}{% set b = sel %}
+<h2 class="sec">배치 {{ b.batch_id }}번</h2>
+<div class="card">
+  <div class="chips"><span class="chip {{ 'good' if b.status == 'active' else ('bad' if b.status == 'failed' else '') }}">{{ b.status_ko }}</span>
+    <span class="chip">{{ b.type_ko }}</span>{% if b.fmt %}<span class="chip">{{ FORMATS[b.fmt] }}</span>{% endif %}<span class="chip">{{ b.version }}번째 판</span></div>
+  <table style="margin-top:12px">
+  <tr><td class="strong">파일</td><td style="white-space:normal;overflow-wrap:anywhere">{{ b.file_name }}</td></tr>
+  <tr><td class="strong">귀속월</td><td style="white-space:normal;overflow-wrap:anywhere">{{ b.period_ym|ymko }}</td></tr>
+  <tr><td class="strong">출처</td><td style="white-space:normal;overflow-wrap:anywhere">{{ b.source }}</td></tr>
+  <tr><td class="strong">적재</td><td style="white-space:normal;overflow-wrap:anywhere">{{ b.loaded_at|when or '-' }} · {{ b.loaded_by or '-' }}</td></tr>
+  <tr><td class="strong">읽은 줄</td><td style="white-space:normal;overflow-wrap:anywhere">{{ b.row_count or 0 }}줄 · 이 배치가 마지막으로 실은 계약 {{ detail.contracts }}건</td></tr>
+  <tr><td class="strong">문제</td><td style="white-space:normal;overflow-wrap:anywhere">차단 {{ b.block }} · 경고 {{ b.warn }} · 처리 안 함 {{ b.open }} <a href="/data/quality?batch={{ b.batch_id }}&amp;state=all">목록</a></td></tr>
+  <tr><td class="strong">원본 보관</td><td style="white-space:normal;overflow-wrap:anywhere">{{ '있음' if detail.has_file else '찾지 못함' }}</td></tr>
+  {% if b.note %}<tr><td class="strong">메모</td><td style="white-space:normal;overflow-wrap:anywhere">{{ b.note }}{% if detail.replaced_by %} <a href="/data/batches?id={{ detail.replaced_by }}">새 배치 보기</a>{% endif %}</td></tr>{% endif %}
+  </table>
+</div>
+{% if detail.by_code %}<div class="card tablecard" style="margin-top:12px"><table>
+<tr><th>검사</th><th>등급</th><th class="num">건수</th><th class="num hide-sm">처리 안 함</th></tr>
+{% for c in detail.by_code %}<tr><td class="strong wrap-sm">{{ c.code_ko }}</td><td><span class="chip {{ 'bad' if c.severity == 'block' else 'warn' }}">{{ c.sev_ko }}</span></td><td class="num">{{ c.n }}</td><td class="num hide-sm">{{ c.open }}</td></tr>{% endfor %}
+</table></div>{% endif %}
+
+<h2 class="sec">재적재</h2>
+{% if detail.can_reload %}
+  {% if confirm %}
+  <form class="card wide" method="post" action="/data/batches"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="action" value="reload"><input type="hidden" name="batch_id" value="{{ b.batch_id }}">
+    <div class="k">배치 {{ b.batch_id }}번을 보관한 원본으로 다시 적재합니다</div>
+    <ul class="cap" style="margin:0;padding-left:18px">
+      <li>지금 쓰는 매핑과 상품종류 분류표, 마스터로 다시 읽어 새 배치를 만듭니다.</li>
+      <li>이 배치는 대체됨으로 남깁니다. 원본 파일, 원본 행, 품질 기록은 지우지 않습니다.</li>
+      <li>계약 원장의 같은 계약은 새 배치의 값으로 바뀌고, 상태가 바뀐 계약은 이력이 쌓입니다.</li>
+      <li>끝나면 업적 run 과 랭킹 run 을 작업으로 넣습니다.</li>
+    </ul>
+    <div class="checks"><label><input type="checkbox" name="confirm" value="yes" required> 위 내용을 확인했습니다</label></div>
+    <div class="actions"><button class="primary" type="submit">다시 적재하기</button><a class="ghost" href="/data/batches?id={{ b.batch_id }}">그만두기</a></div>
+  </form>
+  {% else %}
+  <div class="card"><div class="k">다시 적재할 수 있습니다</div><div class="cap">매핑이나 분류표, 마스터를 고친 뒤 이 파일을 다시 읽힐 때 씁니다.</div>
+  <p style="margin:14px 0 0"><a class="ghost" href="/data/batches?id={{ b.batch_id }}&amp;confirm=reload">재적재 확인으로 가기</a></p></div>
+  {% endif %}
+{% else %}
+<div class="card"><div class="k">다시 적재하지 않습니다</div><div class="cap">{{ detail.why }}{% if detail.link %} <a href="{{ detail.link }}">{{ b.type_ko }} 화면으로 가기</a>{% endif %}</div></div>
+{% endif %}
+{% endif %}
+
+<h2 class="sec">배치 목록</h2>
+<form class="card wide" method="get" action="/data/batches">
+  <div class="frow">
+    <label class="f">종류<select name="type"><option value="">전체</option>{% for k, v in TYPE_KO.items() %}<option value="{{ k }}" {{ 'selected' if f.type == k }}>{{ v }}</option>{% endfor %}</select></label>
+    <label class="f">상태<select name="status"><option value="">전체</option>{% for k in ('active', 'failed', 'superseded') %}<option value="{{ k }}" {{ 'selected' if f.status == k }}>{{ BATCH_STATUS_KO[k] }}</option>{% endfor %}</select></label>
+  </div>
+  <div><button class="ghost" type="submit">보기</button></div>
+</form>
+{% if rows %}<div class="card tablecard" style="margin-top:12px"><table>
+<tr><th class="num">배치</th><th>파일</th><th class="hide-sm">종류</th><th class="hide-sm">귀속월</th><th class="hide-sm hide-md">출처</th><th>상태</th><th class="num hide-sm">줄</th><th class="num hide-sm">차단</th><th class="num hide-sm hide-md">경고</th><th class="hide-sm hide-md">적재</th></tr>
+{% for r in rows %}<tr><td class="num"><a href="/data/batches?id={{ r.batch_id }}">{{ r.batch_id }}</a></td>
+<td class="wrap-sm" style="word-break:break-all">{{ r.file_name }}<div class="sm-sub"><span>{{ TYPE_KO.get(r.data_type, r.data_type) }} · {{ r.period_ym|ymko }}</span><span>{{ r.row_count or 0 }}줄 · 차단 {{ r.block }} · 경고 {{ r.warn }}</span></div></td>
+<td class="hide-sm">{{ TYPE_KO.get(r.data_type, r.data_type) }}</td><td class="hide-sm">{{ r.period_ym|ymko }}</td><td class="hide-sm hide-md">{{ r.source }}</td>
+<td><span class="chip {{ 'good' if r.status == 'active' else ('bad' if r.status == 'failed' else '') }}">{{ BATCH_STATUS_KO.get(r.status, r.status) }}</span></td>
+<td class="num hide-sm">{{ r.row_count or 0 }}</td><td class="num hide-sm">{{ r.block }}</td><td class="num hide-sm hide-md">{{ r.warn }}</td><td class="hide-sm hide-md">{{ r.loaded_at|when }}</td></tr>{% endfor %}
+</table></div>{% if rows|length >= 300 %}<p class="cap">최근 300개만 보여 줍니다.</p>{% endif %}
+{% else %}<div class="card" style="margin-top:12px"><div class="k">조건에 맞는 배치가 없습니다</div></div>{% endif %}
+{% endblock %}

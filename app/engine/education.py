@@ -7,6 +7,12 @@
 퇴사자는 진척도의 모수에서 빼고, 수료 기록은 남겨 과정별 수료자 목록에 퇴사 표시와 함께 보인다.
 
 표의 정의는 schema/schema.sql 의 [education:begin] 묶음이다.
+
+조직별 설정(app/org/settings.py)을 두 가지 읽는다. 값은 기준일이 든 달에 그 사람 소속 조직의 effective 값이다.
+- notify.edu_due_days: 기한 임박 날짜 수. soon_days 를 넘기지 않으면 사람마다 이 값을 쓴다. 넘기면 모두 그 값이다.
+- edu.extra_required: 필수 과정 추가. 위 조직이 더한 과정에 아래 조직이 더한다. 아래에서 뺄 수 없다.
+  더한 과정도 대상 조건(역할, 직급, 위촉일, 연 조직)에 맞는 사람에게만 걸린다. 셀의 required_by 가 org 다.
+- 소속이 없는 사람은 GA 의 값을 쓴다. 설정 표가 없는 오래된 DB 에서는 SOON_DAYS 와 과정의 required 만 쓴다.
 """
 from __future__ import annotations
 
@@ -32,7 +38,8 @@ SESSION_STATUS = ("planned", "held", "cancelled")
 # 명함 사이트 public/make/index.html 의 EDU_COURSES 와 같다. 키는 명함 과정 코드, 값은 명함에 찍히는 과정 이름이다
 CARD_COURSES = {"ABC": "ABC 과정"}
 CARD_STATUS = ("requested", "issued", "failed", "revoked")
-SOON_DAYS = 7          # 기한 7일 전부터 임박이다. 알림 기준(docs/09 의 교육 기한)과 같다
+SOON_DAYS = 7          # 기한 7일 전부터 임박이다. 조직별 설정이 없을 때의 값이고 notify.edu_due_days 의 기본값과 같다
+SOON_KEY, EXTRA_KEY = "notify.edu_due_days", "edu.extra_required"   # app/org/settings.py 의 항목
 
 _MD = re.compile(r"^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$")
 _STATEMENTS: list | None = None
@@ -436,7 +443,28 @@ def _completions(con, agent_ids, ref: date) -> dict:
             WHERE c.voided_at IS NULL AND c.completed_on<=? AND c.agent_id IN ({q})""", (ref.isoformat(), *ids))}
 
 
-def _cell(c: dict, p: dict, done: dict | None, ref: date, soon_days: int) -> dict:
+def _org_rules(con, people, ref: date) -> dict:
+    """사람마다 (임박 날짜 수, 더한 필수 과정 집합). 소속 조직의 기준일 달 값이다. 설정 표가 없으면 빈 dict."""
+    if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='org_setting'").fetchone():
+        return {}
+    from app.org import settings  # 웹 로그인 문맥을 함께 불러오므로 쓸 때만 부른다
+    ym = ref.strftime("%Y%m")
+    root = settings.root_org(con)
+    cache: dict = {}
+    out = {}
+    for p in people:
+        org = p["org_id"] if p["org_id"] is not None else root
+        if org not in cache:
+            try:
+                cache[org] = (int(settings.effective(con, org, SOON_KEY, ym)["value"]),
+                              frozenset(settings.effective(con, org, EXTRA_KEY, ym)["value"] or ()))
+            except (settings.SettingError, sqlite3.OperationalError, TypeError, ValueError):
+                cache[org] = (SOON_DAYS, frozenset())
+        out[p["agent_id"]] = cache[org]
+    return out
+
+
+def _cell(c: dict, p: dict, done: dict | None, ref: date, soon_days: int, extra: bool = False) -> dict:
     due = due_date(c, p, ref)
     days_left = (due - ref).days if due else None
     if done:
@@ -448,29 +476,43 @@ def _cell(c: dict, p: dict, done: dict | None, ref: date, soon_days: int) -> dic
     else:
         state = "open"
     return {"course_id": c["course_id"], "course_code": c["code"], "course_name": c["name"], "kind": c["kind"], "kind_ko": c["kind_ko"],
-            "required": bool(c["required"]), "due": due.isoformat() if due else None, "days_left": days_left,
+            "required": bool(c["required"]) or extra, "required_by": "course" if c["required"] else ("org" if extra else None),
+            "soon_days": soon_days, "due": due.isoformat() if due else None, "days_left": days_left,
             "state": state, "state_ko": STATE_KO[state],
             "completed_on": done["completed_on"] if done else None, "session_no": done["session_no"] if done else None,
             "late": bool(done and due and done["completed_on"] > due.isoformat()),
             "completion_id": done["completion_id"] if done else None}
 
 
-def _matrix(con, agent_ids, as_of, required_only=True, soon_days=SOON_DAYS, course_id=None):
+def _matrix(con, agent_ids, as_of, required_only=True, soon_days=None, course_id=None):
+    """사람과 과정의 짝. soon_days 가 None 이면 사람마다 소속 조직의 임박 날짜 수를 쓴다.
+
+    필수 과정은 과정의 required 이거나 소속 조직이 더한 과정이다. required_only 면 그 사람에게 필수인 짝만 둔다."""
     ref = _as_of(as_of)
     people = _people(con, agent_ids, ref)
-    courses = [c for c in list_courses(con) if (c["required"] or not required_only) and (course_id is None or c["course_id"] == course_id)]
+    rules = _org_rules(con, people, ref)
+    extra_all = set().union(*(r[1] for r in rules.values())) if rules else set()
+    courses = [c for c in list_courses(con) if (c["required"] or c["course_id"] in extra_all or not required_only)
+               and (course_id is None or c["course_id"] == course_id)]
     done = _completions(con, [p["agent_id"] for p in people], ref)
     anc: dict = {}
     for p in people:
+        days, extra = rules.get(p["agent_id"], (SOON_DAYS, frozenset()))
+        if soon_days is not None:
+            days = soon_days
+        p["soon_days"] = days
         p["courses"] = []
         for c in courses:
+            more = not c["required"] and c["course_id"] in extra
+            if required_only and not (c["required"] or more):
+                continue
             if _applies(con, c, p, anc):
                 key = (p["agent_id"], c["course_id"], str(ref.year) if c["deadline_rule"] == "yearly" else "once")
-                p["courses"].append(_cell(c, p, done.get(key), ref, soon_days))
+                p["courses"].append(_cell(c, p, done.get(key), ref, days, more))
     return ref, people, courses
 
 
-def person_status(con, agent_ids, as_of=None, required_only=True, soon_days=SOON_DAYS) -> list:
+def person_status(con, agent_ids, as_of=None, required_only=True, soon_days=None) -> list:
     """사람별 과정 현황. 범위 안 사람마다 대상 과정의 기한, 수료일, 상태(done, overdue, soon, open)를 낸다.
 
     required_total 과 required_done 은 필수 과정만 센다. rate 는 필수 과정이 없으면 None 이다.
@@ -481,14 +523,15 @@ def person_status(con, agent_ids, as_of=None, required_only=True, soon_days=SOON
     for p in people:
         req = [x for x in p["courses"] if x["required"]]
         n_done = sum(x["state"] == "done" for x in req)
-        out.append({k: p[k] for k in ("agent_id", "code", "name", "job_type", "hire_date", "termination_date", "left", "org_id", "level_code")} | {
+        out.append({k: p[k] for k in ("agent_id", "code", "name", "job_type", "hire_date", "termination_date", "left", "org_id", "level_code",
+                                      "soon_days")} | {
             "courses": p["courses"], "required_total": len(req), "required_done": n_done,
             "rate": round(n_done / len(req), 4) if req else None,
             "overdue": sum(x["state"] == "overdue" for x in req), "soon": sum(x["state"] == "soon" for x in req)})
     return out
 
 
-def my_education(con, agent_id, agent_ids, as_of=None, soon_days=SOON_DAYS) -> dict:
+def my_education(con, agent_id, agent_ids, as_of=None, soon_days=None) -> dict:
     """내 교육 화면. 필수 과정 현황, 남은 필수 과정, 수료 이력(필수 아닌 과정 포함)."""
     if agent_id not in set(agent_ids):
         raise PermissionError("범위 밖 설계사입니다.")
@@ -506,7 +549,7 @@ def my_education(con, agent_id, agent_ids, as_of=None, soon_days=SOON_DAYS) -> d
     return {"agent_id": agent_id, "left": me["left"], "required": req, "remaining": remaining, "history": history,
             "optional": [x for x in me["courses"] if not x["required"]],
             "required_total": me["required_total"], "required_done": me["required_done"], "rate": me["rate"],
-            "overdue": me["overdue"], "soon": me["soon"]}
+            "overdue": me["overdue"], "soon": me["soon"], "soon_days": me["soon_days"]}
 
 
 # ---------------------------------------------------------------- 조직 진척도
@@ -524,7 +567,7 @@ def _course_totals(courses, people) -> list:
     return out
 
 
-def org_progress(con, agent_ids, as_of=None, soon_days=SOON_DAYS) -> dict:
+def org_progress(con, agent_ids, as_of=None, soon_days=None) -> dict:
     """범위 안 설계사의 필수 과정 진척도. 과정별 대상, 수료, 미수료, 수료율, 기한 지남, 기한 임박.
 
     모수는 기준일에 퇴사하지 않은 대상자다. 퇴사자는 left_excluded 로 따로 세고 수료 기록은 지우지 않는다.
@@ -542,7 +585,7 @@ def org_progress(con, agent_ids, as_of=None, soon_days=SOON_DAYS) -> dict:
                       "left_excluded": sum(1 for p in people if p["left"] and p["courses"])}}
 
 
-def progress_by_org(con, agent_ids, level, as_of=None, soon_days=SOON_DAYS) -> list:
+def progress_by_org(con, agent_ids, level, as_of=None, soon_days=None) -> list:
     """조직별 진척도. 사람을 기준일 소속의 위 조직 가운데 level(hq, branch, center, team) 계층으로 묶는다.
 
     그 계층의 위 조직이 없는 사람(지점 직속인데 팀으로 묶을 때)은 자기 소속 조직으로 묶는다. 범위 밖 사람은 들어오지 않는다.
@@ -570,7 +613,7 @@ def progress_by_org(con, agent_ids, level, as_of=None, soon_days=SOON_DAYS) -> l
     return out
 
 
-def not_done(con, agent_ids, as_of=None, course_id=None, soon_days=SOON_DAYS) -> list:
+def not_done(con, agent_ids, as_of=None, course_id=None, soon_days=None) -> list:
     """미수료자 목록. 필수 과정을 마치지 않은 재직자와 과정의 짝. 기한 지남, 임박, 여유 순이고 같으면 기한이 이른 순이다."""
     _, people, _ = _matrix(con, agent_ids, as_of, True, soon_days, course_id)
     order = {"overdue": 0, "soon": 1, "open": 2}
@@ -580,8 +623,10 @@ def not_done(con, agent_ids, as_of=None, course_id=None, soon_days=SOON_DAYS) ->
     return rows
 
 
-def due_soon(con, agent_ids, as_of=None, soon_days=SOON_DAYS) -> list:
-    """기한 임박 목록. 기한까지 soon_days 일 안에 든 미수료 필수 과정. 홈의 할 일과 알림이 쓴다."""
+def due_soon(con, agent_ids, as_of=None, soon_days=None) -> list:
+    """기한 임박 목록. 기한까지 soon_days 일 안에 든 미수료 필수 과정. 홈의 할 일과 알림이 쓴다.
+
+    soon_days 가 None 이면 사람마다 소속 조직의 notify.edu_due_days 를 쓴다. 줄마다 쓴 값이 soon_days 칸에 있다."""
     return [r for r in not_done(con, agent_ids, as_of, soon_days=soon_days) if r["state"] == "soon"]
 
 

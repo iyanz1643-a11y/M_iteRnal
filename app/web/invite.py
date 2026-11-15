@@ -8,7 +8,7 @@
 - 맞지 않는 토큰, 지난 토큰, 쓴 토큰, 거둔 토큰은 모두 같은 말로 거절한다. 어느 쪽인지 알려 주지 않는다.
 - 표는 schema/schema.sql 의 [invite:begin] 묶음이다. 오래된 DB 에서는 ensure 가 그 묶음을 돌린다.
 
-비밀번호 규칙은 password_error 한 곳에 둔다. 내 정보의 비밀번호 바꾸기는 아직 8자 규칙만 본다. 맞추는 일은 열린 일로 남겼다.
+비밀번호 규칙은 password_error 한 곳에 둔다. 초대 링크의 첫 비밀번호와 내 정보의 비밀번호 바꾸기(app/web/routes/me.py)가 함께 쓴다.
 """
 import hashlib
 import re

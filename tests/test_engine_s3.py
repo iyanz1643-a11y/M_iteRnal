@@ -2,19 +2,24 @@
 
 수수료·점검은 D-11 제안대로(가정) 정산서 기준이다. 정산서가 없고 요율표만 있는 보험사의 금액은 예상이다.
 조직 유지율은 인증과 같은 재직자 기준이라는 제안대로(가정) persist.org_members 한 곳이 목록을 정한다.
+교육은 조직별 설정의 기한 임박 날짜 수와 필수 과정 추가를 소속 조직의 값으로 읽는다. 인증 표는 certification 의 읽기 함수로만 읽는다.
 
 자료는 run_demo 의 샘플을 임시 폴더에 한 번 만들고 시험마다 복사해 쓴다. data/demo.db 는 건드리지 않는다.
 실패 메시지에는 사람 이름과 금액을 넣지 않는다.
 """
+import json
 import pathlib
 import shutil
 import tempfile
+from datetime import date, timedelta
 
 import pytest
 
 from app import db
 from app.engine import certification, orgs, persist, reconcile
+from app.engine import education as edu
 from app.engine import settle as st
+from app.org import settings as org_settings
 
 YM = "202610"
 
@@ -276,3 +281,155 @@ def test_org_persistency_members_respect_scope(con):
     outsider = con.execute("SELECT agent_id FROM agent WHERE agent_id NOT IN (%s) LIMIT 1" % ",".join("?" * len(full)), full).fetchone()[0]
     assert persist.org_members(con, org, YM, agent_ids=part + [outsider]) == part
     assert persist.org_members(con, org, YM, agent_ids=[]) == []
+
+
+# ---------------------------------------------------------------- 교육과 조직별 설정
+EDU_DAY = date(2026, 10, 15)
+
+
+def _put_setting(con, org_id, key, value, from_ym="202001"):
+    """엔진 시험이라 권한 검사 없이 설정 줄을 바로 넣는다. 줄은 더하기만 한다."""
+    org_settings.ensure(con)
+    con.execute("INSERT INTO org_setting(org_id, key, value, from_ym, set_by, set_at, note) VALUES(?,?,?,?,?,?,?)",
+                (org_id, key, json.dumps(value), from_ym, "test", org_settings._stamp(), None))
+    con.commit()
+
+
+def _new_course(con, code, required, deadline_date=None):
+    return edu.save_course(con, by="test", code=code, name=f"시험 과정 {code}", kind="product", required=required, target_role="all",
+                           deadline_rule="fixed" if deadline_date else "none", deadline_date=deadline_date)
+
+
+def _up(con, org_id, level):
+    info = {r["org_id"]: (r["level"], r["parent_id"]) for r in con.execute("SELECT org_id, level, parent_id FROM org_unit")}
+    while org_id is not None and info[org_id][0] != level:
+        org_id = info[org_id][1]
+    return org_id
+
+
+def _people_in(con, ref=EDU_DAY):
+    """재직 중이고 소속이 있는 사람. agent_id 와 기준일 소속."""
+    return [p for p in edu._people(con, everyone(con), ref) if not p["left"] and p["org_id"] is not None]
+
+
+def _two_branches(con):
+    """같은 본부 아래 서로 다른 지점의 두 사람과, 다른 본부의 한 사람. 없으면 None 자리."""
+    people = _people_in(con)
+    by = {}
+    for p in people:
+        by.setdefault((_up(con, p["org_id"], "hq"), _up(con, p["org_id"], "branch")), p)
+    keys = [k for k in by if k[0] is not None and k[1] is not None]
+    for k1 in keys:
+        for k2 in keys:
+            if k1[0] == k2[0] and k1[1] != k2[1]:
+                other = next((by[k] for k in by if k[0] not in (None, k1[0])), None)
+                return k1, by[k1], k2, by[k2], other
+    pytest.skip("샘플에 같은 본부 아래 지점이 둘인 사람이 없다")
+
+
+def _cell(rows, agent_id, course_id):
+    p = next(r for r in rows if r["agent_id"] == agent_id)
+    return next((x for x in p["courses"] if x["course_id"] == course_id), None)
+
+
+def test_soon_days_follow_each_persons_org(con):
+    (hq, br_a), a, (_, br_b), b, _ = _two_branches(con)
+    cid = _new_course(con, "T-SOON", True, (EDU_DAY + timedelta(days=10)).isoformat())
+    ids = [a["agent_id"], b["agent_id"]]
+    _put_setting(con, br_a, edu.SOON_KEY, 14)                       # 지점 A 만 14일. 지점 B 는 기본값 7일
+    rows = edu.person_status(con, ids, EDU_DAY)
+    ca, cb = _cell(rows, a["agent_id"], cid), _cell(rows, b["agent_id"], cid)
+    assert (ca["state"], ca["soon_days"]) == ("soon", 14)
+    assert (cb["state"], cb["soon_days"]) == ("open", edu.SOON_DAYS)
+    assert [r["agent_id"] for r in edu.due_soon(con, ids, EDU_DAY) if r["course_id"] == cid] == [a["agent_id"]]
+    p = edu.org_progress(con, ids, EDU_DAY)
+    assert next(c for c in p["courses"] if c["course_id"] == cid)["soon"] == 1
+    assert edu.my_education(con, a["agent_id"], [a["agent_id"]], EDU_DAY)["soon_days"] == 14
+    # 위 조직의 값은 아래로 내려가고, 넘긴 soon_days 는 모두에게 그 값이다
+    _put_setting(con, hq, edu.SOON_KEY, 12)
+    assert _cell(edu.person_status(con, ids, EDU_DAY), b["agent_id"], cid)["state"] == "soon"
+    fixed = edu.person_status(con, ids, EDU_DAY, soon_days=5)
+    assert {_cell(fixed, i, cid)["state"] for i in ids} == {"open"}
+    # 설정이 시작하기 전 달을 계산하면 그때 값을 쓴다
+    _put_setting(con, br_b, edu.SOON_KEY, 3, from_ym="203001")
+    assert _cell(edu.person_status(con, ids, EDU_DAY), b["agent_id"], cid)["soon_days"] == 12
+
+
+def test_old_db_without_settings_table_keeps_old_behavior(con):
+    (_, br_a), a, _, b, _ = _two_branches(con)
+    cid = _new_course(con, "T-OLD", True, (EDU_DAY + timedelta(days=10)).isoformat())
+    extra = _new_course(con, "T-OLDX", False)
+    ids = [a["agent_id"], b["agent_id"]]
+    before = edu.person_status(con, ids, EDU_DAY, soon_days=edu.SOON_DAYS)
+    _put_setting(con, br_a, edu.SOON_KEY, 14)
+    _put_setting(con, br_a, edu.EXTRA_KEY, [extra])
+    assert _cell(edu.person_status(con, ids, EDU_DAY), a["agent_id"], extra) is not None
+    con.execute("DROP TABLE org_setting")
+    con.execute("DROP TABLE org_setting_lock")
+    con.commit()
+    after = edu.person_status(con, ids, EDU_DAY)
+    assert after == before
+    assert _cell(after, a["agent_id"], cid)["soon_days"] == edu.SOON_DAYS
+    assert all(_cell(after, i, extra) is None for i in ids)
+
+
+def test_extra_required_is_inherited_and_cannot_be_removed(con):
+    (hq, br_a), a, (_, br_b), b, other = _two_branches(con)
+    c_hq, c_br, c_none = _new_course(con, "T-XHQ", False), _new_course(con, "T-XBR", False), _new_course(con, "T-XNO", False)
+    ids = [a["agent_id"], b["agent_id"]] + ([other["agent_id"]] if other else [])
+    _put_setting(con, hq, edu.EXTRA_KEY, [c_hq])
+    _put_setting(con, br_a, edu.EXTRA_KEY, [c_br])
+    _put_setting(con, br_b, edu.EXTRA_KEY, [])                        # 아래에서 비워도 위의 것은 남는다
+    rows = edu.person_status(con, ids, EDU_DAY)
+    got = {i: {x["course_id"] for x in next(r for r in rows if r["agent_id"] == i)["courses"]} & {c_hq, c_br, c_none} for i in ids}
+    assert got[a["agent_id"]] == {c_hq, c_br}
+    assert got[b["agent_id"]] == {c_hq}
+    if other:
+        assert got[other["agent_id"]] == set()
+    x = _cell(rows, a["agent_id"], c_br)
+    assert x["required"] is True and x["required_by"] == "org"
+    base = edu.person_status(con, [b["agent_id"]], EDU_DAY)[0]
+    assert base["required_total"] == sum(1 for y in base["courses"] if y["required"])
+    # 조직 진척도와 미수료자 목록도 같은 판정이다. 과정마다 대상은 그 과정을 더한 조직 아래 사람만이다
+    p = edu.org_progress(con, ids, EDU_DAY)
+    targets = {c["course_id"]: c["targets"] for c in p["courses"]}
+    assert targets[c_hq] == len([i for i in ids if c_hq in got[i]]) and targets[c_br] == 1 and c_none not in targets
+    nd = {(r["agent_id"], r["course_id"]) for r in edu.not_done(con, ids, EDU_DAY)}
+    assert (a["agent_id"], c_br) in nd and (b["agent_id"], c_br) not in nd
+    # 수료하면 진척에 든다
+    edu.record_completion(con, agent_id=a["agent_id"], course_id=c_br, by="test", agent_ids=None, completed_on=EDU_DAY.isoformat())
+    assert _cell(edu.person_status(con, ids, EDU_DAY), a["agent_id"], c_br)["state"] == "done"
+    # 필수가 아닌 과정까지 볼 때 더하지 않은 사람에게는 선택 과정이다
+    allc = edu.person_status(con, [b["agent_id"]], EDU_DAY, required_only=False)
+    y = _cell(allc, b["agent_id"], c_br)
+    assert y is not None and y["required"] is False and y["required_by"] is None
+
+
+# ---------------------------------------------------------------- 인증 읽기 함수
+def test_certification_readers_stay_in_scope(con):
+    holders = [r[0] for r in con.execute("SELECT DISTINCT agent_id FROM agent_certification_award ORDER BY agent_id")]
+    assert holders, "샘플에 인증 확정 기록이 없다"
+    one = holders[0]
+    got = certification.awards(con, [one])
+    assert got and {r["agent_id"] for r in got} == {one}
+    n = con.execute("SELECT COUNT(*) FROM agent_certification_award WHERE agent_id=?", (one,)).fetchone()[0]
+    assert len(got) == n
+    assert {"code", "name", "category", "year", "awarded_at"} <= set(got[0])
+    assert certification.awards(con, []) == [] and certification.awards(con, None) == []
+    y = got[0]["year"]
+    assert all(r["year"] == y for r in certification.awards(con, holders, year=y))
+    assert len(certification.awards(con, everyone(con))) == con.execute("SELECT COUNT(*) FROM agent_certification_award").fetchone()[0]
+
+    run_id = certification.latest_run(con)
+    assert run_id is not None, "샘플에 인증 계산이 없다"
+    scope = everyone(con)[:5]
+    rows = certification.latest_status(con, scope)
+    assert {r["agent_id"] for r in rows} <= set(scope) and {r["run_id"] for r in rows} <= {run_id}
+    n = con.execute(f"SELECT COUNT(*) FROM agent_certification_status WHERE run_id=? AND agent_id IN ({','.join('?' * len(scope))})",
+                    (run_id, *scope)).fetchone()[0]
+    assert len(rows) == n
+    assert all("detail" not in r for r in rows)
+    ach = certification.latest_status(con, everyone(con), achieved_only=True)
+    assert all(r["achieved"] is True for r in ach)
+    assert certification.latest_status(con, []) == []
+    assert certification.latest_status(con, scope, as_of_ym="190001") == []

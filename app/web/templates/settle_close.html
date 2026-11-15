@@ -1,0 +1,64 @@
+{% extends "base.html" %}{% import "_perf.html" as pf %}{% import "_settle.html" as sx %}
+{% block body %}
+<p class="eyebrow">{{ ym|ymko }} · 전체</p>
+<h1 class="display">마감</h1>
+<p class="lede">그 달을 잠그면 차이 처리, 자료 넣기, 대사 다시 돌리기가 막힙니다. 해제는 사유를 남깁니다.</p>
+{{ sx.stamp_line(stamps, true) }}
+{% if error %}<div class="alert bad" role="alert">{{ error }}</div>{% endif %}
+{% if done == 'close' %}<div class="okmsg" role="status">{{ ym|ymko }}을 마감했습니다.</div>{% elif done == 'reopen' %}<div class="okmsg" role="status">{{ ym|ymko }}의 마감을 해제했습니다. 사유를 변경 기록에 남겼습니다.</div>{% endif %}
+
+<div class="grid g3" style="margin-top:24px">
+  <div class="card" data-state="{{ 'closed' if closed else 'open' }}"><div class="k"><span class="dot {{ 'bad' if closed else 'off' }}"></span>{{ ym|ymko }}</div>
+    <div class="mid word">{{ '마감함' if closed else '열려 있음' }}</div>
+    <div class="cap">{% if closed %}{{ row.closed_at|when }} · {{ row.closed_by }}{% elif row %}마감했다가 해제한 달입니다{% else %}아직 마감하지 않았습니다{% endif %}</div></div>
+  <div class="card"><div class="k"><span class="dot {{ 'bad' if check.block else '' }}"></span>마감을 막는 일</div><div class="mid">{{ check.block|length }}<span class="unit">가지</span></div>
+    <div class="cap">{{ '먼저 처리해야 합니다' if check.block else '없습니다' }}</div></div>
+  <div class="card"><div class="k"><span class="dot {{ 'warn' if check.warn else 'off' }}"></span>알릴 일</div><div class="mid">{{ check.warn|length }}<span class="unit">가지</span></div>
+    <div class="cap">대사 차이 {{ check.diff_total }}건 · 미처리 {{ check.counts.open }}건</div></div>
+</div>
+
+{% if check.block %}<div class="alert bad" style="margin-top:16px" data-list="block">마감을 막는 일<ul class="flash-list">{% for b in check.block %}<li>{{ b }}</li>{% endfor %}</ul></div>{% endif %}
+{% if check.warn %}<div class="alert" style="margin-top:16px" data-list="warn">마감 전에 알려 드립니다<ul class="flash-list">{% for w in check.warn %}<li>{{ w }}</li>{% endfor %}</ul></div>{% endif %}
+
+{% if not closed and not ask %}
+<div class="confirm-acts" style="margin-top:20px">{% if check.block %}<span class="cap" style="margin:0">막는 일을 처리하면 마감할 수 있습니다. <a href="/settle/adjust?ym={{ ym }}&status=open">미처리 차이 보기</a></span>
+  {% else %}<a class="pill" href="{{ path }}?ym={{ ym }}&ask=close#confirm">{{ ym|ymko }} 마감하기</a><span class="cap" style="margin:0">마감하기 전에 경고와 확인 단계를 거칩니다</span>{% endif %}</div>
+{% elif closed and not ask %}
+<div class="confirm-acts" style="margin-top:20px"><a class="pill quiet" href="{{ path }}?ym={{ ym }}&ask=reopen#confirm">마감 해제</a><span class="cap" style="margin:0">해제하려면 사유를 적어야 합니다</span></div>
+{% endif %}
+
+{% if ask == 'close' %}
+<div class="card confirm-box" id="confirm" style="margin-top:16px"><div class="k" style="color:var(--red)">월 마감 · 되돌리기 어렵습니다</div>
+  <div class="confirm-title">{{ ym|ymko }}을 마감할까요</div>
+  <ul class="notes"><li>마감하면 이 달의 차이 처리, 정산서와 유지율 넣기, 대사 다시 돌리기가 막힙니다.</li>
+    <li>마감 뒤 수수료와 시상 지급 자료를 이 달 기준으로 씁니다. 해제는 메인 관리자가 사유를 적고 할 수 있지만 그사이 나간 자료는 되돌리지 못합니다.</li>
+    {% if check.counts.asked %}<li>보험사에 문의 중인 차이 {{ check.counts.asked }}건은 문의 중인 채로 남습니다.</li>{% endif %}</ul>
+  <form method="post" action="{{ path }}"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="action" value="close"><input type="hidden" name="ym" value="{{ ym }}">
+    <label class="confirm-check"><input type="checkbox" name="agree" value="yes" required>마감하면 되돌리기 어렵다는 것을 확인했습니다</label>
+    <div class="confirm-acts"><button class="danger" type="submit">확인하고 마감합니다</button><a class="pill quiet" href="{{ path }}?ym={{ ym }}">그만두기</a></div>
+  </form></div>
+{% elif ask == 'reopen' %}
+<div class="card confirm-box" id="confirm" style="margin-top:16px"><div class="k" style="color:var(--red)">마감 해제</div>
+  <div class="confirm-title">{{ ym|ymko }}의 마감을 해제할까요</div>
+  <p class="cap" style="margin:0">해제하면 차이 처리와 자료 넣기가 다시 열립니다. 사유는 변경 기록에 남고 지우지 않습니다.</p>
+  <form class="wide" method="post" action="{{ path }}" style="margin-top:14px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="action" value="reopen"><input type="hidden" name="ym" value="{{ ym }}">
+    <label class="f">해제 사유 · 꼭 적습니다<textarea name="reason" required maxlength="{{ NOTE_MAX }}" placeholder="예: 보험사 정산서 재수신으로 대사를 다시 돌려야 합니다">{{ form.reason or '' }}</textarea></label>
+    <div class="confirm-acts"><button class="danger" type="submit">사유를 남기고 해제합니다</button><a class="pill quiet" href="{{ path }}?ym={{ ym }}">그만두기</a></div>
+  </form></div>
+{% endif %}
+
+<h2 class="sec">달별 상태</h2>
+<div class="card"><div class="chips">{% for m in yms %}<a class="chip {{ 'bad' if states.get(m) == 'closed' else '' }}" href="{{ path }}?ym={{ m }}" data-ym="{{ m }}" style="padding:10px 14px">{{ m|ymko }} · {{ '마감' if states.get(m) == 'closed' else '열림' }}</a>{% endfor %}</div></div>
+
+<h2 class="sec">마감과 해제 기록</h2>
+{% if history %}<div class="card tablecard"><table>
+<tr><th>시각</th><th>달</th><th>행위</th><th class="hide-sm">사유</th><th class="hide-sm hide-md">한 사람</th></tr>
+{% for h in history %}<tr><td class="strong">{{ h.at|when }}<div class="sm-sub">{% if h.reason %}<span>{{ h.reason }}</span>{% endif %}<span>{{ h.display_name or h.actor }} · {{ h.via }}</span></div></td>
+<td>{{ h.target|ymko }}</td><td><span class="chip {{ 'bad' if h.action == 'close' else 'blue' }}">{{ '마감' if h.action == 'close' else '해제' }}</span></td>
+<td class="hide-sm cell-wrap">{{ h.reason or '-' }}</td><td class="hide-sm hide-md">{{ h.display_name or h.actor }} · {{ h.via }}</td></tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">아직 마감 기록이 없습니다</div></div>{% endif %}
+<p class="cap" style="margin-top:20px">마감 조건은 웹의 처리 상태로 봅니다. 기존 운영 도구의 차이 상태는 따로 남고{% if check.legacy_open %}, 그 상태로 미처리인 차이가 {{ check.legacy_open }}건 있습니다{% endif %}. 마감은 상태만 잠그고 금액 묶음은 따로 만들지 않습니다.</p>
+{% endblock %}

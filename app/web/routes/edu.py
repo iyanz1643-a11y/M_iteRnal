@@ -36,7 +36,7 @@ from app.loader import edu_roster as er
 from app.loader.excel_loader import DuplicateFile
 from app.loader.sheet import HeaderMismatch
 from app.org.sync import org_texts
-from app.web import auth
+from app.web import auth, org_values
 from app.web.deps import _in, _q, edu_today, get_con, guard, page
 from app.web.routes import card as card_route
 from app.web.routes.staff import upload_dir
@@ -131,6 +131,11 @@ def _who(con, ym, agent_ids) -> dict:
     return {r["agent_id"]: {**r, "org": texts.get(r["org_id"], "")} for r in rows}
 
 
+def _viewer_days(con, ctx) -> int:
+    """엔진 결과에 임박 줄이 없을 때 문구에 쓰는 날짜 수. 보는 사람 조직의 교육 기한 임박 날짜 수다."""
+    return int(org_values.for_ctx(con, ctx, org_values.EDU_DAYS_KEY))
+
+
 # ---------------------------------------------------------------- 내 교육
 @router.get("/my/education", response_class=HTMLResponse)
 def my_education(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
@@ -144,8 +149,9 @@ def my_education(request: Request, ctx: dict = Depends(guard), con=Depends(get_c
                    if s["status"] == "planned" and s["date_from"] >= today.isoformat()]
             if nxt:
                 upcoming[x["course_id"]] = nxt[0]
+    days = me.get("soon_days") if me else None                   # 엔진이 낸 그 사람 조직의 임박 날짜 수
     return page(request, ctx, "edu_my.html", me=me, upcoming=upcoming, as_of=_day_label(today), SOURCE_KO=edu.SOURCE_KO,
-                soon_days=edu.SOON_DAYS, year=str(today.year))
+                soon_days=org_values.days_text([days], _viewer_days(con, ctx)), year=str(today.year))
 
 
 # ---------------------------------------------------------------- 교육 진척도
@@ -179,9 +185,12 @@ def _team_page(request, ctx, con, *, course=None, level=None, ask=None, error=No
             sess = [s for s in edu.sessions(con, cid, ids) if s["status"] != "cancelled" and s["date_from"] <= today.isoformat()]
             confirm = {**row, "sessions": sess, "today": today.isoformat()}
     courses = [c for c in prog["courses"]]
+    # 임박 날짜 수는 엔진이 사람마다 낸 soon_days 다. 임박을 세는 것은 미수료 줄뿐이라 그 줄들의 값을 모은다
+    pool = rows if course is None else edu.not_done(con, ids, today)
+    soon_days = org_values.days_text([r.get("soon_days") for r in pool], _viewer_days(con, ctx))
     resp = page(request, ctx, "edu_team.html", status_code=status_code, prog=prog, by_org=by_org, level=level, LEVELS=LEVELS,
                 rows=rows[:NOT_DONE_SHOW], n_rows=len(rows), course=course, courses=courses, confirm=confirm, error=error,
-                flash=request.session.pop(FLASH, None), as_of=_day_label(today), soon_days=edu.SOON_DAYS,
+                flash=request.session.pop(FLASH, None), as_of=_day_label(today), soon_days=soon_days,
                 year=str(today.year))
     return resp
 
@@ -584,7 +593,7 @@ def data_courses(request: Request, ctx: dict = Depends(guard), con=Depends(get_c
 # ---------------------------------------------------------------- 홈의 할 일
 def due_soon_count(con, ctx) -> dict | None:
     """홈 할 일의 교육 기한 임박 건수. 설계사는 본인, 관리자는 범위 안. 메인 관리자는 None.
-    {n, href, as_of, days}. 엔진의 due_soon 을 그대로 센다."""
+    {n, href, as_of, days}. 엔진의 due_soon 을 그대로 센다. days 는 줄마다 엔진이 쓴 soon_days 를 모은 글이다."""
     if ctx["role"] not in ("agent", "manager"):
         return None
     try:
@@ -592,9 +601,8 @@ def due_soon_count(con, ctx) -> dict | None:
         ids = [ctx["agent_id"]] if ctx["role"] == "agent" else sorted(ctx["agent_ids"])
         if not ids or (ctx["role"] == "agent" and ctx.get("agent_id") is None):
             return None
-        n = len(edu.due_soon(con, ids, _today()))
+        soon = edu.due_soon(con, ids, _today())
     except Exception:                                     # 홈은 교육 때문에 멈추지 않는다
         con.rollback()
         return None
-    return {"n": n, "href": "/my/education" if ctx["role"] == "agent" else "/team/education#not-done", "as_of": _day_label(_today()),
-            "days": edu.SOON_DAYS}
+    return {"n": len(soon), "href": "/my/education" if ctx["role"] == "agent" else "/team/education#not-done", "as_of": _day_label(_today()), "days": org_values.days_text([r.get("soon_days") for r in soon], _viewer_days(con, ctx))}

@@ -58,6 +58,7 @@ ACTION_KO = {
     "card_preview": "명함 신청본 미리 봄",
     "card_link": "명함 주소 이음",
     "card_unlink": "명함 주소 끊음",
+    "card_remove": "해촉자 명함 내리기",
     "card_code_issue": "명함 수료 코드 발급",
     # 교육. 행위 코드는 app/engine/education.py 의 _audit 호출과 같다
     "edu_course_create": "교육 과정 등록",
@@ -81,10 +82,24 @@ ACTION_KO = {
     # 계약 원장. 행위 코드는 app/web/routes/contracts.py 와 같다
     "contract_name_view": "계약자·피보험자 이름 조회",
     "contract_export": "계약 원장 내려받음",
+    # 데이터 묶음과 마스터. 행위 코드는 app/web/routes/data.py, app/web/routes/masters.py 와 같다
+    "contract_upload": "계약현황 적재",
+    "contract_upload_job": "계약현황 큰 적재 작업 넣음",
+    "contract_reload": "계약현황 재적재",
+    "plan_upload": "시상안 원장 적재",
+    "plan_line_approve": "시상안 줄 승인",
+    "plan_line_reject": "시상안 줄 반려",
+    "quality_reopen": "품질검증 처리 되돌림",
+    "master_create": "마스터 만듦",
+    "master_update": "마스터 고침",
     # 기존 운영 도구
     "quality_resolve": "품질검증 처리",
     "diff_update": "대사 차이 처리",
     "close": "월 마감",
+    # 수수료·점검. 행위 코드는 app/web/routes/settle.py 와 같다
+    "close_reopen": "월 마감 해제",
+    "recon_run": "대사 다시 돌림",
+    "statement_load": "정산서·유지율 적재",
 }
 
 # 누가 칸의 시스템 행위자
@@ -246,7 +261,7 @@ def target_ko(action: str, target, names: _Names) -> str:
             return out + (f" · {FORM_ACTION_KO.get(rest, rest)}" if rest else "")
         if action == "login_fail":
             return f"까닭: {t}"
-        if action == "close":
+        if action in ("close", "close_reopen", "recon_run"):
             return _ym(t)
         if action == "card_grant_denied":
             op, _, n = t.partition(":")
@@ -267,6 +282,8 @@ def target_ko(action: str, target, names: _Names) -> str:
                 return f"시상 공문: {title}" if title else t
             if kind == "diff":
                 return f"대사 차이 {key}번"
+            if kind == "batch":
+                return f"적재 배치 {key}번"
     except Exception:                             # 이름표가 깨져도 기록은 보여야 한다
         return t
     return t

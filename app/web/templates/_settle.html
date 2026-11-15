@@ -1,0 +1,26 @@
+{# 수수료·점검 묶음이 함께 쓰는 조각. 금액은 settle 엔진 것 그대로다. 금액마다 정산서 기준이나 예상을 붙인다 (D-11 가정) #}
+{% macro stamp_line(stamps, with_recon=false) %}
+<p class="cap perf-fresh"><span class="dot {{ '' if stamps.statement else 'warn' }}"></span>{% if stamps.statement %}정산서는 {{ stamps.statement|when }} 적재 기준입니다. 보험사 {{ stamps.statement_n }}곳이 들어왔습니다.{% else %}이 달 정산서가 아직 들어오지 않았습니다.{% endif %}
+{% if stamps.calc %} 자체 계산은 {{ stamps.calc|when }} 계산 기준이고 예상 금액입니다.{% else %} 자체 계산은 아직 없습니다.{% endif %}
+{% if with_recon %}{% if stamps.recon %} 대사는 {{ stamps.recon|when }}에 돌렸습니다.{% else %} 대사는 아직 돌리지 않았습니다.{% endif %}{% endif %}</p>
+{% endmacro %}
+
+{% macro basis(estimated, mixed=false) %}{% if mixed %}<span class="chip warn" data-basis="mixed">정산서 기준과 예상</span>{% elif estimated %}<span class="chip warn" data-basis="estimate">예상</span>{% else %}<span class="chip good" data-basis="statement">정산서 기준</span>{% endif %}{% endmacro %}
+
+{% macro won_cell(v) %}{% if v is none %}-{% else %}{{ v|won }}원{% endif %}{% endmacro %}
+
+{% macro tail(r) %}{{ r.insurer or '보험사 미확인' }} · 끝 {{ r.policy_tail or '----' }}{% endmacro %}
+
+{% macro closed_line(closed, ym) %}{% if closed %}<div class="alert" role="status" style="margin-top:20px"><span class="dot bad"></span>{{ ym|ymko }}은 마감한 달입니다. 차이 처리와 자료 넣기, 대사 다시 돌리기는 막힙니다.</div>{% endif %}{% endmacro %}
+
+{# 문제 종류별 표. 건수와 줄 번호만 싣는다. 금액이 섞인 메시지는 싣지 않는다 #}
+{% macro issues_table(issues) %}
+{% if issues %}<div class="card tablecard" style="margin-top:16px"><table>
+<tr><th>문제</th><th>등급</th><th class="num">건수</th><th class="hide-sm">줄 번호</th></tr>
+{% for g in issues %}<tr data-code="{{ g.code }}"><td class="strong wrap-sm">{{ g.label }}{% if g.detail %}<div class="cap" style="margin:2px 0 0;white-space:normal">{{ g.detail }}</div>{% endif %}
+  <div class="sm-sub">{% if g.rows %}<span>{{ g.rows|join(', ') }}행{% if g.count > g.rows|length %} 외{% endif %}</span>{% endif %}</div></td>
+<td><span class="chip {{ 'bad' if g.severity == 'block' else 'warn' }}">{{ '차단' if g.severity == 'block' else '경고' }}</span></td>
+<td class="num">{{ g.count }}</td><td class="hide-sm">{% if g.rows %}{{ g.rows|join(', ') }}행{% if g.count > g.rows|length %} 외{% endif %}{% else %}-{% endif %}</td></tr>{% endfor %}
+</table></div>
+{% else %}<div class="card" style="margin-top:16px"><div class="k"><span class="dot"></span>문제가 없습니다</div></div>{% endif %}
+{% endmacro %}

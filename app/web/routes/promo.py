@@ -16,16 +16,23 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from app import db
 from app.engine import org_award as oa
 from app.engine import promotion as pm
-from app.web import auth, awards
+from app.web import auth, awards, org_values
 from app.web.deps import _cards, _in, _period_text, _q, get_con, guard, page
 
 router = APIRouter()
-NEAR_RATIO = 0.3            # 구간 근접: 다음 구간까지 남은 양이 다음 구간 문턱의 30% 이내. 달성 현황과 알림함이 함께 쓴다
+# 구간 근접: 다음 구간까지 남은 양이 다음 구간 문턱의 이 비율 이내. 달성 현황과 알림함이 함께 쓴다.
+# 값은 조직별 설정 promo.near_pct 이고 사람마다 소속 조직의 값을 쓴다. 이 상수는 설정이 없을 때의 기본값이다
+NEAR_RATIO = org_values.ratio(org_values.default(org_values.NEAR_KEY))
 
 
-def near(r) -> bool:
-    """progress() 한 사람의 결과가 구간 근접인가. 실적이 있고 다음 구간까지 NEAR_RATIO 안이다."""
-    return bool(r["next"] and r["value"] > 0 and r["next"]["gap"] <= r["next"]["min_value"] * NEAR_RATIO)
+def near(r, ratio: float = NEAR_RATIO) -> bool:
+    """progress() 한 사람의 결과가 구간 근접인가. 실적이 있고 다음 구간까지 ratio 안이다. ratio 는 그 사람 조직의 값을 넘긴다."""
+    return bool(r["next"] and r["value"] > 0 and r["next"]["gap"] <= r["next"]["min_value"] * ratio)
+
+
+def near_pcts(con, ctx, agent_ids) -> dict:
+    """{agent_id: 구간 근접 퍼센트}. 사람마다 자료 기준 달의 소속 조직 값이다."""
+    return org_values.for_agents(con, agent_ids, org_values.NEAR_KEY, ctx["ym"])
 
 
 def _scope_agents(con, ctx):
@@ -56,10 +63,11 @@ def promo_progress(request: Request, p: int | None = None, view: str | None = No
     if sel:
         agents = _scope_agents(con, ctx)
         res = pm.progress(con, sel, [a["agent_id"] for a in agents], ref)
+        pcts = near_pcts(con, ctx, [a["agent_id"] for a in agents])
         rows = [{**a, "r": res[a["agent_id"]]} for a in agents]
         rows.sort(key=lambda x: -x["r"]["value"])
-        near_rows = [x for x in rows if near(x["r"])]
-        summary = {"n": len(rows), "achieved": sum(1 for x in rows if x["r"]["tier"] or (sel["kind"] == "rate" and x["r"]["value"] > 0)),
+        near_rows = [x for x in rows if near(x["r"], org_values.ratio(pcts[x["agent_id"]]))]
+        summary = {"near_text": org_values.pct_text(pcts.values()), "n": len(rows), "achieved": sum(1 for x in rows if x["r"]["tier"] or (sel["kind"] == "rate" and x["r"]["value"] > 0)),
                    "near": len(near_rows), "missed": sum(1 for x in rows if x["r"]["broken"]), "top": max((x["r"]["value"] for x in rows), default=0)}
     return page(request, ctx, "promo_progress_team.html", cards=cards, sel=sel, rows=rows, summary=summary, ref=ref.isoformat(), show_amount=ctx["role"] == "main")
 
@@ -342,7 +350,8 @@ def org_awards(request: Request, edit: int | None = None, new: int | None = None
         d = oa.load(con, edit) if edit else None
         if edit and (not d or not oa.can_manage(ctx, d["org_id"])):
             raise HTTPException(403, "이 부문을 고칠 권한이 없습니다.")
-        form = d or {"division_id": "", "org_id": None, "name": "", "metric": "converted_premium", "sector": None, "category_list": [], "top_n": 3,
+        top_n = org_values.for_ctx(con, ctx, org_values.TOP_N_KEY)        # 조직별 설정의 기본 선발 인원. 만드는 사람의 소속 조직 값이다
+        form = d or {"division_id": "", "org_id": None, "name": "", "metric": "converted_premium", "sector": None, "category_list": [], "top_n": top_n,
                      "min_value": None, "effective_from": ym, "effective_to": None, "note": "", "rewards": {}}
     return page(request, ctx, "org_awards.html", blocks=blocks, form=form, manage=manage, msg=msg, err=err, oa=oa, prize_note=awards.PUBLIC_NOTE,
                 orgs=_manageable_orgs(con, ctx), cats=_q(con, "SELECT code, name FROM product_category ORDER BY sort_order"))

@@ -450,3 +450,14 @@ a.btn.primary{background:var(--blue);color:#fff}a.btn.second{background:var(--ca
 .land-foot{margin-top:28px}
 .login label.f{font-size:14px}
 @media (max-width:760px){.land-cta a.btn{flex:1 1 100%}}
+
+/* ---------- 명함 배지와 메인 관리자 전용 묶음. 명함 연동 3차 */
+.badge-split{display:flex;gap:32px;flex-wrap:wrap}
+.badges .req{align-items:flex-start}
+.badge-how,.badge-note{margin:8px 0 0}
+.badge-notice{margin:10px 0 0;padding:12px 14px;border-radius:14px;background:rgba(255,159,10,.14);color:var(--ink);font-size:15px;line-height:1.5;word-break:keep-all}
+.badge-notice.bad{background:rgba(255,59,48,.10)}
+.badge-more{margin-top:10px}.badge-more summary{cursor:pointer;color:var(--blue);font-size:14px;font-weight:600;min-height:32px}
+li.strong-note{color:var(--ink);font-weight:600}
+#main-tools,#removal,#rm-confirm,#badges{scroll-margin-top:72px}
+@media (max-width:760px){.confirm-acts button.danger{flex:1 1 100%}}

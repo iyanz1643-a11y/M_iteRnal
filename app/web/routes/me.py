@@ -3,6 +3,9 @@
 명함 승인 권한 칸은 관리자에게만 보인다. 메인 관리자는 늘 권한이 있고, 설계사는 대상이 아니다.
 요청은 app/org/card_grant.py 의 request 만 부르고 언제나 로그인한 본인 이름으로 보낸다. 폼에 다른 계정을 넣어도 쓰지 않는다.
 같은 사람의 대기 중인 요청은 하나라서 두 번 눌러도 새로 생기지 않는다.
+
+비밀번호 규칙은 초대 링크와 같은 app/web/invite.py 의 password_error 한 곳을 쓴다. 지금 것과 같은 비밀번호는 따로 막는다.
+계정 화면의 재설정은 무작위 초기 비밀번호를 주고 첫 접속 때 이 화면에서 바꾸게 하므로, 사람이 정하는 비밀번호는 모두 같은 규칙을 거친다.
 """
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -11,6 +14,7 @@ from app.ops import sessions
 from app.org import card_grant as cg
 from app.web import auth
 from app.web.deps import get_con, guard, page
+from app.web.invite import PW_MAX, PW_MIN, password_error
 
 router = APIRouter()
 CARD_FLASH = "me_card_flash"
@@ -34,7 +38,7 @@ def card_state(con, ctx) -> dict | None:
 
 
 def _page(request, ctx, con, message=None, error=None, card_msg=None, card_err=None, status_code=200):
-    return page(request, ctx, "me.html", status_code=status_code, message=message, error=error,
+    return page(request, ctx, "me.html", status_code=status_code, message=message, error=error, pw_min=PW_MIN, pw_max=PW_MAX,
                 card=card_state(con, ctx), card_msg=card_msg, card_err=card_err)
 
 
@@ -72,10 +76,11 @@ def me_post(request: Request, action: str = Form(""), old: str = Form(""), new: 
         error = "세 칸을 모두 넣어 주세요."
     elif not auth.verify_password(old, u["password_hash"]):
         error = "지금 비밀번호가 맞지 않습니다."
-    elif new != new2:
-        error = "새 비밀번호 두 칸이 서로 다릅니다."
-    elif len(new) < 8 or new == old:
-        error = "새 비밀번호는 8자 이상이고 지금 것과 달라야 합니다."
+    elif new == old:
+        error = "새 비밀번호는 지금 것과 달라야 합니다."
+    else:
+        rule = password_error(new, new2, ctx["login_id"])
+        error = f"새 비밀번호: {rule}" if rule else None
     if error:
         return _page(request, ctx, con, error=error)
     con.execute("UPDATE user_account SET password_hash=?, must_change_password=0 WHERE user_id=?", (auth.hash_password(new), ctx["user_id"]))

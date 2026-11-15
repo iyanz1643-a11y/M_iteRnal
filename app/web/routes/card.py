@@ -6,13 +6,22 @@
 - 이름과 소속은 앱 DB 의 설계사 표에서 읽는다. 명함 사이트의 이름과 연락처는 쓰지 않는다.
 - 반려 사유는 앱에 저장하지 않는다. 세션, 변경 기록, 화면 되돌림 어디에도 남기지 않는다.
 - 잇기는 메인 관리자만 한다. CardLinkTable 이 계정을 한 번 더 본다.
-- 수료 코드 발급과 내리기는 이 화면에 없다. 발급은 /edu/completions 의 메인 관리자 묶음이다(app/web/routes/edu.py).
+- 수료 코드 발급은 이 화면에 없다. 발급은 /edu/completions 의 메인 관리자 묶음이다(app/web/routes/edu.py).
+- 메인 관리자 전용 묶음(S3 명함 연동 3차)이 같은 화면 아래에 있다. 관리자에게는 그리지 않고 값도 읽지 않는다.
+  배지 만료 예정은 card_badges.expiring_badges 를 guard 가 준 설계사 목록으로 부른다. 명함 주소가 이어진 사람만이다.
+  해촉자 명함 내리기 후보는 card_remove.removal_candidates, 내리기는 card_remove.remove_card 로만 보낸다.
+  내리기는 확인 단계를 한 번 거친다. 확인 칸 confirm=1 이 없는 POST 는 확인 단계로 돌린다. 관리자가 보내면 403 이다.
+  내리기 사유는 명함 사이트의 공개 상태 조회로 누구나 본다. 앱에는 저장하지 않고 변경 기록에도 길이만 남는다.
+  후보와 목록의 이름과 소속은 앱 DB 의 설계사 표에서 읽는다. 해촉자는 그 달 소속이 없으면 마지막 소속을 쓴다.
 - 관리자는 승인 요청을 메인 관리자가 /org/heads 에서 승인했거나 바로 켠 사람만 이 화면을 연다. 메뉴의 requires: card_approver 를 guard 가 본다.
 - 관리자 본인의 명함은 메인 관리자가 처리한다. 목록에 본인 줄이 섞여 와도 승인과 반려 단추와 확인 단계를 열지 않는다.
 - 신청본 미리보기는 같은 주소에 ?preview=주소 로 연다. guard 를 같은 규칙으로 거치고 card_decide.preview_card 만 부른다.
   다듬은 HTML 을 sandbox 값이 빈 iframe 의 srcdoc 에 넣고, 그림은 data: 로 넣는다. 가져온 신청본은 저장하지 않는다.
 
 내 명함 /sales/card 는 관리자와 설계사 본인이 쓴다. card_site.my_card 로 이어진 주소의 공개 상태를 한 번 읽는다(GET 만).
+- 명함에 올릴 수 있는 배지는 card_badges.judge_badges 를 본인 한 사람으로 부른다. 상태는 유효, 만료 임박, 만료, 예정 넷으로 보인다.
+  예정은 인증 계산에서 달성했지만 확정 전인 배지라 명함에 올릴 수 없다고 적는다. 만료 임박과 만료에는 reissue_notice 의 재발급 안내를 붙인다.
+  유효기간 규칙은 card_badges 의 가정을 따른다.
 - 상태는 공개, 대기, 반려, 없음 넷으로 보인다. 반려 사유는 D-39 가 열려 있어 보여 주지 않고 반려됨만 보인다. CardStatus 에도 사유가 없다.
 - 주소가 이어지지 않았으면 메인 관리자에게 연결을 요청하라고 안내하고 명함 만들기 사이트 링크를 둔다. 주소는 사이트 주소 뒤 /make/ 로 둔 가정이다.
 - 사이트 주소가 설정되지 않았거나 읽지 못하면 연결 표에 남은 마지막 확인 상태와 시각을 보여 준다.
@@ -23,21 +32,25 @@
 """
 from __future__ import annotations
 
+import sqlite3
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from markupsafe import Markup
 
+from app.connect import card_badges as cb
+from app.connect import card_remove as cr
 from app.connect.base import FAILED, NOT_CONFIGURED, OK, Outcome
 from app.connect.card_decide import ALREADY, DENIED, IN_FLIGHT, decide_card, pending_for_scope, preview_card
 from app.connect.card_html import iframe_tag
 from app.connect.card_link import CardLinkTable, LinkError
-from app.connect.card_site import NO_PENDING, NOT_FOUND, REASON_MAX, SLUG_RE, TOO_BIG, WRITE_OFF, CardFile, CardSiteClient, my_card
+from app.connect.card_site import NO_PENDING, NOT_FOUND, REASON_MAX, SLUG_RE, TOO_BIG, UNKNOWN, WRITE_OFF, CardFile, CardSiteClient, my_card
 from app.connect.state import StateStore
 from app.org.sync import org_texts
+from app.web import auth
 from app.web.deps import _in, _q, get_con, guard, page
 
 router = APIRouter()
@@ -166,8 +179,10 @@ def _people(con, ym, agent_ids) -> dict:
     q, ids = _in(agent_ids)
     texts = org_texts(con)
     rows = _q(con, f"""SELECT a.agent_id, a.internal_code code, a.name, a.status='terminated' AS "left",
-                              (SELECT h.org_id FROM agent_org_history h WHERE h.agent_id=a.agent_id AND h.effective_from<=?
-                                AND (h.effective_to IS NULL OR h.effective_to>=?) ORDER BY h.effective_from DESC LIMIT 1) org_id
+                              COALESCE((SELECT h.org_id FROM agent_org_history h WHERE h.agent_id=a.agent_id AND h.effective_from<=?
+                                AND (h.effective_to IS NULL OR h.effective_to>=?) ORDER BY h.effective_from DESC LIMIT 1),
+                                (SELECT h.org_id FROM agent_org_history h WHERE h.agent_id=a.agent_id
+                                  ORDER BY h.effective_from DESC LIMIT 1)) org_id
                        FROM agent a WHERE a.agent_id IN ({q})""", (ym, ym, *ids))
     return {r["agent_id"]: {**r, "org": texts.get(r["org_id"], "")} for r in rows}
 
@@ -203,8 +218,89 @@ def _agent_choices(con, ym) -> list:
     return rows
 
 
+# ---------------------------------------------------------------- 메인 관리자 전용 묶음. 배지 만료 예정과 해촉자 명함 내리기
+TOOLS = "main-tools"              # 묶음의 앵커
+EXPIRING_SHOW = 50                # 만료 예정 목록에 한 번에 싣는 줄 수
+AGENT_STATUS_KO = {"terminated": "해촉", "suspended": "정지", "active": "해촉일 지남"}
+REMOVE_REASON_HELP = "사유는 명함 사이트에서 누구나 볼 수 있습니다. 비워 두면 사이트 기본 문구가 들어갑니다."
+# 내리기 결과 여덟 가지마다 보이는 한 줄. 존댓말
+REMOVE_LINE = {
+    OK: "명함을 내렸습니다. 이 명함 링크는 이제 열리지 않습니다.",
+    DENIED: "내리지 않았습니다. 권한이 없거나 사유를 고쳐야 합니다.",
+    IN_FLIGHT: "같은 명함을 지금 내리고 있습니다. 잠시 뒤 목록을 다시 확인해 주세요.",
+    cr.NOT_LIVE: "공개 중이거나 승인 대기 중인 명함이 없어 보내지 않았습니다. 이미 내려갔을 수 있습니다.",
+    UNKNOWN: "명함 사이트에 보냈지만 내려갔는지 확인하지 못했습니다. 명함 사이트 관리 화면에서 확인한 뒤 필요하면 다시 해 주세요.",
+    WRITE_OFF: "명함 사이트 쓰기가 아직 꺼져 있어 보내지 않았습니다. 지금은 명함 사이트 관리 화면에서 내려 주세요.",
+    NOT_CONFIGURED: "명함 사이트 연동 키가 아직 없어 보내지 않았습니다.",
+    FAILED: "명함 사이트에 보내지 못했습니다. 잠시 뒤 다시 해 주세요.",
+}
+REMOVE_NEUTRAL = {IN_FLIGHT, cr.NOT_LIVE, UNKNOWN, WRITE_OFF, NOT_CONFIGURED}
+
+
+def _today() -> date:
+    """배지 판정의 오늘. 시험은 이 함수를 바꿔 끼운다."""
+    return date.today()
+
+
+def _day_ko(iso: str | None) -> str:
+    """'2026-12-31' 을 '2026년 12월 31일' 로."""
+    if not iso or len(str(iso)) < 10:
+        return ""
+    v = str(iso)
+    return f"{v[:4]}년 {int(v[5:7])}월 {int(v[8:10])}일"
+
+
+def _expiring_rows(con, ctx) -> list:
+    """범위 안 설계사 가운데 명함 주소가 이어진 사람의 만료 예정 배지. 남은 날이 적은 차례다."""
+    notices = cb.expiring_badges(con, ctx["agent_ids"], today=_today())
+    who = _people(con, ctx["ym"], {n.agent_id for n in notices})
+    out = []
+    for n in notices:
+        p = who.get(n.agent_id) or {}
+        b = n.badge
+        out.append({"agent_id": b.agent_id, "code": p.get("code"), "name": p.get("name"), "org": p.get("org"), "left": bool(p.get("left")),
+                    "slug": n.slug, "label": b.label, "until": _day_ko(b.valid_until), "days_left": b.days_left, "notice": n.notice,
+                    "field_ko": FIELD_KO.get(b.card_field, b.card_field)})
+    return out
+
+
+def _candidate_rows(con, ctx, client, refresh: bool) -> tuple:
+    """해촉자 명함 내리기 후보. (상태, 줄, 안내). 이름은 앱 DB 의 설계사 이름이다."""
+    out = cr.removal_candidates(con, actor=ctx["login_id"], is_main=ctx["role"] == "main", client=client,
+                                refresh=refresh and client.configured)
+    cands = out.value or []
+    who = _people(con, ctx["ym"], {c.agent_id for c in cands})
+    rows = []
+    for c in cands:
+        p = who.get(c.agent_id) or {}
+        rows.append({"agent_id": c.agent_id, "slug": c.slug, "code": p.get("code"), "name": p.get("name"), "org": p.get("org"), "left": False,
+                     "agent_status_ko": AGENT_STATUS_KO.get(c.agent_status, c.agent_status), "term": _day_ko(c.termination_date),
+                     "live": c.live, "state_ko": "공개 중" if c.live else (c.last_status_ko if c.last_status else "확인 전"),
+                     "pending": c.last_status == "pending", "checked": _local(c.last_checked_at), "url": c.url})
+    return out.status, rows, out.reason
+
+
+def _tools(con, ctx, client, *, refresh=False, ask_remove=None) -> dict:
+    """메인 관리자 전용 묶음의 값. 하나가 실패해도 다른 하나는 보인다."""
+    tools = {"expiring": [], "expiring_more": 0, "expiring_error": False, "cand_state": OK, "cands": [], "cand_note": "",
+             "rm_confirm": None, "rm_missing": False, "days": cb.EXPIRY_NOTICE_DAYS, "reason_help": REMOVE_REASON_HELP,
+             "configured": client.configured, "at_label": _hm(datetime.now(KST)), "as_of": _day_ko(_today().isoformat()), "refreshed": refresh}
+    try:
+        rows = _expiring_rows(con, ctx)
+        tools["expiring"], tools["expiring_more"] = rows[:EXPIRING_SHOW], max(len(rows) - EXPIRING_SHOW, 0)
+    except sqlite3.Error:
+        con.rollback()
+        tools["expiring_error"] = True
+    tools["cand_state"], tools["cands"], tools["cand_note"] = _candidate_rows(con, ctx, client, refresh)
+    if ask_remove:
+        row = next((r for r in tools["cands"] if r["slug"] == ask_remove), None)
+        tools["rm_confirm"] = row
+        tools["rm_missing"] = row is None
+    return tools
+
+
 # ---------------------------------------------------------------- 화면
-def _page(request, ctx, con, *, flash=None, ask=None, status_code=200):
+def _page(request, ctx, con, *, flash=None, ask=None, status_code=200, refresh=False, ask_remove=None):
     is_main = ctx["role"] == "main"
     client = card_client(con)
     links = CardLinkTable(con)
@@ -231,7 +327,10 @@ def _page(request, ctx, con, *, flash=None, ask=None, status_code=200):
         else:
             confirm = {"do": do, **row}
     state = "ok" if res.status == OK else ("not_configured" if res.status == NOT_CONFIGURED else "failed")
-    resp = page(request, ctx, "card_approve.html", status_code=status_code, linked=linked, unlinked=unlinked, is_main=is_main,
+    tools = _tools(con, ctx, client, refresh=refresh, ask_remove=ask_remove) if is_main else None
+    if tools and tools["rm_missing"]:
+        flash = flash or {"kind": "warn", "text": "내리기 후보에 없는 명함입니다. 이미 내려갔거나 재직 중인 설계사의 명함입니다."}
+    resp = page(request, ctx, "card_approve.html", status_code=status_code, linked=linked, unlinked=unlinked, is_main=is_main, tools=tools,
                 state=state, at_label=_hm(snap.at) if snap else None, write_on=client.write_enabled, flash=flash, confirm=confirm,
                 choices=_agent_choices(con, ctx["ym"]) if is_main and unlinked else [], reason_max=REASON_MAX)
     resp.headers["Cache-Control"] = "no-store"
@@ -273,13 +372,44 @@ def _preview_page(request, ctx, con, slug: str):
 
 
 @router.get("/sales/card-approve", response_class=HTMLResponse)
-def card_approve(request: Request, do: str = "", slug: str = "", preview: str | None = None, ctx: dict = Depends(guard),
+def card_approve(request: Request, do: str = "", slug: str = "", preview: str | None = None, refresh: str = "", ctx: dict = Depends(guard),
                  con=Depends(get_con)):
     if preview is not None:
         return _preview_page(request, ctx, con, preview.strip().lower())
     flash = request.session.pop(FLASH, None)
-    ask = (do, slug.strip().lower()) if do in ("approve", "reject") and SLUG_RE.match(slug.strip().lower()) else None
-    return _page(request, ctx, con, flash=flash, ask=ask)
+    slug = slug.strip().lower()
+    ask = (do, slug) if do in ("approve", "reject") and SLUG_RE.match(slug) else None
+    is_main = ctx["role"] == "main"
+    ask_remove = slug if is_main and do == "remove" and SLUG_RE.match(slug) else None   # 관리자에게는 내리기 확인 단계를 열지 않는다
+    return _page(request, ctx, con, flash=flash, ask=ask, refresh=is_main and refresh == "1", ask_remove=ask_remove)
+
+
+def _remove_flash(out: Outcome) -> dict:
+    """내리기 결과 여덟 가지의 안내. 사유 원문은 담지 않는다. 거부와 실패와 확인 필요만 엔진의 설명을 붙인다."""
+    line = REMOVE_LINE.get(out.status, REMOVE_LINE[FAILED])
+    if out.status == OK and getattr(out.value, "confirmed_by_status", False):
+        line += " 응답은 받지 못했지만 공개 상태에서 내려간 것을 확인했습니다."
+    detail = out.reason if out.status in (DENIED, FAILED, UNKNOWN) and out.reason else ""
+    kind = "ok" if out.status == OK else ("warn" if out.status in REMOVE_NEUTRAL else "bad")
+    return {"kind": kind, "text": line, "detail": detail, "state": out.status}
+
+
+def _remove(request, ctx, con, slug: str, reason: str, confirm: str):
+    """해촉자 명함 내리기. 메인 관리자만, 확인 단계를 거친 뒤에만 remove_card 로 보낸다."""
+    if ctx["role"] != "main":
+        auth.log(con, ctx["login_id"], "access_denied", f"{PATH} remove")
+        raise HTTPException(403, "명함 내리기는 메인 관리자만 합니다.")
+    if confirm != "1":                                            # 확인 단계를 거치지 않은 요청은 확인 단계로 돌린다
+        return RedirectResponse(f"{PATH}?do=remove&slug={slug}#rm-confirm", status_code=303)
+    if len(reason.strip()) > REASON_MAX:
+        return _page(request, ctx, con, flash={"kind": "bad", "text": f"사유는 {REASON_MAX}자까지 적을 수 있습니다. 줄여서 다시 적어 주세요."},
+                     ask_remove=slug, status_code=400)
+    out = cr.remove_card(con, card_client(con), slug=slug, reason=reason, actor=ctx["login_id"], is_main=True)
+    flash = _remove_flash(out)
+    if out.status == DENIED:                                      # 사유를 고쳐 다시 하도록 확인 단계를 다시 연다. 사유는 되돌려 싣지 않는다
+        return _page(request, ctx, con, flash=flash, ask_remove=slug, status_code=400)
+    request.session[FLASH] = flash
+    return RedirectResponse(f"{PATH}#{TOOLS}", status_code=303)
 
 
 def _flash_for(out: Outcome, action: str) -> dict:
@@ -298,6 +428,9 @@ def card_approve_action(request: Request, action: str = Form(...), slug: str = F
     slug = slug.strip().lower()
     if not SLUG_RE.match(slug):
         raise HTTPException(400, "명함 주소가 바르지 않습니다.")
+
+    if action == "remove":
+        return _remove(request, ctx, con, slug, reason, confirm)
 
     if action == "link":
         if not is_main:
@@ -332,6 +465,49 @@ def card_approve_action(request: Request, action: str = Form(...), slug: str = F
 # ---------------------------------------------------------------- 내 명함
 MY_STATE_KO = {"live": "공개", "pending": "대기", "rejected": "반려됨", "none": "없음"}
 MAKE_PATH = "/make/"              # 명함 만들기 화면. 명함 사이트 public/make/index.html 을 사이트 주소 뒤에 둔 가정이다
+
+
+# 배지 상태의 화면 이름. 엔진의 STATUS_KO 와 뜻은 같고 설계사에게 보이는 말만 짧게 했다
+BADGE_KO = {cb.VALID: "유효", cb.EXPIRING: "만료 임박", cb.EXPIRED: "만료", cb.EXPECTED: "예정"}
+BADGE_TONE = {cb.VALID: "good", cb.EXPIRING: "warn", cb.EXPIRED: "bad", cb.EXPECTED: ""}
+BADGE_ORDER = {cb.EXPIRING: 0, cb.VALID: 1, cb.EXPECTED: 2, cb.EXPIRED: 3}
+FIELD_KO = {cb.FIELD_CERTS: "자격·수상 배지", cb.FIELD_ETC: "그 밖의 자격·수상 칸"}
+EXPECTED_NOTE = "인증 계산에서 달성했지만 아직 확정 전이라 명함에 올릴 수 없습니다. 확정되면 올릴 수 있습니다."
+
+
+def _how(b) -> str:
+    """명함 만들기에서 이 배지를 넣는 법."""
+    if b.card_field == cb.FIELD_CERTS and b.badge in cb.ANNUAL and b.year:
+        return f"명함 만들기의 자격·수상에서 {b.badge} 를 고르고 연도에 {b.year} 를 넣습니다."
+    if b.card_field == cb.FIELD_CERTS:
+        return f"명함 만들기의 자격·수상에서 {b.badge} 를 고릅니다."
+    return f"명함 만들기의 그 밖의 자격·수상 칸에 {b.label} 로 적습니다."
+
+
+def my_badges(con, agent_id, today: date | None = None) -> dict | None:
+    """본인 한 사람의 배지. 설계사 번호가 없으면 None. 판정은 card_badges 가 하고 이 함수는 화면 꼴로 묶을 뿐이다."""
+    if agent_id is None:
+        return None
+    today = today or _today()
+    try:
+        badges = cb.judge_badges(con, [agent_id], today=today)
+        notes = {n.badge.key: n.notice for n in cb.expiring_badges(con, [agent_id], today=today, include_expired=True, linked_only=False)}
+    except sqlite3.Error:
+        con.rollback()
+        return {"rows": [], "error": True, "as_of": _day_ko(today.isoformat()), "counts": {}}
+    rows = []
+    for b in badges:
+        if b.agent_id != agent_id:                                # 본인 것만
+            continue
+        rows.append({"key": b.key, "label": b.label, "status": b.status, "status_ko": BADGE_KO.get(b.status, b.status),
+                     "tone": BADGE_TONE.get(b.status, ""), "eligible": b.eligible, "field_ko": FIELD_KO.get(b.card_field, b.card_field),
+                     "until": _day_ko(b.valid_until), "days_left": b.days_left, "basis_ko": cb.BASIS_KO.get(b.basis, b.basis),
+                     "how": _how(b) if b.eligible else "", "notice": notes.get(b.key) if b.status in (cb.EXPIRING, cb.EXPIRED) else None,
+                     "expected_note": EXPECTED_NOTE if b.status == cb.EXPECTED else None})
+    rows.sort(key=lambda r: (BADGE_ORDER.get(r["status"], 9), r["days_left"] if r["days_left"] is not None else 0, r["label"]))
+    counts = {k: sum(1 for r in rows if r["status"] == k) for k in BADGE_KO}
+    return {"rows": rows, "error": False, "as_of": _day_ko(today.isoformat()), "counts": counts,
+            "eligible": sum(1 for r in rows if r["eligible"]), "notices": [r for r in rows if r["notice"]]}
 
 
 def _my_state(status: str, live: bool) -> str:
@@ -378,6 +554,6 @@ def my_card_page(request: Request, ctx: dict = Depends(guard), con=Depends(get_c
             view["url"] = client.card_url(slug) if row.get("last_live") else None
         view["checked"] = _local(row.get("last_checked_at"))
     view["state_ko"] = MY_STATE_KO.get(view["state"]) if view["state"] else None
-    resp = page(request, ctx, "card_my.html", v=view)
+    resp = page(request, ctx, "card_my.html", v=view, badges=my_badges(con, agent_id))
     resp.headers["Cache-Control"] = "no-store"
     return resp

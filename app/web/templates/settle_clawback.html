@@ -1,0 +1,33 @@
+{% extends "base.html" %}{% import "_perf.html" as pf %}{% import "_settle.html" as sx %}
+{% block body %}
+<p class="eyebrow">{{ ym|ymko }} · {% if everyone %}전체{% elif who %}{{ who.name or '이름 미확인' }} {{ who.code or '' }}{% else %}본인{% endif %}</p>
+<h1 class="display">환수</h1>
+<p class="lede">그 달 환수 대상 계약과 금액입니다. 환수는 음수로 적습니다.</p>
+{{ sx.stamp_line(stamps) }}
+{% if not has_agent %}
+<div class="card" style="margin-top:24px"><div class="k">설계사 정보가 이어지지 않은 계정입니다</div><div class="cap">메인 관리자에게 계정과 사번 연결을 요청하세요.</div></div>
+{% else %}
+<div class="grid g2" style="margin-top:24px">
+  <div class="card" data-hero="clawback"><div class="k"><span class="dot {{ 'bad' if c.lines else 'off' }}"></span>환수 합계 {% if c.lines %}{{ sx.basis(c.estimated) }}{% endif %}</div>
+    <div class="big">{{ c.total|won }}<span class="unit">원</span></div>
+    <div class="cap">{% if c.lines %}{{ c.lines|length }}줄{% if everyone %} · {{ people }}명{% endif %}{% else %}이 달 환수 줄이 없습니다{% endif %}</div></div>
+  <div class="card"><div class="k">기준</div>
+    <div class="cap" style="font-size:16px;color:var(--ink)">정산서가 들어온 보험사는 정산서의 환수 줄이고, 정산서가 없는 보험사는 요율표로 계산한 예상 환수입니다.</div></div>
+</div>
+{% if who %}<p class="cap"><a href="{{ path }}?ym={{ ym }}">전체 설계사로 돌아가기</a></p>{% endif %}
+
+<h2 class="sec">환수 대상 {{ c.lines|length }}줄</h2>
+{% if rows %}<div class="card tablecard"><table>
+<tr><th>계약</th>{% if everyone %}<th class="hide-sm">설계사</th>{% endif %}<th class="num hide-sm">회차</th><th class="num">금액</th><th class="hide-sm">기준</th></tr>
+{% for r in rows %}{% set k = chip(r) %}{% set p = names.get(r.agent_id) %}<tr><td class="strong wrap-sm">{{ sx.tail(r) }}
+  <div class="sm-sub"><span>{% if everyone %}{{ p.name if p else '담당 미확인' }} · {% endif %}{% if r.installment_no %}{{ r.installment_no }}회차{% else %}회차 없음{% endif %}</span><span><span class="chip {{ k[0] }}">{{ k[1] }}</span></span></div></td>
+{% if everyone %}<td class="hide-sm">{% if p %}<a href="{{ path }}?ym={{ ym }}&agent={{ r.agent_id }}">{{ p.name or '이름 미확인' }}</a> <span class="cap">{{ p.code or '' }}</span>{% else %}담당 미확인{% endif %}</td>{% endif %}
+<td class="num hide-sm">{{ r.installment_no or '-' }}</td><td class="num">{{ r.amount|won }}</td><td class="hide-sm"><span class="chip {{ k[0] }}">{{ k[1] }}</span></td></tr>{% endfor %}
+</table></div>
+{% if more %}<p class="cap">줄이 많아 앞 {{ rows|length }}줄만 보입니다. {{ more }}줄이 더 있습니다.</p>{% endif %}
+{% else %}<div class="card"><div class="k"><span class="dot"></span>이 달 환수 대상이 없습니다</div></div>{% endif %}
+{% endif %}
+
+{% if yms|length > 1 %}<h2 class="sec">다른 달 보기</h2>{{ pf.pick_form(path, f, yms, ym) }}{% endif %}
+<p class="cap" style="margin-top:20px">{{ c.note }}{% if ctx.scope == 'self' %} 환수 금액은 본인과 메인 관리자만 봅니다.{% endif %}</p>
+{% endblock %}

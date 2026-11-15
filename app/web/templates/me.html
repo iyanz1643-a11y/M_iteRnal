@@ -36,8 +36,9 @@
 {% if message %}<div class="okmsg">{{ message }}</div>{% endif %}{% if error %}<div class="alert">{{ error }}</div>{% endif %}
 <form class="stack" method="post" action="/me"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="action" value="password">
   <input type="password" name="old" placeholder="지금 비밀번호" autocomplete="current-password" required>
-  <input type="password" name="new" placeholder="새 비밀번호 (8자 이상)" autocomplete="new-password" required>
+  <input type="password" name="new" placeholder="새 비밀번호" autocomplete="new-password" minlength="{{ pw_min }}" maxlength="{{ pw_max }}" aria-describedby="pw-rule" required>
   <input type="password" name="new2" placeholder="새 비밀번호 한 번 더" autocomplete="new-password" required>
+  <p class="cap" id="pw-rule" style="margin:0">{{ pw_min }}자 이상 {{ pw_max }}자 이하로, 영문과 숫자를 함께 넣어 주세요. 사번이 들어가거나 같은 글자를 되풀이한 비밀번호, 지금 것과 같은 비밀번호는 쓸 수 없습니다.</p>
   <button class="primary" type="submit">바꾸기</button>
 </form>
 <p style="margin-top:40px"><a href="/logout">나가기</a></p>

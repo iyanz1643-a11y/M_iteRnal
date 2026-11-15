@@ -21,6 +21,7 @@ from fastapi.responses import HTMLResponse
 from app.engine import education as edu
 from app.engine import performance
 from app.org.sync import org_texts
+from app.web import org_values
 from app.web.deps import _in, _last_load, _perf, _q, edu_today, get_con, guard, page
 
 router = APIRouter()
@@ -83,7 +84,7 @@ def onboarding_rows(con, ctx, today: date) -> list:
         row = {"agent_id": aid, "code": p["code"], "name": p["name"], "hire_date": p["hire_date"][:10],
                "days": (today - date.fromisoformat(p["hire_date"][:10])).days, "org": texts.get(st["org_id"], ""),
                "edu_total": st["required_total"], "edu_done": st["required_done"], "edu_ok": edu_ok, "edu_todo": todo,
-               "edu_overdue": st["overdue"], "edu_soon": st["soon"],
+               "edu_overdue": st["overdue"], "edu_soon": st["soon"], "edu_soon_days": st.get("soon_days"),
                "first_contract": made[0] if made else None, "new_count": sum(r["new_count"] for r in m.values()),
                "applied": sum(r["applied_count"] for r in m.values()),
                "first_active": active[0] if active else None, "no_data": hire_ym > end}
@@ -98,4 +99,5 @@ def team_onboarding(request: Request, ctx: dict = Depends(guard), con=Depends(ge
     today = _today()
     rows = onboarding_rows(con, ctx, today)
     return page(request, ctx, "team_onboarding.html", rows=rows, today=today.isoformat(), days=ONBOARD_DAYS,
-                last_load=_last_load(con), soon_days=edu.SOON_DAYS)
+                last_load=_last_load(con), soon_days=org_values.days_text([r["edu_soon_days"] for r in rows],
+                                                                          org_values.for_ctx(con, ctx, org_values.EDU_DAYS_KEY)))

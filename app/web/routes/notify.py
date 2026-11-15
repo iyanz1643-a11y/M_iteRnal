@@ -6,7 +6,7 @@
 | 종류 | 받는 사람 | 원본 | 범위 |
 | --- | --- | --- | --- |
 | 새 프로모션 | 설계사, 관리자 | 진행 중 프로모션 | 게시된 설계사 몫. 끝나지 않은 것 |
-| 마감 임박 | 전원 | 진행 중 프로모션 | 기준일에 진행 중이고 마감까지 3일 이내 |
+| 마감 임박 | 전원 | 진행 중 프로모션 | 기준일에 진행 중이고 마감까지 그 사람 조직의 마감 임박 알림 날짜 수 이내. 기본 3일 |
 | 구간 근접 | 설계사, 관리자 | 달성 현황 | 본인. 관리자는 범위 안 재직 팀원의 사람 수만. 금액은 넣지 않는다 |
 | 교육 기한 | 설계사, 관리자 | education.due_soon | 본인. 관리자는 범위 안 팀원의 과정별 사람 수 |
 | 명함 승인 대기 | card_approver 인 메인 관리자와 관리자 | card.pending_count | 명함 승인 화면과 같은 범위와 본인 빼기 |
@@ -18,6 +18,8 @@
 - 교육 기한은 팀 교육 진척도와 같은 deps.edu_today(오늘)로 따진다. 교육은 실적 자료와 상관없는 날짜 일이다.
 - 알림 글에는 고객 이름, 연락처, 시상 금액을 넣지 않는다. 구간 근접에는 본인의 남은 실적만 적는다.
 - 조직별 설정(app/org/settings.py)에서 그 사람의 조직이 꺼 둔 종류는 내지 않는다. 명함 승인 대기와 권한 요청은 끌 수 없다.
+- 마감 임박 날짜 수(notify.promo_due_days)와 구간 근접 비율(promo.near_pct)도 조직별 설정이다. 본인 몫은 보는 사람 조직의 값,
+  관리자의 팀원 수는 팀원마다 소속 조직의 값으로 센다. app/web/org_values.py 가 고른다.
 - 13회차 도래의 이번 주는 오늘이 든 주이고 일정 화면과 같이 일요일에 시작한다. 메인 관리자에게는 띄우지 않는다.
 - 종 아이콘의 숫자는 base.html 이 notif_badge(ctx) 로 부른다. 만든 알림 목록을 사람마다 BADGE_TTL 초 동안 이 프로세스 안에 담아 두고,
   읽음 표시는 부를 때마다 표에서 새로 읽는다. 종 아이콘은 쓰기가 생기지 않게 명함 권한 요청을 표에서 바로 센다(light).
@@ -41,15 +43,15 @@ from app.engine import promotion as pm
 from app.org import card_grant as cg
 from app.org import settings as org_settings
 from app.web import board as bd
-from app.web import menu
+from app.web import menu, org_values
 from app.web.deps import _cards, edu_today, get_con, guard, page, templates
 from app.web.routes import card
-from app.web.routes.promo import NEAR_RATIO, _scope_agents, near
+from app.web.routes.promo import _scope_agents, near, near_pcts
 
 router = APIRouter()
 PATH = "/notifications"
 BEGIN, END = "-- [notifications:begin]", "-- [notifications:end]"
-DUE_DAYS = 3                 # docs/09 6장: 프로모션 마감 3일 전과 하루 전
+DUE_DAYS = org_values.default(org_values.DUE_DAYS_KEY)   # docs/09 6장: 프로모션 마감 3일 전. 조직별 설정이 없을 때의 기본값이다
 BADGE_TTL = 60               # 종 아이콘의 숫자에 쓰는 목록을 담아 두는 초
 KEY_RE = re.compile(r"^[a-z][a-z0-9_]*:[0-9A-Za-z:_\-]{1,80}$")
 KIND_KO = {"promo_new": "새 프로모션", "promo_due": "마감 임박", "tier_near": "구간 근접", "edu_due": "교육 기한",
@@ -95,8 +97,15 @@ def _note(kind, key, title, body, at, link=None):
     return {"key": f"{kind}:{key}", "kind": kind, "kind_ko": KIND_KO[kind], "tone": TONE[kind], "title": title, "body": body, "at": at, "link": link}
 
 
+def due_days(con, ctx) -> int:
+    """그 사람 조직의 마감 임박 알림 날짜 수."""
+    return int(org_values.for_ctx(con, ctx, org_values.DUE_DAYS_KEY))
+
+
 def _promo_notes(con, ctx, ref: date) -> list:
     out = []
+    days = due_days(con, ctx)
+    my_pct = org_values.for_ctx(con, ctx, org_values.NEAR_KEY)
     cards, _ = _cards(con, ctx)
     cards = [c for c in cards if c["recipient_level"] == "fc"]
     role = ctx["role"]
@@ -109,7 +118,7 @@ def _promo_notes(con, ctx, ref: date) -> list:
                              f"{c['kind_ko']} · {c['period_text']}" + (f" · {c['timing_ko']} 지급" if c["timing_ko"] else ""), at,
                              _link(ctx, "/promo/list")))
         left = (date.fromisoformat(c["date_to"]) - ref).days
-        if c["phase"] == "active" and 0 <= left <= DUE_DAYS:
+        if c["phase"] == "active" and 0 <= left <= days:
             out.append(_note("promo_due", f"{c['promo_id']}:{c['date_to']}", f"{c['name']} {'오늘 마감' if left == 0 else f'마감 {left}일 전'}",
                              f"{c['insurer_name'] or '전 보험사'} · {c['date_to'][5:7].lstrip('0')}월 {c['date_to'][8:].lstrip('0')}일까지입니다.",
                              ref.isoformat(), _link(ctx, "/promo/list")))
@@ -118,23 +127,24 @@ def _promo_notes(con, ctx, ref: date) -> list:
         return out
     tiered = [c for c in cards if c["phase"] == "active" and c["kind"] != "rate" and c["tiers"]]
     team = [a["agent_id"] for a in _scope_agents(con, ctx)] if role == "manager" else []
+    pcts = near_pcts(con, ctx, [a for a in team if a != ctx["agent_id"]]) if tiered and team else {}
     for c in tiered:
         ids = sorted(set(team) | ({ctx["agent_id"]} if ctx["agent_id"] else set()))
         if not ids:
             continue
         res = pm.progress(con, c, ids, ref)
         me = res.get(ctx["agent_id"]) if ctx["agent_id"] else None
-        if me and near(me):
+        if me and near(me, org_values.ratio(my_pct)):
             nx = me["next"]
             gap = f"{nx['gap']:g}건" if c["metric"] == "policy_count" else f"{int(nx['gap']):,}원"
             out.append(_note("tier_near", f"{c['promo_id']}:{nx['tier_no']}", f"{c['name']} {nx['tier_no']}구간까지 {gap} 남았습니다",
                              f"{c['metric_ko']} 기준 예상입니다. 마감은 {c['due']}입니다.", ref.isoformat(),
                              _link(ctx, "/promo/progress", f"?p={c['promo_id']}&view=me" if role == "manager" else "")))
         if role == "manager":
-            n = sum(1 for a in team if a != ctx["agent_id"] and near(res[a]))
+            n = sum(1 for a in team if a != ctx["agent_id"] and near(res[a], org_values.ratio(pcts[a])))
             if n:
                 out.append(_note("tier_near", f"team:{c['promo_id']}:{n}", f"{c['name']} 팀원 {n}명이 다음 구간에 가깝습니다",
-                                 f"다음 구간까지 {round(NEAR_RATIO * 100)}% 이내입니다. 달성 현황에서 사람별로 봅니다.", ref.isoformat(),
+                                 f"다음 구간까지 {org_values.pct_text(pcts.values())} 이내입니다. 달성 현황에서 사람별로 봅니다.", ref.isoformat(),
                                  _link(ctx, "/promo/progress", f"?p={c['promo_id']}")))
     return out
 
@@ -315,7 +325,8 @@ def notifications(request: Request, show: str = "all", ctx: dict = Depends(guard
     shown = unread if show == "unread" else items
     shown = sorted(shown, key=lambda n: n["read"])              # 안 읽은 것을 위로. 그 안에서는 최근 것부터
     resp = page(request, ctx, "notifications.html", items=shown, total=len(items), unread=len(unread), show=show,
-                ref=pm.ref_date(ctx["ym"]).isoformat(), edu_ref=edu_today().isoformat(), msg=request.session.pop("notif_flash", None))
+                ref=pm.ref_date(ctx["ym"]).isoformat(), edu_ref=edu_today().isoformat(), msg=request.session.pop("notif_flash", None),
+                due_days=due_days(con, ctx))
     resp.headers["Cache-Control"] = "no-store"
     return resp
 

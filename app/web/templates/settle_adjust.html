@@ -1,0 +1,73 @@
+{% extends "base.html" %}{% import "_perf.html" as pf %}{% import "_settle.html" as sx %}
+{% block body %}
+<p class="eyebrow">{{ ym|ymko }} · 전체</p>
+<h1 class="display">조정</h1>
+<p class="lede">대사 차이마다 확인함, 보험사 문의, 해결 가운데 하나와 메모를 남깁니다. 처리 기록은 지우지 않고 쌓입니다.</p>
+{{ sx.stamp_line(stamps, true) }}
+{% if error %}<div class="alert bad" role="alert">{{ error }}</div>{% endif %}
+{% if done %}<div class="okmsg" role="status">처리 기록을 남겼습니다.</div>{% endif %}
+{{ sx.closed_line(closed, ym) }}
+
+{% if sel %}
+<div class="card" id="diff" style="margin-top:24px" data-diff="{{ sel.diff_id }}">
+  <div class="block-head"><div><div class="k">차이 {{ sel.diff_id }}번 · {{ sel.diff_type_ko }}</div>
+    <div class="confirm-title" style="margin:6px 0 4px">{{ sx.tail(sel) }}</div>
+    <div class="cap" style="margin:0">{{ sel.commission_type_ko or '-' }}{% if sel.installment_no %} {{ sel.installment_no }}회차{% endif %}</div></div>
+    <span class="chip {{ STATUS_CHIP[sel.status] }}" data-status="{{ sel.status }}">{{ sel.status_ko }}</span></div>
+  <div class="grid g3 keep" style="margin-top:16px">
+    <div><div class="cap" style="margin:0">정산서 기준</div><div class="strong">{{ sx.won_cell(sel.statement_amount) }}</div></div>
+    <div><div class="cap" style="margin:0">자체 계산 · 예상</div><div class="strong">{{ sx.won_cell(sel.internal_amount) }}</div></div>
+    <div><div class="cap" style="margin:0">차이</div><div class="strong">{{ sel.diff_amount|won }}원</div></div>
+  </div>
+  {% if sel.changed %}<div class="alert" style="margin:16px 0 0">처리한 뒤 대사를 다시 돌려 차이 금액이 바뀌었습니다. 상태는 그대로 두었습니다. 다시 확인해 주세요.</div>{% endif %}
+  <p class="cap">기존 운영 도구의 상태는 {{ LEGACY_KO.get(sel.legacy_status, sel.legacy_status) }}입니다. 웹의 처리 상태와 따로 남습니다.</p>
+  {% if closed %}<p class="cap">마감한 달이라 처리할 수 없습니다.</p>
+  {% else %}
+  <form class="wide" method="post" action="{{ path }}" style="margin-top:12px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="ym" value="{{ ym }}"><input type="hidden" name="diff_id" value="{{ sel.diff_id }}">
+    <div class="checks" role="radiogroup" aria-label="처리 상태">{% for a in ACTIONS %}
+      <label><input type="radio" name="status" value="{{ a }}" required {{ 'checked' if form.status == a }}>{{ STATUS_KO[a] }}</label>{% endfor %}</div>
+    <label class="f">처리 메모 · 꼭 적습니다<textarea name="note" required maxlength="{{ NOTE_MAX }}" placeholder="근거가 된 공문이나 메일, 보험사 답변을 적어 주세요">{{ form.note or '' }}</textarea></label>
+    <div><button class="primary" type="submit">처리 기록 남기기</button></div>
+  </form>
+  {% endif %}
+</div>
+
+<h2 class="sec">처리 이력 {{ history|length }}건</h2>
+{% if history %}<div class="card tablecard"><table>
+<tr><th>시각</th><th>상태</th><th class="hide-sm">메모</th><th class="hide-sm hide-md">처리한 사람</th><th class="num hide-sm">그때 차이</th></tr>
+{% for h in history %}<tr><td class="strong">{{ h.acted_at|when }}<div class="sm-sub"><span>{{ h.note }}</span><span>{{ actors.get(h.acted_by, h.acted_by) }}</span></div></td>
+<td><span class="chip {{ STATUS_CHIP[h.status] }}">{{ h.status_ko }}</span></td><td class="hide-sm cell-wrap">{{ h.note }}</td>
+<td class="hide-sm hide-md">{{ actors.get(h.acted_by, h.acted_by) }}</td><td class="num hide-sm">{{ h.diff_amount|won }}원</td></tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">아직 처리 기록이 없습니다</div></div>{% endif %}
+<p class="cap"><a href="{{ path }}?ym={{ ym }}">차이 목록으로</a></p>
+{% endif %}
+
+<h2 class="sec">차이 {{ rows|length }}건</h2>
+<div class="seg" role="group">{% for k, v in {'': '전체', 'open': '미처리', 'checked': '확인함', 'asked': '보험사 문의', 'resolved': '해결'}.items() %}
+  <a class="{{ 'on' if f.status == k }}" href="{{ path }}{{ qs({'ym': ym}, status=k) }}">{{ v }}{% if k %} {{ d.counts[k] }}{% endif %}</a>{% endfor %}</div>
+{% if rows %}<div class="card tablecard" style="margin-top:12px"><table>
+<tr><th>계약</th><th class="hide-sm">차이 종류</th><th class="num">차이</th><th class="hide-sm">상태</th><th class="hide-sm hide-md">마지막 메모</th><th></th></tr>
+{% for r in rows %}<tr data-diff="{{ r.diff_id }}" class="{{ 'me' if sel and sel.diff_id == r.diff_id }}"><td class="strong wrap-sm">{{ sx.tail(r) }}
+  <div class="sm-sub"><span>{{ r.diff_type_ko }}</span><span><span class="chip {{ STATUS_CHIP[r.status] }}">{{ r.status_ko }}</span></span></div></td>
+<td class="hide-sm">{{ r.diff_type_ko }}</td><td class="num">{{ r.diff_amount|won }}원</td>
+<td class="hide-sm"><span class="chip {{ STATUS_CHIP[r.status] }}">{{ r.status_ko }}</span>{% if r.changed %} <span class="chip warn">금액 바뀜</span>{% endif %}</td>
+<td class="hide-sm hide-md cell-wrap">{{ r.note or '-' }}</td>
+<td class="acts"><a class="ghost" href="{{ path }}?ym={{ ym }}&diff={{ r.diff_id }}#diff">{{ '처리' if not closed else '보기' }}</a></td></tr>{% endfor %}
+</table></div>
+{% if more %}<p class="cap">차이가 많아 앞 {{ rows|length }}건만 보입니다. {{ more }}건이 더 있습니다.</p>{% endif %}
+{% elif d.run_id %}<div class="card" style="margin-top:12px"><div class="k"><span class="dot"></span>조건에 맞는 차이가 없습니다</div></div>
+{% else %}<div class="card" style="margin-top:12px"><div class="k">이 달은 대사를 아직 돌리지 않았습니다</div><div class="cap">대사 화면에서 돌린 뒤 처리합니다.</div></div>{% endif %}
+
+{% if acted and not sel %}
+<h2 class="sec">최근 처리</h2>
+<div class="card tablecard"><table>
+<tr><th>계약</th><th>상태</th><th class="hide-sm">메모</th><th class="hide-sm hide-md">시각</th></tr>
+{% for r in acted %}<tr><td class="strong wrap-sm">{{ sx.tail(r) }}<div class="sm-sub"><span>{{ r.acted_at|when }} · {{ actors.get(r.acted_by, r.acted_by) }}</span></div></td>
+<td><span class="chip {{ STATUS_CHIP[r.status] }}">{{ r.status_ko }}</span></td><td class="hide-sm cell-wrap">{{ r.note }}</td><td class="hide-sm hide-md">{{ r.acted_at|when }}</td></tr>{% endfor %}
+</table></div>
+{% endif %}
+{% if yms|length > 1 %}<h2 class="sec">다른 달 보기</h2>{{ pf.pick_form(path, {'ym': ym}, yms, ym) }}{% endif %}
+<p class="cap" style="margin-top:20px">처리는 메인 관리자만 하고 메모가 있어야 합니다. 처리한 일은 변경 기록에도 남습니다. 조정 금액을 그 달 지급에 넣는 일은 아직 하지 않습니다.</p>
+{% endblock %}

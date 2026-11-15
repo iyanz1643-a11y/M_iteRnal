@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {# 신인 정착. 금액은 없다. 건수와 여부, 달만 보인다. 색은 상태: 마침 초록, 예정과 남음 주황, 기한 지남 빨강 #}
 {% macro ymko(k) %}{{ k[:4] }}년 {{ k[4:]|int }}월{% endmacro %}
-{% macro edu_chip(r) %}{% if r.edu_total == 0 %}<span class="chip">필수 과정 없음</span>{% elif r.edu_ok %}<span class="chip good">필수 {{ r.edu_done }}/{{ r.edu_total }} 수료</span>{% elif r.edu_overdue %}<span class="chip bad">필수 {{ r.edu_done }}/{{ r.edu_total }} · 기한 지남 {{ r.edu_overdue }}</span>{% elif r.edu_soon %}<span class="chip bad">필수 {{ r.edu_done }}/{{ r.edu_total }} · 임박 {{ r.edu_soon }}</span>{% else %}<span class="chip warn">필수 {{ r.edu_done }}/{{ r.edu_total }}</span>{% endif %}{% endmacro %}
+{% macro edu_chip(r) %}{% if r.edu_total == 0 %}<span class="chip">필수 과정 없음</span>{% elif r.edu_ok %}<span class="chip good">필수 {{ r.edu_done }}/{{ r.edu_total }} 수료</span>{% elif r.edu_overdue %}<span class="chip bad">필수 {{ r.edu_done }}/{{ r.edu_total }} · 기한 지남 {{ r.edu_overdue }}</span>{% elif r.edu_soon %}<span class="chip bad">필수 {{ r.edu_done }}/{{ r.edu_total }} · {{ r.edu_soon_days ~ '일 안 ' if r.edu_soon_days }}임박 {{ r.edu_soon }}</span>{% else %}<span class="chip warn">필수 {{ r.edu_done }}/{{ r.edu_total }}</span>{% endif %}{% endmacro %}
 {% macro contract_chip(r) %}{% if r.first_contract %}<span class="chip good">{{ ymko(r.first_contract) }} 성립</span>{% elif r.no_data %}<span class="chip">자료 없음</span>{% elif r.applied %}<span class="chip warn">청약 {{ r.applied }}건 · 예정</span>{% else %}<span class="chip warn">아직</span>{% endif %}{% endmacro %}
 {% macro active_chip(r) %}{% if r.first_active %}<span class="chip good">{{ ymko(r.first_active) }} 가동</span>{% elif r.no_data %}<span class="chip">자료 없음</span>{% else %}<span class="chip warn">아직</span>{% endif %}{% endmacro %}
 {% block body %}

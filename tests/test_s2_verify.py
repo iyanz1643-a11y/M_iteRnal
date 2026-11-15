@@ -567,12 +567,9 @@ def test_persistency_screens_equal_persist_rate(env):
     assert not bad, bad
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "그 달 중간 퇴사자가 있으면 같은 조직, 같은 달의 13회차 유지율이 웹 유지율 화면과 기존 운영 도구에서 다르다. "
-    "웹은 app/web/routes/persistency.py perf_persistency 가 perf.pick_org(app/web/routes/perf.py 56-69행)로 그 달 소속 이력이 있는 사람을 "
-    "모두 넣어 퇴사자의 유지율을 센다. 기존 도구(app/ui.py 262행)와 인증 판정은 certification.org_members, 곧 orgs.members(active_only) 로 "
-    "재직 설계사만 센다. D-42 는 실적 합계만 정했고 유지율은 정하지 않았다. 어느 쪽에 맞출지 정한 뒤 calc-engine 또는 web-screen 이 고친다"))
 def test_persistency_org_rate_same_as_legacy_with_leaver(env):
+    """그 달 중간 퇴사자가 있어도 같은 조직, 같은 달의 13회차 유지율이 웹 유지율 화면과 기존 운영 도구에서 같다.
+    둘 다 persist.org_members, 곧 재직 설계사 기준이다. 웹은 범위 안 사람만 남기고 화면에서 고른 달을 넘긴다."""
     con, ym, mgr = env["con"], env["ym"], env["mgr"]
     leaver = next(a for a in env["inside"] if persist.rate(con, [a], "p13", ym)[2])
     con.execute("UPDATE agent SET status='terminated', termination_date=? WHERE agent_id=?", (f"{ym[:4]}-{ym[4:]}-15", leaver))

@@ -154,3 +154,75 @@ def run(con, year, as_of_ym, run_by="system"):
             n += 1
     db.finish_run(con, run_id, f"{n} rows")
     return run_id, n
+
+
+# ---------------------------------------------------------------- 읽기
+# 다른 곳은 인증 표를 직접 읽지 않고 이 함수를 부른다. 범위 안 설계사 목록 agent_ids 를 받아서만 읽는다.
+# 이름과 실적 값은 담지 않는다. 실적 값이 든 metric_json 은 with_detail 이 참일 때만 풀어 detail 로 넣는다.
+def _scope(agent_ids):
+    ids = []
+    for x in agent_ids or ():
+        try:
+            v = int(x)
+        except (TypeError, ValueError):
+            continue
+        if v not in ids:
+            ids.append(v)
+    return ids
+
+
+def awards(con, agent_ids, year=None):
+    """범위 안 설계사의 인증 확정 기록 agent_certification_award. year 를 주면 그 해만.
+
+    돌려주는 것: dict 목록. agent_id, program_id, code, name, category, year, awarded_at, certificate_no.
+    차례는 설계사, 연도, 프로그램 코드다."""
+    ids = _scope(agent_ids)
+    if not ids:
+        return []
+    sql = f"""SELECT w.agent_id, w.program_id, p.code, p.name, p.category, w.year, w.awarded_at, w.certificate_no
+              FROM agent_certification_award w JOIN certification_program p ON p.program_id=w.program_id
+              WHERE w.agent_id IN ({','.join('?' * len(ids))})"""
+    params = list(ids)
+    if year is not None:
+        sql += " AND w.year=?"
+        params.append(int(year))
+    return [dict(r) for r in con.execute(sql + " ORDER BY w.agent_id, w.year, p.code, w.id", params)]
+
+
+def latest_run(con, as_of_ym=None):
+    """가장 늦은 기준월의 완료된 인증 계산 run 번호. as_of_ym 을 주면 그 달의 것. 없으면 None."""
+    sql, params = "SELECT run_id FROM calc_run WHERE run_type='certification' AND status='done'", []
+    if as_of_ym:
+        sql += " AND period_ym=?"
+        params.append(str(as_of_ym))
+    r = con.execute(sql + " ORDER BY period_ym DESC, run_id DESC LIMIT 1", params).fetchone()
+    return r[0] if r else None
+
+
+def latest_status(con, agent_ids, as_of_ym=None, achieved_only=False, with_detail=False):
+    """범위 안 설계사의 가장 늦은 완료 인증 계산 결과 agent_certification_status. 계산하지 않고 읽기만 한다.
+
+    run 은 latest_run 이 고른 하나다. achieved_only 가 참이면 달성한 줄만.
+    돌려주는 것: dict 목록. run_id, as_of_ym, agent_id, org_id, program_id, code, name, category, year,
+    progress_rate, achieved, projected_achieved, projected_ym. projected 는 연말 달성 예상이다. with_detail 이면 detail 도 넣는다."""
+    ids = _scope(agent_ids)
+    if not ids:
+        return []
+    run_id = latest_run(con, as_of_ym)
+    if run_id is None:
+        return []
+    sql = f"""SELECT s.run_id, s.as_of_ym, s.agent_id, s.org_id, s.program_id, p.code, p.name, p.category, s.year,
+                     s.progress_rate, s.achieved, s.projected_achieved, s.projected_ym, s.metric_json
+              FROM agent_certification_status s JOIN certification_program p ON p.program_id=s.program_id
+              WHERE s.run_id=? AND s.agent_id IN ({','.join('?' * len(ids))})"""
+    if achieved_only:
+        sql += " AND s.achieved=1"
+    out = []
+    for r in con.execute(sql + " ORDER BY s.agent_id, p.sort_order, p.code, s.year, s.id", [run_id, *ids]):
+        d = dict(r)
+        raw = d.pop("metric_json")
+        d["achieved"], d["projected_achieved"] = bool(d["achieved"]), (None if d["projected_achieved"] is None else bool(d["projected_achieved"]))
+        if with_detail:
+            d["detail"] = json.loads(raw) if raw else {}
+        out.append(d)
+    return out

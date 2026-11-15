@@ -1,0 +1,64 @@
+{% extends "base.html" %}{% import "_settle.html" as sx %}
+{% block body %}
+<p class="eyebrow">데이터 · 메인 관리자</p>
+<h1 class="display">정산서와 유지율</h1>
+<p class="lede">원수사 정산서와 유지율 현황 엑셀을 올립니다. 미리보기에서 건수와 문제를 확인한 뒤 넣습니다.</p>
+{% if error %}<div class="alert bad" role="alert" style="margin-top:20px">{{ error }}</div>{% endif %}
+
+{% macro counts(x, is_preview) %}
+<div class="grid g4 keep" style="margin-top:12px">
+  <div class="card"><div class="k">읽은 줄</div><div class="mid">{{ x.rows }}<span class="unit">줄</span></div><div class="cap">{{ x.kind_ko }}</div></div>
+  <div class="card"><div class="k"><span class="dot {{ 'bad' if x.block else 'off' }}"></span>차단</div><div class="mid">{{ x.block }}<span class="unit">건</span></div><div class="cap">넣지 않는 줄이나 파일</div></div>
+  <div class="card"><div class="k"><span class="dot {{ 'warn' if x.warn else 'off' }}"></span>경고</div><div class="mid">{{ x.warn }}<span class="unit">건</span></div><div class="cap">넣고 알리는 것</div></div>
+  <div class="card"><div class="k"><span class="dot {{ 'bad' if x.status == 'failed' else '' }}"></span>결과</div><div class="mid word">{{ '넣을 수 없음' if x.status == 'failed' else ('넣을 수 있음' if is_preview else x.status_ko) }}</div>
+    <div class="cap">{{ x.ym|ymko }}{% if x.insurer %} · {{ x.insurer }}{% endif %}</div></div>
+</div>
+{% endmacro %}
+
+{% if preview %}
+<h2 class="sec">미리보기</h2>
+<p class="cap" style="margin:-8px 0 0">{{ preview.file }} · 아직 아무것도 넣지 않았습니다.</p>
+{{ counts(preview, true) }}
+{% if preview.replaces %}<div class="alert" style="margin-top:16px">넣으면 같은 달 이 보험사의 앞 정산서를 바뀜으로 두고 이 파일을 씁니다. 앞 정산서와 원본 파일은 지우지 않습니다. 넣은 뒤 대사를 다시 돌려야 합니다.</div>{% endif %}
+{{ sx.issues_table(preview.issues) }}
+{% if preview.status != 'failed' %}
+<form method="post" action="{{ path }}" class="confirm-acts" style="margin-top:16px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  <button class="primary" name="action" value="load">이대로 넣기</button><button class="second" name="action" value="cancel">버리기</button></form>
+{% else %}<div class="alert bad" role="alert" style="margin-top:16px">넣을 수 없는 파일입니다. 차단 문제를 고친 파일을 다시 올려 주세요.</div>{% endif %}
+{% endif %}
+
+{% if result %}
+<h2 class="sec">넣은 결과 · 배치 {{ result.batch_id }}번</h2>
+<p class="cap" style="margin:-8px 0 0">{{ result.file }} · {{ result.status_ko }}</p>
+{{ counts(result, false) }}
+{{ sx.issues_table(result.issues) }}
+{% if result.kind == 'statement' and result.status != 'failed' %}<div class="confirm-acts" style="margin-top:16px"><a class="pill" href="/settle/recon?ym={{ result.ym }}">대사 화면에서 다시 돌리기</a>
+  <span class="cap" style="margin:0">정산서는 대사를 다시 돌려야 차이에 반영됩니다</span></div>{% endif %}
+{% endif %}
+
+<h2 class="sec">파일 올리기</h2>
+<form class="card wide" method="post" action="{{ path }}" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  <div class="frow">
+    <label class="f">종류<select name="kind">{% for k, v in KIND_KO.items() %}<option value="{{ k }}" {{ 'selected' if form.kind == k }}>{{ v }}</option>{% endfor %}</select></label>
+    <label class="f">보험사 · 정산서일 때<select name="insurer"><option value="">고르세요</option>{% for i in insurers %}<option value="{{ i.code }}" {{ 'selected' if form.insurer == i.code }}>{{ i.name }}</option>{% endfor %}</select></label>
+    <label class="f">귀속월<input class="sm" type="text" name="ym" value="{{ form.ym or ctx.ym }}" inputmode="numeric" pattern="20[0-9]{4}" maxlength="6" required placeholder="202610"></label>
+  </div>
+  <label class="f">엑셀 파일<input type="file" name="file" accept=".xlsx" required></label>
+  <ul class="notes"><li>정산서는 보험사마다 정한 열 매핑으로 읽습니다. 매핑이 있는 보험사만 고를 수 있습니다.</li>
+    <li>같은 달 같은 보험사의 정산서를 다시 넣으면 앞 정산서는 바뀜으로 남고 새 파일을 씁니다.</li>
+    <li>마감한 달에는 넣을 수 없습니다.{% if closed_months %} 지금 마감한 달은 {% for m in closed_months|sort %}{{ m|ymko }}{% if not loop.last %}, {% endif %}{% endfor %}입니다.{% endif %}</li></ul>
+  <div><button class="primary" name="action" value="preview">미리보기</button></div>
+</form>
+
+<h2 class="sec">최근 배치 {{ batches|length }}개</h2>
+{% if batches %}<div class="card tablecard"><table>
+<tr><th>배치</th><th class="hide-sm">귀속월</th><th class="num hide-sm hide-md">버전</th><th class="num hide-sm">줄 수</th><th>상태</th><th class="hide-sm">문제</th><th class="hide-sm hide-md">적재 시각</th></tr>
+{% for b in batches %}<tr data-batch="{{ b.batch_id }}"><td class="strong">{{ b.batch_id }}번 · {{ b.kind_ko }}{% if b.insurer %} · {{ b.insurer }}{% endif %}
+  <div class="sm-sub"><span>{{ b.period_ym|ymko }} · {{ b.row_count or 0 }}줄 · 차단 {{ b.block or 0 }} · 경고 {{ b.warn or 0 }}</span></div></td>
+<td class="hide-sm">{{ b.period_ym|ymko }}</td><td class="num hide-sm hide-md">{{ b.version }}</td><td class="num hide-sm">{{ b.row_count or 0 }}</td>
+<td><span class="chip {{ 'good' if b.status in ('active', 'loaded') else ('bad' if b.status == 'failed' else '') }}">{{ b.status_ko }}</span></td>
+<td class="hide-sm">차단 {{ b.block or 0 }} · 경고 {{ b.warn or 0 }}</td><td class="hide-sm hide-md">{{ (b.loaded_at or b.received_at)|when }}</td></tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">아직 넣은 정산서와 유지율 현황이 없습니다</div></div>{% endif %}
+<p class="cap" style="margin-top:20px">미리보기와 결과에는 건수, 문제 종류, 줄 번호만 보입니다. 금액과 이름은 이 화면에 싣지 않습니다. 넣은 파일은 원본으로 보관합니다.</p>
+{% endblock %}

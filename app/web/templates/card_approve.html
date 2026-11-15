@@ -89,4 +89,67 @@
 
 <p class="cap" style="margin-top:20px">승인과 반려는 변경 기록에 남습니다. 반려 사유 원문은 남기지 않습니다. 이름과 소속은 앱의 사원 정보로 보여 드립니다.</p>
 {% endif %}
+
+{% if tools %}
+<section class="main-tools" id="main-tools">
+<p class="eyebrow" style="margin-top:48px">메인 관리자 전용</p>
+<h2 class="sec" style="margin-top:4px">배지 만료 예정 {{ tools.expiring|length + tools.expiring_more }}건</h2>
+<p class="cap" style="margin:-6px 0 16px">명함 주소가 이어진 설계사 가운데 {{ tools.days }}일 안에 배지 유효기간이 끝나는 사람입니다. {{ tools.as_of }} 기준 판정입니다. 명함 그림 안의 배지는 앱이나 명함 사이트에서 지울 수 없어 설계사가 명함을 다시 만들어야 합니다.</p>
+{% if tools.expiring_error %}<div class="alert">배지 기록을 읽지 못했습니다. 잠시 뒤 다시 열어 주세요.</div>
+{% elif tools.expiring %}
+<div class="card reqs">{% for r in tools.expiring %}
+  <div class="req" data-expiring="{{ r.agent_id }}"><div class="req-main">{{ who(r) }}
+    <div class="req-meta"><span class="chip warn">{{ r.label }}</span><span>{{ r.until }}까지 · {{ r.days_left }}일 남음</span><span>{{ r.field_ko }}</span><span>명함 주소 {{ r.slug }}</span></div>
+    <details class="badge-more"><summary>설계사에게 보낼 안내</summary><p class="badge-notice">{{ r.notice }}</p></details>
+  </div></div>
+{% endfor %}</div>
+{% if tools.expiring_more %}<p class="cap">이 밖에 {{ tools.expiring_more }}건이 더 있습니다. 남은 날이 적은 차례로 {{ tools.expiring|length }}건만 보여 드립니다.</p>{% endif %}
+{% else %}<div class="card"><div class="k">{{ tools.days }}일 안에 끝나는 배지가 없습니다</div></div>{% endif %}
+
+<h2 class="sec" id="removal">해촉자 명함 내리기 후보 {{ tools.cands|length }}건</h2>
+<p class="cap" style="margin:-6px 0 16px">명함 주소가 이어진 해촉자 가운데 마지막으로 확인한 명함이 공개 중이거나 승인 대기인 사람입니다. 저절로 내리지 않습니다. 하나씩 확인하고 내려 주세요.
+  {% if tools.configured %}<a href="{{ path }}?refresh=1#removal">공개 상태 다시 확인</a>{% endif %}</p>
+{% if tools.refreshed and tools.cand_note %}<p class="cap">{{ tools.cand_note }}. {{ tools.at_label }}에 명함 사이트에서 다시 읽었습니다.</p>{% endif %}
+{% if not write_on %}<div class="alert">명함 사이트 쓰기가 아직 꺼져 있습니다. 후보는 볼 수 있지만 내리기는 명함 사이트에 보내지 않습니다. 지금은 명함 사이트 관리 화면에서 내려 주세요.</div>{% endif %}
+
+{% if tools.rm_confirm %}{% set rc = tools.rm_confirm %}
+<section class="card confirm confirm-box" id="rm-confirm" style="margin-bottom:16px">
+  <div class="k">내리기 확인</div>
+  <h2 class="confirm-title">이 명함을 명함 사이트에서 내릴까요?</h2>
+  {{ who(rc) }}
+  <div class="req-meta"><span class="chip warn">{{ rc.agent_status_ko }}</span>{% if rc.term %}<span>해촉일 {{ rc.term }}</span>{% endif %}<span>명함 {{ rc.state_ko }}</span><span>명함 주소 {{ rc.slug }}</span></div>
+  <ul class="notes">
+    <li>내리면 이 명함 링크는 누구에게도 열리지 않습니다. 승인 대기 중인 신청도 함께 내려갑니다.</li>
+    <li>앱에서는 되돌릴 수 없습니다. 다시 올리려면 새로 신청하고 승인을 받아야 합니다.</li>
+    {% if not write_on %}<li>지금은 쓰기가 꺼져 있어 눌러도 명함 사이트에 보내지 않습니다.</li>{% endif %}
+  </ul>
+  <form method="post" action="{{ path }}" class="wide"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="action" value="remove"><input type="hidden" name="slug" value="{{ rc.slug }}"><input type="hidden" name="confirm" value="1">
+    {% set rm_bad = flash and flash.kind == 'bad' %}
+    {% if rm_bad %}<div class="alert bad" role="alert">{{ flash.text }}{% if flash.detail %}<div class="flash-detail">{{ flash.detail }}</div>{% endif %}</div>{% endif %}
+    <label class="f">내리기 사유 · 적지 않아도 됩니다 · {{ reason_max }}자까지<textarea name="reason" maxlength="{{ reason_max }}" rows="2" aria-describedby="rm-help" placeholder="예: 위촉이 끝나 명함을 내립니다."{{ ' autofocus' if rm_bad }}></textarea></label>
+    <ul class="notes" id="rm-help">
+      <li class="strong-note">{{ tools.reason_help }}</li>
+      <li>전화번호, 주민번호, 전자우편, 설계사 이름은 적지 말아 주세요. 그런 꼴이 있으면 보내지 않습니다.</li>
+      <li>사유는 앱에 저장하지 않고 명함 사이트로만 보냅니다. 변경 기록에는 글자 수만 남습니다.</li>
+    </ul>
+    <div class="confirm-acts"><button class="danger" type="submit">확인했고 명함을 내립니다</button><a class="pill quiet big-pill" href="{{ path }}#removal">취소</a></div>
+  </form>
+</section>
+{% endif %}
+
+{% if tools.cand_state != 'ok' %}<div class="alert bad">{{ tools.cand_note or '내리기 후보를 읽지 못했습니다.' }}</div>
+{% elif tools.cands %}
+<div class="card reqs">{% for r in tools.cands %}
+  <div class="req{{ ' on' if tools.rm_confirm and tools.rm_confirm.slug == r.slug }}" id="rm-{{ r.slug }}"><div class="req-main">{{ who(r) }}
+    <div class="req-meta"><span class="chip warn">{{ r.agent_status_ko }}</span>{% if r.term %}<span>해촉일 {{ r.term }}</span>{% endif %}
+      <span class="chip {{ 'bad' if r.live else ('warn' if r.pending else '') }}">명함 {{ r.state_ko }}</span>
+      <span>{% if r.checked %}{{ r.checked }} 확인{% else %}확인한 적 없음{% endif %}</span>
+      {% if r.url %}<a href="{{ r.url }}" target="_blank" rel="noopener noreferrer">공개본 보기</a>{% endif %}</div></div>
+    <div class="req-acts"><a class="pill quiet" href="?do=remove&amp;slug={{ r.slug }}#rm-confirm">내리기</a></div></div>
+{% endfor %}</div>
+{% else %}<div class="card"><div class="k">내릴 해촉자 명함이 없습니다</div></div>{% endif %}
+<p class="cap" style="margin-top:16px">내리기는 메인 관리자만 하고 변경 기록에 남습니다. 이름과 소속은 앱의 사원 정보로 보여 드립니다.</p>
+</section>
+{% endif %}
 {% endblock %}
