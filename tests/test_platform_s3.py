@@ -368,12 +368,73 @@ def test_access_log_query_tail_is_removed():
     rec = logging.LogRecord("uvicorn.access", logging.INFO, __file__, 1, '%s - "%s %s HTTP/%s" %d',
                             ("127.0.0.1:5000", "GET", "/invite?t=VerifyTokenSecret&x=1", "1.1", 303), None)
     assert observe.QueryTailFilter().filter(rec)
-    assert rec.args == ("127.0.0.1:5000", "GET", "/invite", "1.1", 303)
-    assert rec.getMessage() == '127.0.0.1:5000 - "GET /invite HTTP/1.1" 303'
+    assert rec.args == ("-", "GET", "/invite", "1.1", 303)                          # 공개 화면이라 접속 주소도 지운다
+    assert rec.getMessage() == '- - "GET /invite HTTP/1.1" 303'
     plain = logging.LogRecord("uvicorn.error", logging.INFO, __file__, 1, '"GET /ok?q=가상인물 HTTP/1.1"', None, None)
     observe.QueryTailFilter().filter(plain)
     assert plain.getMessage() == '"GET /ok HTTP/1.1"'
     assert observe.strip_query("/ok") == "/ok"
+
+
+def _access(addr, path, mode=None, monkeypatch=None):
+    if monkeypatch is not None:
+        if mode is None:
+            monkeypatch.delenv("APP_LOG_IP", raising=False)
+        else:
+            monkeypatch.setenv("APP_LOG_IP", mode)
+    rec = logging.LogRecord("uvicorn.access", logging.INFO, __file__, 1, '%s - "%s %s HTTP/%s" %d',
+                            (addr, "POST", path, "1.1", 200), None)
+    assert observe.QueryTailFilter().filter(rec)
+    return rec
+
+
+@pytest.mark.parametrize("mode", [None, "prefix", "none", "full", "엉뚱한값"])
+@pytest.mark.parametrize("path", ["/consult", "/consult?x=1", "/invite", "/invite/next", "/welcome"])
+def test_access_log_hides_client_ip_on_public_pages(monkeypatch, mode, path):
+    """상담 신청 화면은 접속 주소를 저장하지 않는다고 안내한다. 공개 화면은 어떤 설정이어도 접속 주소를 지운다."""
+    for addr in ("203.0.113.7:51234", "2001:db8:abcd:12::7:51234", "testclient:50000"):
+        rec = _access(addr, path, mode, monkeypatch)
+        assert rec.args[0] == "-" and rec.args[2] == path.split("?")[0]
+        assert "203.0.113" not in rec.getMessage() and "2001:db8" not in rec.getMessage()
+
+
+def test_access_log_keeps_only_ip_prefix_elsewhere(monkeypatch):
+    """공개 화면 밖은 기본으로 앞부분만 남긴다. 포트는 지운다. 이름이 비슷한 경로는 공개 화면이 아니다."""
+    assert _access("203.0.113.7:51234", "/perf/contract/3", None, monkeypatch).args[0] == "203.0.113.0/24"
+    assert _access("2001:db8:abcd:12::7:51234", "/home", "prefix", monkeypatch).args[0] == "2001:db8:abcd::/48"
+    assert _access("203.0.113.7:51234", "/consulting", None, monkeypatch).args[0] == "203.0.113.0/24"
+    assert _access("203.0.113.7:51234", "/data/invite", None, monkeypatch).args[0] == "203.0.113.0/24"
+    assert _access("testclient:50000", "/home", None, monkeypatch).args[0] == "-"
+    assert _access("203.0.113.7:51234", "/home", "none", monkeypatch).args[0] == "-"
+    assert _access("203.0.113.7:51234", "/home", "full", monkeypatch).args[0] == "203.0.113.7:51234"
+    assert _access("", "/home", None, monkeypatch).args[0] == ""
+    rec = _access("203.0.113.7:51234", "/home?q=1", None, monkeypatch)
+    assert rec.getMessage() == '203.0.113.0/24 - "POST /home HTTP/1.1" 200'
+
+
+def test_access_log_ip_mask_survives_uvicorn_formatter_and_plain_text(monkeypatch):
+    """uvicorn 의 접근 기록 꼴로 찍어도 가려진 값이 나온다. 이미 채워진 글 속 IPv4 도 가린다."""
+    from uvicorn.logging import AccessFormatter
+
+    import app.web.main  # noqa: F401  불러오기만 해도 거르개가 달린다
+    monkeypatch.delenv("APP_LOG_IP", raising=False)
+    lg = logging.getLogger("uvicorn.access")
+    assert sum(isinstance(f, observe.QueryTailFilter) for f in lg.filters) == 1
+    fmt = AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False)
+    rec = _access("198.51.100.23:40000", "/consult?name=가상인물")
+    assert fmt.format(rec) == '- - "POST /consult HTTP/1.1" 200 OK'
+    rec = _access("198.51.100.23:40000", "/home")
+    assert fmt.format(rec) == '198.51.100.0/24 - "POST /home HTTP/1.1" 200 OK'
+    plain = logging.LogRecord("uvicorn.error", logging.INFO, __file__, 1, '198.51.100.23:40000 - "GET /consult?a=1 HTTP/1.1"', None, None)
+    observe.QueryTailFilter().filter(plain)
+    assert plain.getMessage() == '- - "GET /consult HTTP/1.1"'
+    plain = logging.LogRecord("uvicorn.error", logging.INFO, __file__, 1, '198.51.100.23:40000 - "WebSocket %s" [accepted]', None, None)
+    observe.QueryTailFilter().filter(plain)
+    assert plain.getMessage().startswith("198.51.100.0/24 - ") and "HTTP/1.1" not in plain.getMessage()
+    ws = logging.LogRecord("uvicorn.error", logging.INFO, __file__, 1, '%s - "WebSocket %s" [accepted]',
+                           ("198.51.100.23:40000", "/invite"), None)
+    observe.QueryTailFilter().filter(ws)
+    assert ws.getMessage() == '- - "WebSocket /invite" [accepted]'
 
 
 def test_app_500_page_shows_request_id_but_not_the_error(web, caplog):
