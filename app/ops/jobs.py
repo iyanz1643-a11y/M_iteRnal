@@ -5,6 +5,9 @@
 | 종류 | 하는 일 | params | 뒤따르는 작업 |
 | --- | --- | --- | --- |
 | ingest | 큰 적재. 저장소의 파일 하나를 연결 흐름으로 적재한다 | area, key, kind, ym, title | 계약현황이나 사원현황이 들어가면 업적 run 과 랭킹 run |
+| ingest 정산서 | kind 가 statement 면 원수사 정산서를 excel_loader.load_statement 로 넣는다 | area, key, kind, ym, insurer | 마감하지 않은 달이면 대사 다시 돌리기 |
+| ingest 유지율 | kind 가 persistency 면 유지율 현황을 excel_loader.load_persistency 로 넣는다 | area, key, kind, ym | 없음 |
+| recon_run | 대사 다시 돌리기. reconcile.run | ym | 없음 |
 | perf_run | 업적 run. performance.run | ym | 없음 |
 | rank_run | 랭킹 run. ranking.run | ym | 없음 |
 | notify_sweep | 알림 정리. 끝난 명함 승인 권한을 맞춘다 | 없음 | 없음 |
@@ -13,6 +16,9 @@
 
 - 적재 뒤에는 그 귀속월과, 그 뒤에 이미 저장된 업적 run 이 있는 달을 모두 다시 돌린다. 분기, 반기, 연 누적이 앞 달의 적재를 담기 때문이다.
   홈과 팀원 현황은 저장된 업적 run 을 읽고 실적 화면은 계약에서 새로 센다. 적재 뒤 run 을 다시 돌려 두 숫자가 어긋나지 않게 한다.
+- 정산서와 유지율은 마감한 달이면 넣지 않고 closed 로 끝난다. 대사도 마감한 달이면 돌리지 않는다. 처리하는 순간에 다시 본다.
+  이미 넣은 파일은 duplicate, 그 달 수수료 자체 계산이 없으면 no_commission, 그 달 정산서가 없으면 no_statement 로 끝난다. 다시 해도 같기 때문이다.
+  넣으면 화면에서 넣을 때와 같이 변경 기록 statement_load 를, 대사를 돌리면 recon_run 을 남긴다.
 - 같은 종류와 같은 params 의 작업이 이미 대기 중이면 새로 넣지 않고 그 번호를 돌려준다.
 - 실패하면 30초, 60초, 120초 뒤로 미뤄 다시 하고 max_attempts 번 실패하면 failed 로 둔다.
 - 워커가 죽어 lease_until 이 지난 처리 중 작업은 다시 대기로 돌린다.
@@ -36,11 +42,13 @@ from app.ops.storage import StorageError, get_storage
 QUEUED, RUNNING, DONE, FAILED = "queued", "running", "done", "failed"
 STATUS_KO = {QUEUED: "대기", RUNNING: "처리 중", DONE: "끝남", FAILED: "실패"}
 KIND_KO = {"ingest": "큰 적재", "perf_run": "업적 run", "rank_run": "랭킹 run", "notify_sweep": "알림 정리",
-           "connect_watch": "폴더 가져오기", "gdrive": "구글 드라이브 가져오기"}
+           "connect_watch": "폴더 가져오기", "gdrive": "구글 드라이브 가져오기", "recon_run": "대사 다시 돌리기"}
 YM = re.compile(r"^20\d\d(0[1-9]|1[0-2])$")
 LEASE_SECONDS = 30 * 60
 BACKOFF_SECONDS = 30
 REFRESH_KINDS = ("contract", "employee")       # 들어가면 업적 run 을 다시 돌리는 원본 종류
+SETTLE_KINDS = {"statement": "원수사 정산서", "persistency": "유지율 현황"}   # 연결 흐름 밖의 적재기로 넣는 종류
+INSURER = re.compile(r"^[A-Za-z0-9_-]{1,20}$")
 FMT = "%Y-%m-%d %H:%M:%S"
 
 
@@ -65,7 +73,7 @@ def _check(kind: str, params: dict) -> dict:
     if kind not in HANDLERS:
         raise JobError(f"없는 작업 종류입니다: {kind}")
     p = dict(params or {})
-    if kind in ("perf_run", "rank_run"):
+    if kind in ("perf_run", "rank_run", "recon_run"):
         if not YM.match(str(p.get("ym") or "")):
             raise JobError("귀속월은 YYYYMM 꼴이어야 합니다.")
         p = {"ym": str(p["ym"])}
@@ -73,16 +81,22 @@ def _check(kind: str, params: dict) -> dict:
         from app.connect.base import KINDS
         if p.get("area") not in ("raw", "uploads"):
             raise JobError("적재할 파일의 구역은 raw 나 uploads 여야 합니다.")
-        if p.get("kind") not in KINDS:
+        if p.get("kind") not in KINDS and p.get("kind") not in SETTLE_KINDS:
             raise JobError("적재할 원본 종류가 없습니다.")
         if p.get("ym") and not YM.match(str(p["ym"])):
             raise JobError("귀속월은 YYYYMM 꼴이어야 합니다.")
+        if p["kind"] in SETTLE_KINDS and not p.get("ym"):
+            raise JobError("정산서와 유지율 현황은 귀속월이 있어야 합니다.")
+        if p["kind"] == "statement" and not INSURER.match(str(p.get("insurer") or "")):
+            raise JobError("정산서는 보험사 코드가 있어야 합니다.")
+        if p["kind"] != "statement":
+            p.pop("insurer", None)
         try:
             if not get_storage().exists(p["area"], p.get("key") or ""):
                 raise JobError("저장소에 그 파일이 없습니다.")
         except StorageError as e:
             raise JobError(str(e)) from None
-        p = {k: p[k] for k in ("area", "key", "kind", "ym", "title", "by") if p.get(k)}
+        p = {k: str(p[k]) for k in ("area", "key", "kind", "ym", "insurer", "title", "by") if p.get(k)}
     else:
         p = {}
     return p
@@ -262,6 +276,8 @@ def _source_result(con, run, job, by) -> dict:
 
 
 def _ingest(con, p, job):
+    if p["kind"] in SETTLE_KINDS:
+        return _settle_ingest(con, p, job)
     from app.connect.base import VIA_UPLOAD, RawFile
     from app.connect.pipeline import Pipeline
     from app.connect.sources import UploadSource
@@ -270,6 +286,68 @@ def _ingest(con, p, job):
     raw = RawFile.from_path(path, via=VIA_UPLOAD, kind=p["kind"], period_ym=p.get("ym"), **meta)
     run = Pipeline(con).run(UploadSource([raw]))
     return _source_result(con, run, job, p.get("by") or "worker")
+
+
+def month_closed(con, ym) -> bool:
+    """마감한 달인가. 화면의 settle.is_closed 와 같은 표 close_period 를 본다."""
+    r = con.execute("SELECT status FROM close_period WHERE period_ym=?", (ym,)).fetchone()
+    return bool(r and r["status"] == "closed")
+
+
+def _audit(con, actor, action, target, after: dict) -> None:
+    con.execute("INSERT INTO audit_log(at, actor, action, target, after_json) VALUES(?,?,?,?,?)",
+                (db.now(), actor, action, target, json.dumps(after, ensure_ascii=False)))
+
+
+def _settle_ingest(con, p, job):
+    """정산서나 유지율 현황을 넣는다. 화면의 바로 넣기와 같은 적재기를 부른다. 결과에는 건수와 배치 번호만 둔다."""
+    from app.loader import excel_loader
+    kind, ym = p["kind"], p["ym"]
+    by = p.get("by") or job.get("requested_by") or "worker"
+    if month_closed(con, ym):
+        return {"status": "closed"}
+    if not get_storage().exists(p["area"], p["key"]):
+        return {"status": "missing_file"}
+    path = get_storage().local_path(p["area"], p["key"])
+    try:
+        if kind == "statement":
+            res = excel_loader.load_statement(con, path, p["insurer"], ym, by=by)
+        else:
+            res = excel_loader.load_persistency(con, path, ym, by=by)
+    except excel_loader.DuplicateFile:
+        con.rollback()
+        return {"status": "duplicate"}
+    b = con.execute("SELECT status FROM import_batch WHERE batch_id=?", (res["batch_id"],)).fetchone()
+    status = b["status"] if b else "failed"
+    out = {"status": status, "batch_id": res["batch_id"], "rows": res.get("rows", 0), "block": res.get("block", 0), "warn": res.get("warn", 0)}
+    _audit(con, by, "statement_load", f"batch:{res['batch_id']}",
+           {"kind": kind, "insurer": p.get("insurer"), "ym": ym, "rows": out["rows"], "block": out["block"], "warn": out["warn"], "job": job["job_id"]})
+    con.commit()
+    follow = []
+    if kind == "statement" and status != "failed" and not month_closed(con, ym):
+        follow.append(enqueue(con, "recon_run", {"ym": ym}, by=by, parent_id=job["job_id"]))
+    out["follow"] = follow
+    return out
+
+
+def _recon_run(con, p, job):
+    """대사 다시 돌리기. 화면 /settle/recon 의 다시 돌리기와 같다. 마감한 달은 돌리지 않는다."""
+    from app.engine import reconcile
+    from app.engine import settle as st
+    ym = p["ym"]
+    by = job.get("requested_by") or "worker"
+    if month_closed(con, ym):
+        return {"status": "closed"}
+    if not st.statement_insurers(con, ym):
+        return {"status": "no_statement"}
+    try:
+        run_id, n = reconcile.run(con, ym, by)
+    except RuntimeError:                                 # 그 달 수수료 자체 계산이 없다
+        con.rollback()
+        return {"status": "no_commission"}
+    _audit(con, by, "recon_run", ym, {"diffs": n, "job": job["job_id"]})
+    con.commit()
+    return {"status": "done", "run_id": run_id, "diffs": n}
 
 
 def _connect_watch(con, p, job):
@@ -303,7 +381,7 @@ def _notify_sweep(con, p, job):
 
 
 HANDLERS = {"ingest": _ingest, "perf_run": _perf_run, "rank_run": _rank_run, "notify_sweep": _notify_sweep,
-            "connect_watch": _connect_watch, "gdrive": _gdrive}
+            "connect_watch": _connect_watch, "gdrive": _gdrive, "recon_run": _recon_run}
 
 
 # ---------------------------------------------------------------- 정해진 때 넣기

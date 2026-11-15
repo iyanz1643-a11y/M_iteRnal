@@ -4,6 +4,9 @@
 화면의 확인 단계와 CSRF, 알림함의 종류별 끄기.
 샘플 자료의 조직: GA 아래 본부 둘, 본부마다 지점 둘, 한 지점 아래 센터와 팀이 있다. 번호는 자료에서 찾는다.
 """
+import ast
+import functools
+import importlib
 import os
 import pathlib
 import re
@@ -312,3 +315,75 @@ def test_old_db_without_tables_uses_defaults(tmp_path):
     st.ensure(con)
     assert con.execute("SELECT COUNT(*) FROM org_setting").fetchone()[0] == 0
     con.close()
+
+
+# ---------------------------------------------------------------- 쓰이는 곳
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def _code_names(path: pathlib.Path) -> set:
+    """파일의 코드에 나오는 이름과 점 이름, 글자 상수. 주석과 문서 글은 빼고 본다."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    docs = {id(n.body[0].value) for n in ast.walk(tree)
+            if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and n.body and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
+    out = set()
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Name, ast.Attribute)):
+            out.add(ast.unparse(n))
+        elif isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docs:
+            out.add(repr(n.value))
+    return out
+
+
+def _resolve(file: str, reads: str):
+    """reads 를 그 파일의 모듈 안에서 푼 값. 글자 상수면 그 글자다."""
+    if reads[:1] in "'\"":
+        return ast.literal_eval(reads)
+    mod = importlib.import_module(file[:-3].replace("/", "."))
+    first, *rest = reads.split(".")
+    return functools.reduce(getattr, rest, vars(mod)[first])
+
+
+def test_every_used_by_reads_its_key_in_code():
+    assert st.ITEMS, "설정 항목이 없습니다"
+    for key, it in st.ITEMS.items():
+        assert isinstance(it["used_by"], list), key
+        for u in it["used_by"]:
+            assert set(u) == {"where", "file", "reads"} and u["where"].strip(), (key, u)
+            path = ROOT / u["file"]
+            assert path.is_file(), (key, u["file"])
+            names = _code_names(path)
+            reads = u["reads"] if u["reads"][:1] not in "'\"" else repr(ast.literal_eval(u["reads"]))
+            assert reads in names, f"{key}: {u['file']} 의 코드에 {u['reads']} 가 없습니다"
+            got = _resolve(u["file"], u["reads"])
+            if got is st.notify_off:           # 알림 켜고 끄기는 notify_off 가 NOTIFY_KINDS 로 읽고, 알림함이 그 종류를 낸다
+                kind = key.removeprefix("notify.")
+                assert key.startswith("notify.") and kind in st.NOTIFY_KINDS, key
+                assert 'f"notify.{k}"' in (ROOT / "app/org/settings.py").read_text(encoding="utf-8")
+                assert repr(kind) in names, f"{key}: {u['file']} 가 {kind} 알림을 내지 않습니다"
+            else:
+                assert got == key, f"{key}: {u['file']} 의 {u['reads']} 는 {got!r} 입니다"
+
+
+def test_unwired_items_are_not_read_anywhere():
+    """used_by 가 빈 항목은 정말 아무 데도 읽지 않는다. 누가 읽기 시작하면 used_by 를 채워야 이 시험이 통과한다."""
+    empty = [k for k, it in st.ITEMS.items() if not it["used_by"]]
+    assert "board.manager_post" in empty
+    for path in (ROOT / "app").rglob("*.py"):
+        if path == ROOT / "app/org/settings.py":
+            continue
+        names = _code_names(path)
+        for key in empty:
+            assert repr(key) not in names, f"{key} 를 {path.relative_to(ROOT)} 가 읽습니다. used_by 를 채워 주세요"
+
+
+def test_screen_shows_where_each_value_is_used(env):
+    html = login(env, "admin").get(f"/org/settings?org={env['ga']}").text
+    assert html.count("이 값이 쓰이는 곳:") >= len(st.ITEMS)
+    assert st.NOT_WIRED in html
+    for it in st.ITEMS.values():
+        for u in it["used_by"]:
+            assert u["where"] in html
+    edit = login(env, "admin").get(f"/org/settings?org={env['ga']}&edit=board.manager_post").text
+    assert edit.count(st.NOT_WIRED) >= 2      # 표와 바꾸기 칸 둘 다

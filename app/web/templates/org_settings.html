@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% macro ymtxt(ym) %}{% if ym %}{{ ym[:4] }}년 {{ ym[4:]|int }}월{% endif %}{% endmacro %}
+{# 쓰이는 곳은 app/org/settings.py ITEMS 의 used_by 다. 비면 settings.NOT_WIRED 와 같은 글을 쓴다 #}
+{% macro usedtxt(used) %}이 값이 쓰이는 곳: {% if used %}{% for u in used %}{{ u.where }}{% if not loop.last %} · {% endif %}{% endfor %}{% else %}아직 연결되지 않음(결정 대기){% endif %}{% endmacro %}
 {% block body %}
 <p class="eyebrow">{{ ctx.role_ko }} · {{ SCOPES[ctx.scope] }} · 지금 값은 {{ ymtxt(now_ym) }} 기준</p>
 <h1 class="display">조직별 설정</h1>
@@ -37,6 +39,7 @@
 <section class="card" id="edit" style="margin-top:24px">
   <div class="k">{{ form.name }} 바꾸기</div>
   <p class="cap" style="margin:0">{{ form.help }} 지금 값은 {{ form.value_text }}이고 {{ form.src_text }}입니다.</p>
+  <p class="cap" style="margin:0">{{ usedtxt(form.used_by) }}</p>
   {% if form.can_edit %}
   <form class="stack" method="post" action="/org/settings#confirm" style="max-width:640px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
   <input type="hidden" name="org_id" value="{{ org_id }}"><input type="hidden" name="key" value="{{ form.key }}">
@@ -80,7 +83,8 @@
 {% for r in g.rows %}
 <tr><td class="strong" style="white-space:normal">{{ r.name }}
   <div class="sm-sub"><span>{{ r.src_text }}</span>{% if r.from_ym %}<span>{{ ymtxt(r.from_ym) }}부터</span>{% endif %}</div>
-  <div class="cap" style="margin:4px 0 0">{{ r.help }}{% if not r.used_by %} 값만 저장하고 아직 화면에 쓰지 않습니다.{% endif %}</div>
+  <div class="cap" style="margin:4px 0 0">{{ r.help }}</div>
+  <div class="cap" style="margin:2px 0 0">{{ usedtxt(r.used_by) }}</div>
   {% if r.locked_text or r.main_only or r.upcoming %}<div class="chips" style="margin-top:6px">
     {% if r.locked_text %}<span class="chip warn">{{ r.locked_text }}</span>{% endif %}
     {% if r.main_only %}<span class="chip">메인 관리자만</span>{% endif %}

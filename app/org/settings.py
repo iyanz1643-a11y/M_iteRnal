@@ -44,37 +44,55 @@ class SettingDenied(PermissionError):
 # ---------------------------------------------------------------- 항목
 # kind: bool / int / multi(choices 의 부분집합) / courses(교육 과정 번호 목록)
 # merge: override(아래가 덮어씀) / union(아래가 더함)
-# main_only: 관리자는 바꾸지 못한다.  used_by: 값을 읽는 곳. 비면 아직 값만 저장한다
+# main_only: 관리자는 바꾸지 못한다.
+# used_by: 값을 읽는 곳의 목록. 줄마다 where(화면에 보일 사람 말), file(저장소 기준 파일), reads(그 파일에서 키를 읽는 이름)다.
+#   reads 는 키 글자 그대로이거나, 그 파일에서 키 글자로 풀리는 이름이다. 알림 켜고 끄기는 notify_off 가 NOTIFY_KINDS 로 읽는다.
+#   tests/test_org_settings.py 가 코드 검색으로 reads 가 그 파일에 있고 그 키로 풀리는지 본다.
+#   비면 아직 값만 저장하고 어디서도 읽지 않는다. 화면에는 "아직 연결되지 않음(결정 대기)" 으로 보인다.
 NOTIFY_KINDS = ["promo_new", "promo_due", "tier_near", "edu_due", "inst13_due", "board_new"]
 HOME_CARDS = {"promos": "마감이 가까운 프로모션", "my_rank": "내 순위", "goal": "목표", "team_top": "인정보험료 상위"}
+NOT_WIRED = "아직 연결되지 않음(결정 대기)"
+
+
+def _use(where: str, file: str, reads: str) -> dict:
+    return {"where": where, "file": file, "reads": reads}
+
+
+_NOTIFY = "app/web/routes/notify.py"
+_PROMO = "app/web/routes/promo.py"
+_EDU_ENGINE = "app/engine/education.py"
+_INBOX = [_use("알림함", _NOTIFY, "org_settings.notify_off")]
 
 ITEMS: dict[str, dict] = {
     "notify.promo_new": {"group": "알림", "name": "새 프로모션 알림", "kind": "bool", "default": True,
-                         "help": "게시된 프로모션을 알림함에 띄웁니다.", "used_by": "알림함"},
+                         "help": "게시된 프로모션을 알림함에 띄웁니다.", "used_by": _INBOX},
     "notify.promo_due": {"group": "알림", "name": "마감 임박 알림", "kind": "bool", "default": True,
-                         "help": "프로모션 마감이 가까우면 알림함에 띄웁니다.", "used_by": "알림함"},
+                         "help": "프로모션 마감이 가까우면 알림함에 띄웁니다.", "used_by": _INBOX},
     "notify.tier_near": {"group": "알림", "name": "구간 근접 알림", "kind": "bool", "default": True,
-                         "help": "다음 구간까지 가까워지면 알림함에 띄웁니다.", "used_by": "알림함"},
+                         "help": "다음 구간까지 가까워지면 알림함에 띄웁니다.", "used_by": _INBOX},
     "notify.edu_due": {"group": "알림", "name": "교육 기한 알림", "kind": "bool", "default": True,
-                       "help": "필수 과정의 기한이 가까우면 알림함에 띄웁니다.", "used_by": "알림함"},
+                       "help": "필수 과정의 기한이 가까우면 알림함에 띄웁니다.", "used_by": _INBOX},
     "notify.inst13_due": {"group": "알림", "name": "13회차 도래 알림", "kind": "bool", "default": True,
-                          "help": "이번 주 13회차 납입일이 오는 계약의 건수를 알림함에 띄웁니다.", "used_by": "알림함"},
+                          "help": "이번 주 13회차 납입일이 오는 계약의 건수를 알림함에 띄웁니다.", "used_by": _INBOX},
     "notify.board_new": {"group": "알림", "name": "새 공지 알림", "kind": "bool", "default": True,
-                         "help": "새 공지를 알림함에 띄웁니다.", "used_by": "알림함"},
+                         "help": "새 공지를 알림함에 띄웁니다.", "used_by": _INBOX},
     "notify.promo_due_days": {"group": "알림", "name": "마감 임박 알림 날짜 수", "kind": "int", "default": 3, "min": 1, "max": 14, "unit": "일",
-                              "help": "마감 며칠 전부터 마감 임박으로 띄울지 정합니다.", "used_by": ""},
+                              "help": "마감 며칠 전부터 마감 임박으로 띄울지 정합니다.", "used_by": [_use("알림함의 프로모션 마감 임박", _NOTIFY, "org_values.DUE_DAYS_KEY")]},
     "notify.edu_due_days": {"group": "알림", "name": "교육 기한 임박 날짜 수", "kind": "int", "default": 7, "min": 1, "max": 30, "unit": "일",
-                            "help": "기한 며칠 전부터 임박으로 볼지 정합니다.", "used_by": ""},
+                            "help": "기한 며칠 전부터 임박으로 볼지 정합니다.", "used_by": [_use("교육 기한 임박 판정: 내 교육, 팀 교육 진척도, 신인 정착, 일정, 알림함의 교육 기한", _EDU_ENGINE, "SOON_KEY"),
+                                         _use("내 교육과 팀 교육 진척도의 임박 안내 문구", "app/web/routes/edu.py", "org_values.EDU_DAYS_KEY"),
+                                         _use("신인 정착의 임박 안내 문구", "app/web/routes/team.py", "org_values.EDU_DAYS_KEY")]},
     "promo.near_pct": {"group": "프로모션", "name": "구간 근접 비율", "kind": "int", "default": 30, "min": 5, "max": 50, "unit": "%",
-                       "help": "다음 구간까지 남은 양이 문턱의 이 비율 안에 들면 구간 근접으로 봅니다.", "used_by": ""},
+                       "help": "다음 구간까지 남은 양이 문턱의 이 비율 안에 들면 구간 근접으로 봅니다.", "used_by": [_use("프로모션 달성 현황의 구간 근접", _PROMO, "org_values.NEAR_KEY"),
+                                    _use("알림함의 구간 근접", _NOTIFY, "org_values.NEAR_KEY")]},
     "award.default_top_n": {"group": "조직 부문 시상", "name": "기본 선발 인원", "kind": "int", "default": 3, "min": 1, "max": 20, "unit": "명",
-                            "help": "새 부문을 만들 때 선발 인원 칸에 미리 넣는 값입니다. 부문마다 바꿀 수 있습니다.", "used_by": ""},
+                            "help": "새 부문을 만들 때 선발 인원 칸에 미리 넣는 값입니다. 부문마다 바꿀 수 있습니다.", "used_by": [_use("조직 부문 시상의 새 부문 선발 인원", _PROMO, "org_values.TOP_N_KEY")]},
     "home.cards": {"group": "홈", "name": "홈에 보일 카드", "kind": "multi", "default": list(HOME_CARDS), "choices": HOME_CARDS,
-                   "help": "홈 화면에 보일 카드를 고릅니다.", "used_by": ""},
+                   "help": "홈 화면에 보일 카드를 고릅니다.", "used_by": [_use("홈 화면의 카드", "app/web/routes/home.py", "org_values.HOME_KEY")]},
     "edu.extra_required": {"group": "교육", "name": "필수 과정 추가", "kind": "courses", "merge": "union", "default": [],
-                           "help": "이 조직과 그 아래에 필수로 더할 과정입니다. 위 조직이 더한 과정은 아래에서 뺄 수 없습니다.", "used_by": ""},
+                           "help": "이 조직과 그 아래에 필수로 더할 과정입니다. 위 조직이 더한 과정은 아래에서 뺄 수 없습니다.", "used_by": [_use("필수 과정 판정: 내 교육, 팀 교육 진척도, 신인 정착, 일정, 알림함의 교육 기한", _EDU_ENGINE, "EXTRA_KEY")]},
     "board.manager_post": {"group": "공지", "name": "관리자 공지 올리기", "kind": "bool", "default": False, "main_only": True,
-                           "help": "관리자가 자기 조직에 공지를 올리게 합니다. 지금은 메인 관리자만 올립니다.", "used_by": ""},
+                           "help": "관리자가 자기 조직에 공지를 올리게 합니다. 지금은 메인 관리자만 올립니다.", "used_by": []},
 }
 GROUP_ORDER = ["알림", "프로모션", "조직 부문 시상", "홈", "교육", "공지"]
 

@@ -675,3 +675,226 @@ def test_row_reads_like_sqlite_row():
 def test_scan_lists_sqlite_only_syntax():
     found = {name: n for name, n, _, _ in sqlcompat.scan()}
     assert found["INTEGER PRIMARY KEY 번호 칸"] > 50 and found["lastrowid"] > 0 and "INSERT OR REPLACE" in found
+
+
+# ---------------------------------------------------------------- 초기 비밀번호
+def test_temp_password_always_meets_the_password_rule():
+    from app.web.invite import password_error
+    for login_id in ("", "23", "ab", "A12345"):
+        for _ in range(1500):
+            pw = auth.temp_password(login_id)
+            assert password_error(pw, pw, login_id) is None, "초기 비밀번호가 비밀번호 규칙에 맞지 않는다"
+            assert len(pw) == auth.TEMP_PW_LEN and set(pw) <= set(auth.TEMP_PW_CHARS)
+
+
+def test_issued_and_reset_passwords_meet_the_rule(jdb):
+    from app.web.invite import password_error
+    auth.seed_accounts(jdb, PW)
+    u = jdb.execute("SELECT user_id, login_id FROM user_account WHERE agent_id IS NOT NULL LIMIT 1").fetchone()
+    for _ in range(200):
+        pw = auth.reset_password(jdb, u["user_id"])
+        assert password_error(pw, pw, u["login_id"]) is None
+    jdb.execute("DELETE FROM user_account WHERE user_id=?", (u["user_id"],))
+    aid = jdb.execute("SELECT agent_id FROM agent WHERE status='active' AND agent_id NOT IN (SELECT agent_id FROM user_account WHERE agent_id IS NOT NULL) LIMIT 1").fetchone()
+    login_id, pw = auth.issue_account(jdb, aid[0])
+    assert password_error(pw, pw, login_id) is None
+    jdb.rollback()
+
+
+# ---------------------------------------------------------------- 정산서와 유지율 작업
+@pytest.fixture(scope="module")
+def demo(tmp_path_factory):
+    """run_demo 샘플을 한 번 만든다. 시험마다 sdb 가 복사본을 쓴다."""
+    import run_demo
+    tmp = tmp_path_factory.mktemp("platform_settle")
+    keys = ("CONNECT_DATA_DIR", "CONNECT_STATE_DIR", "CONNECT_STATE_DB", "APP_UPLOAD_DIR")
+    old = {k: os.environ.get(k) for k in keys}
+    os.environ.update(CONNECT_DATA_DIR=str(tmp / "data"), CONNECT_STATE_DIR=str(tmp / "state"),
+                      CONNECT_STATE_DB=str(tmp / "state.db"), APP_UPLOAD_DIR=str(tmp / "up"))
+    try:
+        run_demo.main(tmp / "demo.db", tmp / "raw")
+    finally:
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    con = db.connect(tmp / "demo.db")
+    con.execute("UPDATE user_account SET password_hash=?, must_change_password=0, failed_count=0, locked_until=NULL", (auth.hash_password(PW),))
+    con.commit()
+    con.close()
+    return {"tmp": tmp, "db": tmp / "demo.db", "raw": tmp / "raw"}
+
+
+@pytest.fixture()
+def sdb(demo, tmp_path, monkeypatch):
+    import shutil
+    path = tmp_path / "s.db"
+    shutil.copy(demo["db"], path)
+    monkeypatch.setenv("APP_DB", str(path))
+    monkeypatch.setenv("CONNECT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("CONNECT_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("CONNECT_STATE_DB", str(tmp_path / "state.db"))
+    monkeypatch.setenv("APP_UPLOAD_DIR", str(tmp_path / "up"))
+    con = db.connect(path)
+    cur = auth.current_ym(con)
+    ym = [m for (m,) in con.execute("SELECT DISTINCT period_ym FROM calc_run WHERE run_type='commission' AND status='done' ORDER BY 1 DESC") if m != cur][0]
+    yield {"con": con, "path": path, "ym": ym, "tmp": tmp_path, "raw": demo["raw"]}
+    con.close()
+
+
+def _statement_files(s):
+    from app import samples
+    files, _ = samples.write_statement_files(s["con"], s["ym"], s["tmp"] / "stmt_raw")
+    return files
+
+
+def _put(name, data):
+    get_storage().put_at("uploads", f"settle_test/{name}", data)
+    return f"settle_test/{name}"
+
+
+def test_ingest_checks_statement_params(sdb):
+    con = sdb["con"]
+    key = _put("a.xlsx", b"x")
+    for params in ({"area": "uploads", "key": key, "kind": "statement", "ym": sdb["ym"]},                    # 보험사 없음
+                   {"area": "uploads", "key": key, "kind": "statement", "insurer": "SAM"},                    # 귀속월 없음
+                   {"area": "uploads", "key": key, "kind": "persistency", "ym": "2026"},
+                   {"area": "uploads", "key": key, "kind": "statement", "ym": sdb["ym"], "insurer": "../x"},
+                   {"area": "uploads", "key": "settle_test/none.xlsx", "kind": "persistency", "ym": sdb["ym"]}):
+        with pytest.raises(jobs.JobError):
+            jobs.enqueue(con, "ingest", params)
+    with pytest.raises(jobs.JobError):
+        jobs.enqueue(con, "recon_run", {"ym": "20261"})
+    jid = jobs.enqueue(con, "ingest", {"area": "uploads", "key": key, "kind": "persistency", "ym": sdb["ym"], "insurer": "SAM"})
+    assert "insurer" not in jobs.get(con, jid)["params"]                   # 유지율에는 보험사를 두지 않는다
+    assert jobs.KIND_KO["recon_run"] == "대사 다시 돌리기"
+
+
+def test_statement_ingest_job_loads_and_queues_recon(sdb):
+    con, ym = sdb["con"], sdb["ym"]
+    f = _statement_files(sdb)[0]
+    lines = lambda: con.execute("SELECT COUNT(*) FROM commission_statement_line WHERE period_ym=?", (ym,)).fetchone()[0]   # noqa: E731
+    l0 = lines()
+    key = _put("statement.xlsx", f["path"].read_bytes())
+    jid = jobs.enqueue(con, "ingest", {"area": "uploads", "key": key, "kind": "statement", "ym": ym, "insurer": f["icode"], "by": "admin"}, by="admin")
+    j = jobs.run_one(con, "w")
+    assert j["job_id"] == jid and j["status"] == "done", j
+    r = j["result"]
+    assert r["status"] == "active" and r["rows"] > 0 and len(r["follow"]) == 1 and lines() > l0
+    follow = con.execute("SELECT kind, params, parent_id, status, requested_by FROM job WHERE job_id=?", (r["follow"][0],)).fetchone()
+    assert (follow["kind"], json.loads(follow["params"]), follow["parent_id"], follow["status"], follow["requested_by"]) == ("recon_run", {"ym": ym}, jid, "queued", "admin")
+    assert con.execute("SELECT COUNT(*) FROM audit_log WHERE action='statement_load' AND actor='admin'").fetchone()[0] == 1
+    rec = jobs.run_one(con, "w")
+    assert rec["kind"] == "recon_run" and rec["status"] == "done" and rec["result"]["status"] == "done", rec
+    run = con.execute("SELECT run_by, status FROM calc_run WHERE run_id=?", (rec["result"]["run_id"],)).fetchone()
+    assert (run["run_by"], run["status"]) == ("admin", "done")
+    assert con.execute("SELECT COUNT(*) FROM reconciliation_diff WHERE run_id=?", (rec["result"]["run_id"],)).fetchone()[0] == rec["result"]["diffs"]
+    # 결과와 작업 표에는 금액도 파일 이름도 없다
+    text = json.dumps([dict(x) for x in con.execute("SELECT result, error FROM job")], ensure_ascii=False)
+    assert "statement.xlsx" not in text and "amount" not in text
+    # 같은 파일을 다시 넣으면 다시 해도 같으므로 실패 없이 duplicate 로 끝난다
+    jobs.enqueue(con, "ingest", {"area": "uploads", "key": key, "kind": "statement", "ym": ym, "insurer": f["icode"]})
+    again = jobs.run_one(con, "w")
+    assert again["status"] == "done" and again["result"] == {"status": "duplicate"} and jobs.run_one(con, "w") is None
+
+
+def test_closed_month_is_neither_loaded_nor_reconciled(sdb):
+    con, ym = sdb["con"], sdb["ym"]
+    f = _statement_files(sdb)[1]
+    key = _put("statement2.xlsx", f["path"].read_bytes())
+    jobs.enqueue(con, "ingest", {"area": "uploads", "key": key, "kind": "statement", "ym": ym, "insurer": f["icode"]})
+    con.execute("INSERT OR REPLACE INTO close_period(period_ym, status, closed_at, closed_by) VALUES(?,?,?,?)", (ym, "closed", db.now(), "admin"))
+    con.commit()
+    b0 = con.execute("SELECT COUNT(*) FROM import_batch").fetchone()[0]
+    j = jobs.run_one(con, "w")                                              # 넣은 뒤에 마감했어도 처리할 때 다시 본다
+    assert j["status"] == "done" and j["result"] == {"status": "closed"}
+    assert con.execute("SELECT COUNT(*) FROM import_batch").fetchone()[0] == b0
+    jobs.enqueue(con, "recon_run", {"ym": ym})
+    assert jobs.run_one(con, "w")["result"] == {"status": "closed"}
+    assert jobs.run_one(con, "w") is None                                   # 뒤따르는 대사가 없다
+    # 정산서가 없는 달은 대사를 돌리지 않는다
+    jobs.enqueue(con, "recon_run", {"ym": "202001"})
+    assert jobs.run_one(con, "w")["result"] == {"status": "no_statement"}
+
+
+def test_persistency_ingest_job_has_no_recon(sdb):
+    import openpyxl
+    con, ym = sdb["con"], sdb["ym"]
+    src = sdb["raw"] / "internal" / ym / f"{ym}_유지율현황.xlsx"
+    wb = openpyxl.load_workbook(src)
+    wb.active["A1"] = f"{wb.active['A1'].value} 다시 받음"                    # 같은 내용의 다른 파일
+    out = sdb["tmp"] / "p.xlsx"
+    wb.save(out)
+    key = _put("persistency.xlsx", out.read_bytes())
+    b0 = con.execute("SELECT COUNT(*) FROM import_batch WHERE data_type='persistency'").fetchone()[0]
+    jobs.enqueue(con, "ingest", {"area": "uploads", "key": key, "kind": "persistency", "ym": ym})
+    j = jobs.run_one(con, "w")
+    assert j["status"] == "done" and j["result"]["status"] == "active" and j["result"]["rows"] > 0 and j["result"]["follow"] == []
+    assert con.execute("SELECT COUNT(*) FROM import_batch WHERE data_type='persistency'").fetchone()[0] == b0 + 1
+    assert jobs.run_one(con, "w") is None
+
+
+def test_worker_command_line_takes_statement_insurer(sdb, capsys):
+    from app import worker
+    f = _statement_files(sdb)[0]
+    key = _put("cli.xlsx", f["path"].read_bytes())
+    base = ["--db", str(sdb["path"]), "enqueue", "ingest", "--area", "uploads", "--key", key, "--kind", "statement", "--ym", sdb["ym"]]
+    assert worker.main(base) == 1                                          # 보험사 코드가 없다
+    assert worker.main([*base, "--insurer", f["icode"]]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["params"]["insurer"] == f["icode"] and out["status"] == "queued"
+
+
+def _settle_client(sdb):
+    from app.web.main import app
+    c = Client(app, follow_redirects=False)
+    assert c.post("/login", data={"login_id": "admin", "password": PW}).status_code == 303
+    return c
+
+
+def test_statement_screen_sends_big_files_to_jobs(sdb, monkeypatch):
+    from app.web.routes import settle
+    con, ym = sdb["con"], sdb["ym"]
+    f = _statement_files(sdb)[0]
+    data = f["path"].read_bytes()
+    c = _settle_client(sdb)
+    form = {"action": "preview", "kind": "statement", "insurer": f["icode"], "ym": ym}
+    up = lambda: {"file": ("statement.xlsx", data, "application/octet-stream")}   # noqa: E731
+    b0 = con.execute("SELECT COUNT(*) FROM import_batch").fetchone()[0]
+    monkeypatch.setattr(settle, "MAX_BYTES", len(data) - 1)
+    r = c.post("/data/statement", data=form, files=up())
+    assert r.status_code == 400 and "너무 큽니다" in r.text
+    monkeypatch.setattr(settle, "MAX_BYTES", len(data) + 10)
+    monkeypatch.setattr(settle, "INLINE_BYTES", len(data) - 1)
+    assert c.post("/data/statement", data=form, files=up(), with_csrf=False).status_code == 403
+    r = c.post("/data/statement", data=form, files=up())
+    assert r.status_code == 303 and r.headers["location"] == "/data/jobs?added=1"
+    assert con.execute("SELECT COUNT(*) FROM import_batch").fetchone()[0] == b0           # 요청 안에서는 넣지 않았다
+    job = jobs.recent(con, 1)[0]
+    assert (job["kind"], job["status"], job["requested_by"]) == ("ingest", "queued", "admin")
+    assert {k: job["params"][k] for k in ("area", "kind", "ym", "insurer")} == {"area": "uploads", "kind": "statement", "ym": ym, "insurer": f["icode"]}
+    page = c.get("/data/jobs")
+    assert page.status_code == 200 and "큰 적재" in page.text
+    done = jobs.drain(con, "w")
+    assert [j["kind"] for j in done] == ["ingest", "recon_run"] and all(j["status"] == "done" for j in done)
+    assert done[0]["result"]["status"] == "active" and done[1]["result"]["status"] == "done"
+    assert con.execute("SELECT COUNT(*) FROM import_batch").fetchone()[0] == b0 + 1
+    # 관리자와 설계사는 정산서 올리기를 쓰지 못한다
+    agent = con.execute("SELECT internal_code FROM agent WHERE agent_id NOT IN (SELECT agent_id FROM org_manager) AND status='active' LIMIT 1").fetchone()[0]
+    a = Client(c.app, follow_redirects=False)
+    assert a.post("/login", data={"login_id": agent, "password": PW}).status_code == 303
+    assert a.post("/data/statement", data=form, files=up()).status_code == 403
+
+
+def test_small_statement_loads_in_request_and_queues_recon(sdb):
+    con, ym = sdb["con"], sdb["ym"]
+    f = _statement_files(sdb)[0]
+    c = _settle_client(sdb)
+    r = c.post("/data/statement", data={"action": "preview", "kind": "statement", "insurer": f["icode"], "ym": ym},
+               files={"file": ("statement.xlsx", f["path"].read_bytes(), "application/octet-stream")})
+    assert r.status_code == 200 and "이대로 넣기" in r.text
+    assert not con.execute("SELECT 1 FROM job WHERE kind='recon_run'").fetchone()
+    assert c.post("/data/statement", data={"action": "load"}).status_code == 200
+    rows = con.execute("SELECT params, status FROM job WHERE kind='recon_run'").fetchall()
+    assert [(json.loads(x["params"]), x["status"]) for x in rows] == [({"ym": ym}, "queued")]

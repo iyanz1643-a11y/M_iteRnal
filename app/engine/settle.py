@@ -9,7 +9,7 @@ D-11 은 제안대로 둔 가정이다. 정산서 기준으로 점검하고, 요
 - 둘 다 없는 보험사는 나오지 않는다. 금액을 지어내지 않는다.
 - 지급은 환수가 아닌 줄의 합, 환수는 환수 줄의 합(음수), 순액은 둘의 합이다. v_agent_monthly_commission 과 같은 나눔이다.
 - 정산서는 적재 상태가 active 또는 loaded 인 배치만 읽는다. 대사(reconcile.run)와 같다.
-- 조정(adjustment)은 순액에 더하지 않는다. 조정을 그 달 지급에 넣는지는 마감을 웹으로 옮길 때 정한다.
+- 조정(adjustment)은 순액에 더하지 않는다. 마감을 엔진으로 옮긴 뒤에도 그 달 지급에 넣지 않는다. 넣을지는 돈 기준이라 정하지 않았다.
 
 D-23 초년도 지급 한도 점검은 규정 확인 전이라 넣지 않았다.
 D-17. 관리자용 함수는 없다. 수수료는 메인 관리자가 전체를, 설계사와 관리자는 본인만 본다. 화면은 본인 한 사람의 목록을 넘긴다.
@@ -23,7 +23,14 @@ agent_id 가 비어 있다. 그 줄은 unmapped=True 일 때만 든다. 메인 �
 - 처리한 뒤 차이 금액이 바뀌면 changed=True 다. 상태는 그대로 두고 화면이 알린다.
 - 처리는 메인 관리자만 하고 메모가 있어야 한다(docs/04 의 처리 흐름). 마감한 달은 처리할 수 없다.
 - 기존 도구의 reconciliation_diff.status(open, confirmed, adjusted, ignored)는 건드리지 않는다. legacy_status 로 함께 넘긴다.
-  두 상태를 하나로 합치는 일은 마감을 웹으로 옮길 때 정한다.
+  마감 조건은 recon_diff_action 한 가지로 본다. legacy_status 는 참고 건수로만 넘긴다.
+
+월 마감. close_check, close_month, reopen_month 가 웹과 기존 도구의 마감 규칙 한 곳이다. 마감 조건은 가정이다.
+- 막는 것: 차단 등급 품질 문제, 검토 대기 시상 공문, 정산서가 들어왔는데 대사를 돌리지 않음, 대사 뒤에 들어온 정산서,
+  처리하지 않은(open) 대사 차이.
+- 알리는 것: 보험사 문의(asked) 중인 차이, 처리한 뒤 금액이 바뀐 차이, 정산서가 없어 예상으로 남는 보험사, 정산서도 자체 계산도 없는 달.
+- 마감과 해제는 메인 관리자만 한다. 계정 표에서 다시 확인한다. 해제는 사유가 있어야 한다.
+- close_period 에 상태만 쓰고 audit_log 에 close, close_reopen 을 남긴다. 금액 묶음(snapshot)은 만들지 않는다.
 
 계약을 가리킬 때는 증권번호 끝 네 자리(policy_tail)만 넘긴다. 계약자 이름은 넘기지 않는다 (D-05).
 """
@@ -43,6 +50,7 @@ STATUS_KO = {"open": "미처리", "checked": "확인함", "asked": "보험사 �
 ACTIONS = ("checked", "asked", "resolved")
 SOURCE_KO = {"statement": "정산서", "calc": "자체 계산"}
 LIVE_BATCH = ("active", "loaded")
+REASON_MAX = 500                    # 해제 사유의 글자 수 상한. 웹 화면의 메모 상한과 같다
 BASIS_NOTE = ("정산서가 들어온 보험사는 정산서 금액입니다. 정산서가 아직 없고 요율표가 있는 보험사는 자체 계산이라 예상 금액입니다. "
               "환수는 음수이고 순액은 지급과 환수의 합입니다.")
 _STATEMENTS: list | None = None
@@ -362,3 +370,91 @@ def clawbacks(con, agent_ids, ym) -> dict:
     """그 달 환수 대상과 금액. agent_month 의 환수 줄만이다. {ym, note, estimated, total, lines}"""
     lines = [r for r in _month_lines(con, agent_ids, ym) if r["commission_type"] == "clawback"]
     return {"ym": ym, "note": BASIS_NOTE, "estimated": any(r["estimated"] for r in lines), "total": sum(r["amount"] for r in lines), "lines": lines}
+
+
+# ---------------------------------------------------------------- 월 마감
+def is_closed(con, ym) -> bool:
+    r = con.execute("SELECT status FROM close_period WHERE period_ym=?", (ym,)).fetchone()
+    return bool(r and r["status"] == "closed")
+
+
+def close_check(con, ym) -> dict:
+    """마감 조건. 막는 것(block)과 알리는 것(warn), 참고 건수. 가정이다. 규칙은 이 파일 머리말의 월 마감 절에 있다.
+
+    마감은 메인 관리자의 일이라 범위는 전체 설계사와 매핑되지 않은 줄이다.
+    돌려주는 것: {block: [문장], warn: [문장], counts: {open, checked, asked, resolved}, legacy_open, diff_total, statements, ran_at}
+    """
+    block, warn = [], []
+    n = con.execute("""SELECT COUNT(*) FROM quality_issue i JOIN import_batch b ON b.batch_id=i.batch_id
+                       WHERE b.period_ym=? AND b.status<>'superseded' AND i.severity='block' AND i.resolved=0""", (ym,)).fetchone()[0]
+    if n:
+        block.append(f"차단 등급 품질 문제 {n}건이 풀리지 않았습니다. 데이터 묶음의 품질검증에서 처리합니다.")
+    n = con.execute("SELECT COUNT(*) FROM incentive_source_doc WHERE period_ym=? AND extraction_status='extracted'", (ym,)).fetchone()[0]
+    if n:
+        block.append(f"검토를 기다리는 시상 공문 {n}건이 있습니다.")
+    loaded, rates = statement_insurers(con, ym), rate_insurers(con, ym)
+    everyone = [r[0] for r in con.execute("SELECT agent_id FROM agent")]
+    diffs = diff_list(con, everyone, ym, unmapped=True)
+    if loaded and diffs["run_id"] is None:
+        block.append("정산서가 들어왔지만 대사를 돌리지 않았습니다. 대사 화면에서 다시 돌리세요.")
+    elif diffs["run_id"] is not None:
+        stale = con.execute(f"""SELECT COUNT(*) FROM import_batch WHERE data_type='statement' AND period_ym=?
+                                AND status IN ({','.join('?' * len(LIVE_BATCH))}) AND COALESCE(loaded_at, received_at)>?""",
+                            (ym, *LIVE_BATCH, diffs["ran_at"] or "")).fetchone()[0]
+        if stale:
+            block.append(f"대사를 돌린 뒤에 들어온 정산서가 {stale}개 있습니다. 대사를 다시 돌리세요.")
+    c = diffs["counts"]
+    if c["open"]:
+        block.append(f"처리하지 않은 대사 차이 {c['open']}건이 있습니다. 조정 화면에서 확인함, 보험사 문의, 해결 가운데 하나로 처리합니다.")
+    if c["asked"]:
+        warn.append(f"보험사에 문의 중인 차이 {c['asked']}건이 있습니다. 마감해도 처리 기록은 남지만 마감한 달은 더 처리할 수 없습니다.")
+    changed = sum(1 for r in diffs["rows"] if r["changed"])
+    if changed:
+        warn.append(f"처리한 뒤 차이 금액이 바뀐 차이 {changed}건이 있습니다.")
+    missing = sorted(rates - set(loaded))
+    if missing:
+        warn.append(f"정산서가 아직 없는 보험사 {len(missing)}곳은 자체 계산이라 예상 금액으로 남습니다.")
+    if not loaded and not rates:
+        warn.append("이 달은 정산서도 자체 계산도 없습니다.")
+    legacy_open = sum(1 for r in diffs["rows"] if r["legacy_status"] == "open")
+    return {"block": block, "warn": warn, "counts": c, "legacy_open": legacy_open, "diff_total": sum(c.values()),
+            "statements": len(loaded), "ran_at": diffs["ran_at"]}
+
+
+def close_month(con, ym, by) -> dict:
+    """월 잠금. 메인 관리자만 한다. 이미 마감했거나 막는 조건이 남았으면 ValueError 다. 경고는 막지 않는다.
+
+    close_period 에 closed 를 쓰고 audit_log 에 close 를 남긴다. 금액 묶음(snapshot)은 만들지 않는다.
+    돌려주는 것: {ym, status, closed_at, closed_by, warn}
+    """
+    who = _require_main(con, by)
+    if is_closed(con, ym):
+        raise ValueError("이미 마감한 달입니다.")
+    check = close_check(con, ym)
+    if check["block"]:
+        raise ValueError("마감을 막는 일이 남아 있습니다. " + " ".join(check["block"]))
+    at = db.now()
+    con.execute("INSERT OR REPLACE INTO close_period(period_ym, status, closed_at, closed_by) VALUES(?,?,?,?)", (ym, "closed", at, who))
+    con.execute("INSERT INTO audit_log(at, actor, action, target, after_json) VALUES(?,?,?,?,?)",
+                (at, who, "close", ym, json.dumps({"via": "web"}, ensure_ascii=False)))
+    con.commit()
+    return {"ym": ym, "status": "closed", "closed_at": at, "closed_by": who, "warn": check["warn"]}
+
+
+def reopen_month(con, ym, by, reason) -> dict:
+    """월 잠금 해제. 메인 관리자만 하고 사유가 있어야 한다. 사유를 변경 기록에 남긴다. 마감한 시각과 사람은 지우지 않는다.
+    마감하지 않은 달, 빈 사유, REASON_MAX 자를 넘는 사유는 ValueError 다. 돌려주는 것: {ym, status, reopened_at, reopened_by, reason}"""
+    who = _require_main(con, by)
+    reason = (reason or "").strip()
+    if not is_closed(con, ym):
+        raise ValueError("마감하지 않은 달입니다.")
+    if not reason:
+        raise ValueError("해제 사유를 적어 주세요.")
+    if len(reason) > REASON_MAX:
+        raise ValueError(f"해제 사유는 {REASON_MAX}자까지 적습니다.")
+    at = db.now()
+    con.execute("UPDATE close_period SET status='open' WHERE period_ym=?", (ym,))
+    con.execute("INSERT INTO audit_log(at, actor, action, target, after_json) VALUES(?,?,?,?,?)",
+                (at, who, "close_reopen", ym, json.dumps({"reason": reason}, ensure_ascii=False)))
+    con.commit()
+    return {"ym": ym, "status": "open", "reopened_at": at, "reopened_by": who, "reason": reason}

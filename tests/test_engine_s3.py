@@ -433,3 +433,148 @@ def test_certification_readers_stay_in_scope(con):
     assert all(r["achieved"] is True for r in ach)
     assert certification.latest_status(con, []) == []
     assert certification.latest_status(con, scope, as_of_ym="190001") == []
+
+
+# ---------------------------------------------------------------- 월 마감
+def _close_state(con, ym=YM):
+    r = con.execute("SELECT status, closed_at, closed_by FROM close_period WHERE period_ym=?", (ym,)).fetchone()
+    return dict(r) if r else None
+
+
+def _clear_blocks(con, keep_open=0, asked=0):
+    """막는 조건을 푼다. 품질 문제와 시상 공문은 기존 도구에서 처리했다고 보고, 대사 차이는 웹 처리 상태로 처리한다.
+    keep_open 건은 미처리로 두고, 그다음 asked 건은 보험사 문의로 둔다."""
+    con.execute("UPDATE quality_issue SET resolved=1 WHERE severity='block'")
+    con.execute("UPDATE incentive_source_doc SET extraction_status='reviewed' WHERE extraction_status='extracted'")
+    con.commit()
+    rows = st.diff_list(con, everyone(con), YM, unmapped=True)["rows"]
+    assert len(rows) > keep_open + asked, "샘플에 대사 차이가 모자라다"
+    for i, r in enumerate(rows):
+        if i < keep_open:
+            continue
+        st.set_diff_status(con, r["diff_id"], "asked" if i < keep_open + asked else "checked", "확인", "admin")
+
+
+def test_close_blocks(con):
+    check = st.close_check(con, YM)
+    assert any("처리하지 않은 대사 차이" in b for b in check["block"])
+    with pytest.raises(ValueError):
+        st.close_month(con, YM, "admin")
+    assert _close_state(con) is None and con.execute("SELECT COUNT(*) FROM audit_log WHERE action='close'").fetchone()[0] == 0
+
+    # 미처리 차이가 하나만 남아도 막는다
+    _clear_blocks(con, keep_open=1)
+    check = st.close_check(con, YM)
+    assert len(check["block"]) == 1 and check["counts"]["open"] == 1
+    with pytest.raises(ValueError):
+        st.close_month(con, YM, "admin")
+
+    # 차단 등급 품질 문제와 검토 대기 시상 공문도 막는다
+    _clear_blocks(con)
+    assert st.close_check(con, YM)["block"] == []
+    batch = con.execute("SELECT batch_id FROM import_batch WHERE period_ym=? AND status<>'superseded' LIMIT 1", (YM,)).fetchone()[0]
+    con.execute("INSERT INTO quality_issue(batch_id, severity, check_code, message) VALUES(?, 'block', 'missing_column', '시험')", (batch,))
+    con.commit()
+    assert [b for b in st.close_check(con, YM)["block"] if "품질 문제 1건" in b]
+    with pytest.raises(ValueError):
+        st.close_month(con, YM, "admin")
+    con.execute("UPDATE quality_issue SET resolved=1")
+    con.execute("""INSERT INTO incentive_source_doc(period_ym, title, file_path, file_hash, received_at, extraction_status)
+                   VALUES(?, '시험', 'raw/test.pdf', 'test-close-hash', ?, 'extracted')""", (YM, db.now()))
+    con.commit()
+    assert [b for b in st.close_check(con, YM)["block"] if "시상 공문 1건" in b]
+    with pytest.raises(ValueError):
+        st.close_month(con, YM, "admin")
+    con.execute("UPDATE incentive_source_doc SET extraction_status='reviewed' WHERE file_hash='test-close-hash'")
+    con.commit()
+    assert st.close_check(con, YM)["block"] == []
+
+    # 대사를 돌린 뒤에 들어온 정산서가 있으면 막는다
+    ran_at = st.close_check(con, YM)["ran_at"]
+    con.execute("""UPDATE import_batch SET loaded_at=? WHERE batch_id=(SELECT MIN(batch_id) FROM import_batch
+                   WHERE data_type='statement' AND period_ym=? AND status IN ('active','loaded'))""", (ran_at + "Z", YM))
+    con.commit()
+    assert any("대사를 돌린 뒤에 들어온 정산서" in b for b in st.close_check(con, YM)["block"])
+    with pytest.raises(ValueError):
+        st.close_month(con, YM, "admin")
+    assert _close_state(con) is None
+
+
+def test_close_warns_but_does_not_block(con):
+    _clear_blocks(con, asked=1)
+    check = st.close_check(con, YM)
+    assert check["block"] == [] and check["counts"]["asked"] == 1
+    assert any("보험사에 문의 중인 차이" in w for w in check["warn"])
+    # 기존 도구의 reconciliation_diff.status 는 막지 않고 참고 건수로만 센다
+    assert check["legacy_open"] == check["diff_total"] > 0
+    done = st.close_month(con, YM, "admin")
+    assert done["status"] == "closed" and done["closed_by"] == "admin" and done["warn"] == check["warn"]
+    assert _close_state(con)["status"] == "closed"
+    log = con.execute("SELECT actor, after_json FROM audit_log WHERE action='close' AND target=?", (YM,)).fetchall()
+    assert len(log) == 1 and log[0]["actor"] == "admin" and json.loads(log[0]["after_json"]) == {"via": "web"}
+    with pytest.raises(ValueError):                              # 두 번 마감하지 않는다
+        st.close_month(con, YM, "admin")
+    # 정산서가 없는 보험사는 예상으로 남는다고 알린다
+    missing = st.rate_insurers(con, YM) - set(st.statement_insurers(con, YM))
+    assert bool(missing) == any("예상 금액" in w for w in check["warn"])
+
+
+def test_reopen_needs_reason(con):
+    with pytest.raises(ValueError):                              # 마감하지 않은 달
+        st.reopen_month(con, YM, "admin", "사유")
+    _clear_blocks(con)
+    st.close_month(con, YM, "admin")
+    before = _close_state(con)
+    for bad in ("", "   ", None, "가" * (st.REASON_MAX + 1)):
+        with pytest.raises(ValueError):
+            st.reopen_month(con, YM, "admin", bad)
+    assert _close_state(con)["status"] == "closed"
+    assert con.execute("SELECT COUNT(*) FROM audit_log WHERE action='close_reopen'").fetchone()[0] == 0
+    out = st.reopen_month(con, YM, {"role": "main", "login_id": "admin"}, "  보험사 정산서 재수신 ")
+    assert out["status"] == "open" and out["reason"] == "보험사 정산서 재수신"
+    after = _close_state(con)
+    assert after["status"] == "open" and (after["closed_at"], after["closed_by"]) == (before["closed_at"], before["closed_by"])
+    row = con.execute("SELECT actor, after_json FROM audit_log WHERE action='close_reopen' AND target=?", (YM,)).fetchone()
+    assert row["actor"] == "admin" and json.loads(row["after_json"])["reason"] == "보험사 정산서 재수신"
+    st.close_month(con, YM, "admin")                             # 해제한 달은 다시 마감할 수 있다
+    assert _close_state(con)["status"] == "closed"
+
+
+def test_close_and_reopen_are_main_only(con):
+    _clear_blocks(con)
+    other = non_main_login(con)
+    for by in (other, {"role": "manager", "login_id": "admin"}, {"role": "main", "login_id": other}, None, "no-such-login"):
+        with pytest.raises(PermissionError):
+            st.close_month(con, YM, by)
+    assert _close_state(con) is None
+    st.close_month(con, YM, "admin")
+    for by in (other, {"role": "manager", "login_id": "admin"}, "ui"):
+        with pytest.raises(PermissionError):
+            st.reopen_month(con, YM, by, "사유")
+    assert _close_state(con)["status"] == "closed"
+    assert con.execute("SELECT COUNT(*) FROM audit_log WHERE action IN ('close','close_reopen')").fetchone()[0] == 1
+
+
+def test_legacy_tool_does_not_close(con, tmp_path, monkeypatch):
+    """기존 도구(app/ui.py)의 마감 메뉴는 막는 조건이 없어도 close_period 와 audit_log 에 쓰지 않는다. 마감은 웹에서만 한다(총괄 결정, 가정)."""
+    from streamlit.testing.v1 import AppTest
+    _clear_blocks(con)
+    assert st.close_check(con, YM)["block"] == [], "조건이 풀린 상태에서 막혀야 시험이 된다"
+    real = db.connect
+    path = tmp_path / "t.db"
+    monkeypatch.setattr(db, "connect", lambda *a, **k: real(path))
+    ui = pathlib.Path(__file__).resolve().parent.parent / "app" / "ui.py"
+    at = AppTest.from_file(str(ui), default_timeout=60)
+    at.run()
+    at.sidebar.radio[0].set_value("마감").run()
+    at.sidebar.selectbox[0].set_value(YM).run()
+    assert not at.exception, "기존 도구의 마감 메뉴가 열리지 않는다"
+    assert any("/settle/close" in w.value and "메인 관리자" in w.value for w in at.warning)
+    btn = next(b for b in at.button if b.label == "마감 실행")
+    assert btn.disabled, "기존 도구의 마감 단추가 눌린다"     # 눌리지 않는 단추라 브라우저에서도 누를 수 없다
+    at.run()
+    assert not at.exception
+    assert con.execute("SELECT COUNT(*) FROM close_period").fetchone()[0] == 0
+    assert con.execute("SELECT COUNT(*) FROM audit_log WHERE action IN ('close','close_reopen')").fetchone()[0] == 0
+    import streamlit
+    streamlit.cache_resource.clear()

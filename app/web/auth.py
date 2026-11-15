@@ -143,8 +143,21 @@ def can_see_agent(ctx: dict, agent_id: int) -> bool:
     return agent_id in ctx["agent_ids"]
 
 
-def temp_password() -> str:
-    return "".join(secrets.choice(TEMP_PW_CHARS) for _ in range(TEMP_PW_LEN))
+def temp_password(login_id: str = "") -> str:
+    """초기 비밀번호. 비밀번호 규칙 app/web/invite.py 의 password_error 에 늘 맞는다.
+    영문과 숫자를 한 글자씩 먼저 넣고 나머지를 뽑아 섞는다. 그래도 규칙에 맞지 않으면(사번이 들어간 경우 같은) 다시 뽑는다."""
+    # invite 가 auth 를 불러 파일 위에서 부르지 않는다
+    from app.web.invite import password_error
+    letters = [c for c in TEMP_PW_CHARS if c.isalpha()]
+    digits = [c for c in TEMP_PW_CHARS if c.isdigit()]
+    rng = secrets.SystemRandom()
+    for _ in range(100):
+        chars = [rng.choice(letters), rng.choice(digits)] + [rng.choice(TEMP_PW_CHARS) for _ in range(TEMP_PW_LEN - 2)]
+        rng.shuffle(chars)
+        pw = "".join(chars)
+        if password_error(pw, pw, login_id) is None:
+            return pw
+    raise RuntimeError("초기 비밀번호를 만들지 못했습니다.")
 
 
 def issue_account(con, agent_id: int) -> tuple:
@@ -155,7 +168,7 @@ def issue_account(con, agent_id: int) -> tuple:
         raise ValueError("재직 중인 설계사가 아닙니다.")
     if con.execute("SELECT 1 FROM user_account WHERE agent_id=? OR login_id=?", (agent_id, a["internal_code"])).fetchone():
         raise ValueError("이미 계정이 있습니다.")
-    pw = temp_password()
+    pw = temp_password(a["internal_code"])
     con.execute("INSERT INTO user_account(login_id, password_hash, agent_id, display_name, must_change_password, created_at) VALUES(?,?,?,?,1,?)",
                 (a["internal_code"], hash_password(pw), agent_id, a["name"], db.now()))
     return a["internal_code"], pw
@@ -163,7 +176,8 @@ def issue_account(con, agent_id: int) -> tuple:
 
 def reset_password(con, user_id: int) -> str:
     """새 초기 비밀번호를 만들고 잠금을 풀며 첫 접속 때 바꾸게 한다. 커밋하지 않는다."""
-    pw = temp_password()
+    u = con.execute("SELECT login_id FROM user_account WHERE user_id=?", (user_id,)).fetchone()
+    pw = temp_password(u["login_id"] if u else "")
     con.execute("UPDATE user_account SET password_hash=?, must_change_password=1, failed_count=0, locked_until=NULL WHERE user_id=?",
                 (hash_password(pw), user_id))
     return pw

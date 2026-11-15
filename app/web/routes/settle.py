@@ -19,8 +19,8 @@ D-11 가정. 정산서가 들어온 보험사는 정산서 기준, 정산서가 
 D-23 초년도 지급 한도 점검은 규정 확인 전이라 넣지 않았다.
 D-05. 계약은 증권번호 끝 네 자리로만 가리킨다. 고객 이름은 엔진도 주지 않는다.
 
-마감. 엔진에 마감 함수가 없어 이 파일의 close_month, reopen_month 가 close_period 와 audit_log 에 쓴다. 기존 도구의 마감과 같은 표다.
-엔진에 마감 함수가 생기면 그것을 부르도록 바꾼다. 마감 조건(close_check)은 가정이다.
+마감. 조건과 쓰기는 엔진 settle.close_check, close_month, reopen_month 한 곳이다. 기존 도구도 같은 조건을 쓴다. 마감 조건은 가정이다.
+이 파일은 확인 칸과 오류 문구를 화면에 맞게 먼저 보고, 엔진이 메인 관리자와 막는 조건을 한 번 더 본다.
 - 대사 차이는 웹의 처리 상태(recon_diff_action)로 본다. 미처리가 하나라도 있으면 막는다. 보험사 문의는 막지 않고 경고한다.
 - 기존 도구의 reconciliation_diff.status 는 마감 판단에 쓰지 않고 참고 건수로만 보여 준다.
 - 그 달 정산서가 들어왔는데 대사를 돌리지 않았으면 막는다. 차단 등급 품질 문제와 검토 대기 시상 공문도 막는다. 기존 도구와 같다.
@@ -28,8 +28,9 @@ D-05. 계약은 증권번호 끝 네 자리로만 가리킨다. 고객 이름은
 - 조정(adjustment)은 그 달 지급에 넣지 않는다. 마감은 상태만 잠그고 금액 묶음(snapshot)은 만들지 않는다.
 
 정산서와 유지율 현황 올리기. 적재는 기존 적재기 excel_loader.load_statement, load_persistency 를 부른다.
-작업 워커의 큰 적재(ingest)는 연결 흐름의 원본 종류(계약현황, 시상안, 사원현황, 수료자 명부)만 받아 정산서와 유지율을 넣을 수 없다.
-그래서 지금은 요청 안에서 바로 넣는다. 파일은 20MB 까지 받는다. 워커에 두 종류가 생기면 넣기를 작업으로 바꾼다.
+INLINE_BYTES 이하 파일은 미리보기 뒤 요청 안에서 바로 넣는다. 그보다 크고 MAX_BYTES 이하인 파일은 미리보기 없이
+작업 워커의 큰 적재(ingest) 작업으로 넣고 /data/jobs 로 보낸다. 상태와 건수는 그 화면에서 본다. 적재기와 마감 확인은 같다.
+정산서를 넣으면 어느 쪽이든 그 달 대사 다시 돌리기(recon_run) 작업이 뒤따른다. 마감한 달이면 넣지 않는다. 규칙은 app/ops/jobs.py 다.
 미리보기는 DB 를 메모리에 복사해 같은 적재기를 돌리고 버린다. 그래서 미리보기와 넣기의 건수가 같다.
 미리보기와 결과에는 건수와 문제 종류, 줄 번호만 보인다. 적재기 메시지에는 금액이 섞일 수 있어 열 없음 말고는 싣지 않는다.
 """
@@ -49,6 +50,7 @@ from app.engine import reconcile
 from app.engine import settle as st
 from app.loader import excel_loader
 from app.loader.mapping import MAPPING_DIR
+from app.ops import jobs
 from app.web import auth
 from app.web.deps import get_con, guard, page
 from app.web.routes.perf import scope_ids
@@ -62,7 +64,9 @@ LINES_SHOW = 200                    # 한 화면에 그리는 줄의 상한. 넘
 DIFF_SHOW = 200
 NOTE_MAX = 500
 UPLOAD_KEY = "settle_upload"        # 세션에는 파일 표지, 종류, 보험사 코드, 귀속월, 파일 이름만 둔다
-MAX_BYTES = 20 * 1024 * 1024
+INLINE_BYTES = 20 * 1024 * 1024     # 이하면 미리보기 뒤 바로 넣는다
+MAX_BYTES = 100 * 1024 * 1024       # INLINE_BYTES 보다 크면 작업으로 넣는다. 이보다 크면 받지 않는다
+CHUNK = 1024 * 1024
 KIND_KO = {"statement": "원수사 정산서", "persistency": "유지율 현황"}
 BATCH_STATUS_KO = {"received": "받음", "active": "반영", "loaded": "반영", "failed": "실패", "superseded": "바뀜"}
 ISSUE_KO = {"missing_column": "필수 열 없음", "bad_value": "읽을 수 없는 값", "required_blank": "필수 값 없음", "total_mismatch": "파일 합계와 다름",
@@ -260,62 +264,6 @@ async def adjust_post(request: Request, ctx: dict = Depends(guard), con=Depends(
 
 
 # ---------------------------------------------------------------- 마감
-def close_check(con, ctx, ym) -> dict:
-    """마감 조건. 막는 것(block)과 알리는 것(warn), 참고 건수. 가정이다. 규칙은 이 파일 머리말에 있다."""
-    block, warn = [], []
-    n = con.execute("""SELECT COUNT(*) FROM quality_issue i JOIN import_batch b ON b.batch_id=i.batch_id
-                       WHERE b.period_ym=? AND b.status<>'superseded' AND i.severity='block' AND i.resolved=0""", (ym,)).fetchone()[0]
-    if n:
-        block.append(f"차단 등급 품질 문제 {n}건이 풀리지 않았습니다. 데이터 묶음의 품질검증에서 처리합니다.")
-    n = con.execute("SELECT COUNT(*) FROM incentive_source_doc WHERE period_ym=? AND extraction_status='extracted'", (ym,)).fetchone()[0]
-    if n:
-        block.append(f"검토를 기다리는 시상 공문 {n}건이 있습니다.")
-    loaded, rates = st.statement_insurers(con, ym), st.rate_insurers(con, ym)
-    diffs = st.diff_list(con, scope_ids(con, ctx), ym, unmapped=True)
-    if loaded and diffs["run_id"] is None:
-        block.append("정산서가 들어왔지만 대사를 돌리지 않았습니다. 대사 화면에서 다시 돌리세요.")
-    elif diffs["run_id"] is not None:
-        stale = con.execute(f"""SELECT COUNT(*) FROM import_batch WHERE data_type='statement' AND period_ym=?
-                                AND status IN ({','.join('?' * len(st.LIVE_BATCH))}) AND COALESCE(loaded_at, received_at)>?""",
-                            (ym, *st.LIVE_BATCH, diffs["ran_at"] or "")).fetchone()[0]
-        if stale:
-            block.append(f"대사를 돌린 뒤에 들어온 정산서가 {stale}개 있습니다. 대사를 다시 돌리세요.")
-    c = diffs["counts"]
-    if c["open"]:
-        block.append(f"처리하지 않은 대사 차이 {c['open']}건이 있습니다. 조정 화면에서 확인함, 보험사 문의, 해결 가운데 하나로 처리합니다.")
-    if c["asked"]:
-        warn.append(f"보험사에 문의 중인 차이 {c['asked']}건이 있습니다. 마감해도 처리 기록은 남지만 마감한 달은 더 처리할 수 없습니다.")
-    changed = sum(1 for r in diffs["rows"] if r["changed"])
-    if changed:
-        warn.append(f"처리한 뒤 차이 금액이 바뀐 차이 {changed}건이 있습니다.")
-    missing = sorted(rates - set(loaded))
-    if missing:
-        warn.append(f"정산서가 아직 없는 보험사 {len(missing)}곳은 자체 계산이라 예상 금액으로 남습니다.")
-    if not loaded and not rates:
-        warn.append("이 달은 정산서도 자체 계산도 없습니다.")
-    legacy_open = sum(1 for r in diffs["rows"] if r["legacy_status"] == "open")
-    return {"block": block, "warn": warn, "counts": c, "legacy_open": legacy_open, "diff_total": sum(c.values()),
-            "statements": len(loaded), "ran_at": diffs["ran_at"]}
-
-
-def close_month(con, ym, by) -> None:
-    """월 잠금. 엔진에 마감 함수가 없어 여기서 쓴다. 기존 도구와 같은 표에 같은 꼴로 남긴다."""
-    at = db.now()
-    con.execute("INSERT OR REPLACE INTO close_period(period_ym, status, closed_at, closed_by) VALUES(?,?,?,?)", (ym, "closed", at, by))
-    con.execute("INSERT INTO audit_log(at, actor, action, target, after_json) VALUES(?,?,?,?,?)",
-                (at, by, "close", ym, json.dumps({"via": "web"}, ensure_ascii=False)))
-    con.commit()
-
-
-def reopen_month(con, ym, by, reason) -> None:
-    """월 잠금 해제. 사유를 변경 기록에 남긴다. 마감한 시각과 사람은 지우지 않는다."""
-    at = db.now()
-    con.execute("UPDATE close_period SET status='open' WHERE period_ym=?", (ym,))
-    con.execute("INSERT INTO audit_log(at, actor, action, target, after_json) VALUES(?,?,?,?,?)",
-                (at, by, "close_reopen", ym, json.dumps({"reason": reason}, ensure_ascii=False)))
-    con.commit()
-
-
 def _close_history(con) -> list:
     rows = [dict(r) for r in con.execute(
         f"""SELECT l.at, l.actor, l.action, l.target, l.after_json, u.display_name FROM audit_log l LEFT JOIN user_account u ON u.login_id=l.actor
@@ -333,7 +281,7 @@ def _close_page(request, ctx, con, ym, *, ask=None, error=None, form=None, done=
     ym, yms = pick_ym(con, ctx, ym)
     row = closed_row(con, ym)
     closed = bool(row and row["status"] == "closed")
-    check = close_check(con, ctx, ym)
+    check = st.close_check(con, ym)
     ask = ask if ask in ("close", "reopen") else None
     if (ask == "close" and (closed or check["block"])) or (ask == "reopen" and not closed):
         ask = None
@@ -362,9 +310,16 @@ async def close_post(request: Request, ctx: dict = Depends(guard), con=Depends(g
             return _close_page(request, ctx, con, ym, error="이미 마감한 달입니다.", status_code=400)
         if form.get("agree") != "yes":
             return _close_page(request, ctx, con, ym, ask="close", error="되돌리기 어렵다는 것을 확인하는 칸에 표시해야 마감합니다.", status_code=400)
-        if close_check(con, ctx, ym)["block"]:
+        if st.close_check(con, ym)["block"]:
             return _close_page(request, ctx, con, ym, error="마감을 막는 일이 남아 있습니다. 아래 목록을 먼저 처리하세요.", status_code=400)
-        close_month(con, ym, ctx["login_id"])
+        try:
+            st.close_month(con, ym, ctx)
+        except PermissionError:
+            con.rollback()
+            _deny(con, ctx, request, action)
+        except ValueError as e:
+            con.rollback()
+            return _close_page(request, ctx, con, ym, error=str(e), status_code=400)
         return RedirectResponse(f"/settle/close?ym={ym}&done=close", status_code=303)
     reason = str(form.get("reason") or "").strip()
     if not is_closed(con, ym):
@@ -374,7 +329,14 @@ async def close_post(request: Request, ctx: dict = Depends(guard), con=Depends(g
     if len(reason) > NOTE_MAX:
         return _close_page(request, ctx, con, ym, ask="reopen", error=f"해제 사유는 {NOTE_MAX}자까지 적습니다.", form={"reason": reason[:NOTE_MAX]},
                            status_code=400)
-    reopen_month(con, ym, ctx["login_id"], reason)
+    try:
+        st.reopen_month(con, ym, ctx, reason)
+    except PermissionError:
+        con.rollback()
+        _deny(con, ctx, request, action)
+    except ValueError as e:
+        con.rollback()
+        return _close_page(request, ctx, con, ym, ask="reopen", error=str(e), form={"reason": reason[:NOTE_MAX]}, status_code=400)
     return RedirectResponse(f"/settle/close?ym={ym}&done=reopen", status_code=303)
 
 
@@ -499,16 +461,23 @@ async def _statement_preview(request, ctx, con, form):
     name = _safe_name(up.filename)
     if not name.endswith(".xlsx"):
         return fail("엑셀(xlsx) 파일만 받습니다.")
-    data = await up.read(MAX_BYTES + 1)
-    if len(data) > MAX_BYTES:
-        return fail("파일이 너무 큽니다. 20MB 까지 받습니다.")
-    _drop_upload((request.session.get(UPLOAD_KEY) or {}).get("token"))
-    request.session.pop(UPLOAD_KEY, None)
     token = secrets.token_urlsafe(24)
     d = upload_dir() / f"settle_{token}"
     d.mkdir(parents=True, exist_ok=True)
-    path = d / name
-    path.write_bytes(data)
+    path, size = d / name, 0
+    with open(path, "wb") as f:                         # 조각으로 받아 큰 파일도 메모리에 다 올리지 않는다
+        while chunk := await up.read(CHUNK):
+            size += len(chunk)
+            if size > MAX_BYTES:
+                break
+            f.write(chunk)
+    if size > MAX_BYTES:
+        _drop_upload(token)
+        return fail(f"파일이 너무 큽니다. {MAX_BYTES // 1024 // 1024}MB 까지 받습니다.")
+    _drop_upload((request.session.get(UPLOAD_KEY) or {}).get("token"))
+    request.session.pop(UPLOAD_KEY, None)
+    if size > INLINE_BYTES:
+        return _statement_enqueue(request, ctx, con, token, name, kind, code, ym, fail)
     try:
         pv = dry_run(con, path, kind, code if kind == "statement" else None, ym, ctx["login_id"])
     except excel_loader.DuplicateFile:
@@ -549,8 +518,24 @@ def _statement_load(request, ctx, con):
                 (db.now(), ctx["login_id"], "statement_load", f"batch:{res['batch_id']}",
                  json.dumps({"kind": kind, "insurer": code, "ym": ym, "rows": out["rows"], "block": out["block"], "warn": out["warn"]}, ensure_ascii=False)))
     con.commit()
+    if kind == "statement" and out["status"] != "failed":    # 작업으로 넣을 때와 같이 그 달 대사를 다시 돌리게 한다
+        jobs.enqueue(con, "recon_run", {"ym": ym}, by=ctx["login_id"])
     out.update(file=saved.get("file"), kind=kind, kind_ko=KIND_KO[kind], ym=ym)
     return _statement_page(request, ctx, con, result=out)
+
+
+def _statement_enqueue(request, ctx, con, token, name, kind, code, ym, fail):
+    """큰 파일. 미리보기 없이 큰 적재 작업으로 넣고 /data/jobs 로 보낸다. 파일은 업로드 구역에 남겨 워커가 읽는다."""
+    params = {"area": "uploads", "key": f"settle_{token}/{name}", "kind": kind, "ym": ym, "by": ctx["login_id"]}
+    if kind == "statement":
+        params["insurer"] = code
+    try:
+        jid = jobs.enqueue(con, "ingest", params, by=ctx["login_id"])
+    except jobs.JobError:
+        _drop_upload(token)
+        return fail("작업으로 넣지 못했습니다. 파일을 다시 올려 주세요.")
+    auth.log(con, ctx["login_id"], "job_enqueue", f"ingest:{jid}")
+    return RedirectResponse("/data/jobs?added=1", status_code=303)
 
 
 @router.post("/data/statement", response_class=HTMLResponse)

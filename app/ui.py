@@ -9,6 +9,7 @@ import streamlit as st
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from app import db  # noqa: E402
 from app.engine import career, certification, commission, incentive, payments, performance, persist, ranking, reconcile, results  # noqa: E402
+from app.engine import settle as settle_engine  # noqa: E402
 from app.loader import excel_loader, incentive_plan, pdf_incentive  # noqa: E402
 from app.org import levels as org_levels  # noqa: E402
 from app.periods import period_key, ym_add  # noqa: E402
@@ -16,6 +17,10 @@ from app.periods import period_key, ym_add  # noqa: E402
 st.set_page_config(page_title="GA 수수료·시상·업적관리", layout="wide")
 UPLOAD_DIR = db.ROOT / "data" / "raw" / "upload"
 PTYPE_KO = {"month": "월", "quarter": "분기", "half": "반기", "year": "연"}
+# 월 마감과 해제는 웹 /settle/close 에서 메인 관리자만 한다(총괄 결정, 가정). 이 도구에는 로그인이 없어 막는다.
+# 아래 마감 메뉴의 쓰는 코드는 지우지 않고 이 값으로만 막는다.
+UI_CLOSE_ALLOWED = False
+CLOSE_MOVED = "월 마감과 해제는 새 웹 화면 /settle/close 에서 메인 관리자가 합니다."
 CAT_KO = {"mdrt": "MDRT", "association_cert": "협회 인증", "insurer_cert": "원수사 인증", "executive_fc": "설계사 임원제도",
           "executive_manager": "관리자 임원제도", "award": "영업우수 · 명예의전당"}
 
@@ -507,19 +512,17 @@ elif page == "마감":
     st.title("월 마감")
     closed = is_closed(ym)
     st.write("상태:", "closed (마감됨)" if closed else "open")
-    blockers = []
-    n = q("SELECT COUNT(*) FROM quality_issue i JOIN import_batch b ON b.batch_id=i.batch_id WHERE b.period_ym=? AND i.severity='block' AND i.resolved=0", (ym,)).iloc[0, 0]
-    if n:
-        blockers.append(f"차단 등급 품질 이슈 {n}건 미해결 (데이터 수집 → 품질검증)")
-    n = q("SELECT COUNT(*) FROM reconciliation_diff d JOIN calc_run r ON r.run_id=d.run_id AND r.status='done' WHERE d.period_ym=? AND d.status='open'", (ym,)).iloc[0, 0]
-    if n:
-        blockers.append(f"미처리 대사 차이 {n}건 (점검 메뉴)")
-    n = q("SELECT COUNT(*) FROM incentive_source_doc WHERE period_ym=? AND extraction_status='extracted'", (ym,)).iloc[0, 0]
-    if n:
-        blockers.append(f"검토 대기 중인 시상 공문 {n}건 (데이터 수집 → 시상 공문 PDF)")
+    st.warning(CLOSE_MOVED)
+    st.info("아래 조건 점검은 참고입니다. 웹 화면과 같은 조건이고, 대사 차이는 이 도구의 상태가 아니라 웹 조정 화면의 처리 상태로 봅니다.")
+    check = settle_engine.close_check(con, ym)
+    blockers = check["block"]
+    if check["legacy_open"]:
+        st.caption(f"이 도구에서 open 인 대사 차이 {check['legacy_open']}건은 참고 건수이고 마감을 막지 않습니다.")
     for b in blockers:
         st.warning(b)
-    if st.button("마감 실행", disabled=bool(blockers) or closed):
+    for w in check["warn"]:
+        st.info(w)
+    if st.button("마감 실행", disabled=(not UI_CLOSE_ALLOWED) or bool(blockers) or closed) and UI_CLOSE_ALLOWED:
         con.execute("INSERT OR REPLACE INTO close_period(period_ym, status, closed_at, closed_by) VALUES(?,?,?,?)", (ym, "closed", db.now(), "ui"))
         con.execute("INSERT INTO audit_log(at, actor, action, target) VALUES(?,?,?,?)", (db.now(), "ui", "close", ym))
         con.commit()

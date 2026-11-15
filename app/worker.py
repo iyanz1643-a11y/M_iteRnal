@@ -2,8 +2,9 @@
 
     python -m app.worker                               # 멈출 때까지 처리한다. WORKER_INTERVAL 초마다 대기열을 본다
     python -m app.worker --once                        # 대기열이 빌 때까지 처리하고 끝낸다
-    python -m app.worker enqueue perf_run --ym 202610  # 작업을 넣는다. rank_run, notify_sweep, connect_watch, gdrive
+    python -m app.worker enqueue perf_run --ym 202610  # 작업을 넣는다. rank_run, recon_run, notify_sweep, connect_watch, gdrive
     python -m app.worker enqueue ingest --area raw --key contract/202610/<해시>_<이름> --kind contract --ym 202610
+    python -m app.worker enqueue ingest --area uploads --key <폴더>/<이름> --kind statement --insurer <보험사 코드> --ym 202610
     python -m app.worker status [--limit 20]           # 최근 작업의 번호, 종류, 상태, 건수
 
 DB 는 --db 또는 APP_DB, 없으면 data/demo.db 다. SIGTERM 을 받으면 하던 작업을 마치고 끝낸다.
@@ -68,7 +69,8 @@ def cmd_run(a) -> int:
 def cmd_enqueue(a) -> int:
     con = _con(a.db)
     try:
-        params = {k: v for k, v in (("ym", a.ym), ("area", a.area), ("key", a.key), ("kind", a.source_kind), ("title", a.title)) if v}
+        params = {k: v for k, v in (("ym", a.ym), ("area", a.area), ("key", a.key), ("kind", a.source_kind),
+                                                ("insurer", a.insurer), ("title", a.title)) if v}
         try:
             job_id = jobs.enqueue(con, a.kind, params, by=a.by)
         except jobs.JobError as e:
@@ -105,7 +107,8 @@ def main(argv=None) -> int:
     p.add_argument("--ym")
     p.add_argument("--area", choices=["raw", "uploads"])
     p.add_argument("--key")
-    p.add_argument("--kind", dest="source_kind", help="ingest 의 원본 종류: contract, plan, employee, edu_roster")
+    p.add_argument("--kind", dest="source_kind", help="ingest 의 원본 종류: contract, plan, employee, edu_roster, statement, persistency")
+    p.add_argument("--insurer", help="ingest 정산서의 보험사 코드")
     p.add_argument("--title")
     p.add_argument("--by", default="cli")
     p.add_argument("--db", default=argparse.SUPPRESS)
