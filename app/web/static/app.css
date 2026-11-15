@@ -485,3 +485,30 @@ details.wt summary{cursor:pointer;font-weight:600;padding:13px 0;line-height:22p
 details.wt.off{opacity:.5}
 details.wt[open]{padding-bottom:12px}
 #roster,#inst13,#inst13-confirm,#revoke,#history,#window-tiers{scroll-margin-top:72px}
+
+/* ---------- 영업·제안과 팀 코칭, 상담 신청 랜딩 (web-screen, S4 파트 J) */
+#lead,#customer,#form,#new,#regions,#handover,#add,#people,#act{scroll-margin-top:72px}
+form.assign-form{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin:0 0 6px}
+form.assign-form:last-child{margin-bottom:0}
+form.assign-form select{width:auto;max-width:240px;min-width:0}
+form.assign-form button.ghost,td.acts button.ghost{min-height:48px;padding:0 16px;border-width:2px 0;margin:0}
+td.acts a.ghost{padding:0 16px}
+.draft-mark{margin-bottom:28px}
+form.sec-act{margin:clamp(40px,6vw,64px) 0 16px}
+.consult-card{margin-top:28px;max-width:720px}
+.consult .hp{position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden}
+fieldset.consent{border:none;margin:0;padding:16px 18px;border-radius:16px;background:var(--bg);min-width:0}
+fieldset.consent legend{float:left;width:100%;font-weight:700;font-size:16px;margin:0 0 4px;padding:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+fieldset.consent ul.notes{clear:both;margin:8px 0 12px}
+label.consent-check{display:flex;gap:10px;align-items:center;min-height:48px;font-weight:600;cursor:pointer;word-break:keep-all}
+.consent-check input{width:22px;height:22px;flex:none;margin:0;accent-color:var(--blue)}   /* 누르는 곳은 48픽셀 이상인 label 전체다 */
+.consult button.primary{width:100%;max-width:360px}
+@media (max-width:760px){
+  form.assign-form{flex-direction:column;align-items:stretch}
+  form.assign-form select{max-width:none;width:100%}
+  table.assign td.acts{min-width:150px}
+  .block-head.sales-head{flex-direction:column;align-items:stretch;gap:0}
+  .sales-head form.sec-act{margin:0 0 16px}
+  .sales-head form.sec-act button{width:100%}
+  .consult button.primary{max-width:none}
+}

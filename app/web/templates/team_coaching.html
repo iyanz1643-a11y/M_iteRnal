@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{# 면담 기록. 관리자가 범위 안 팀원의 면담 날짜, 약속 사항, 다음 면담을 남긴다. 본인은 빠진다. 금액은 없다.
+   색은 상태: 다음 면담이 지나면 빨강, 임박이면 주황, 기록 없음은 회색 #}
+{% macro state_chip(m) %}{% if m.state == 'over' %}<span class="chip bad">{{ -m.left }}일 지남</span>{% elif m.state == 'soon' %}<span class="chip warn">{{ '오늘' if m.left == 0 else m.left ~ '일 뒤' }}</span>{% elif m.state == 'later' %}<span class="chip">{{ m.last.next_on|md }}</span>{% else %}<span class="chip">정하지 않음</span>{% endif %}{% endmacro %}
+{% block body %}
+<p class="eyebrow">팀 관리 · {{ SCOPES[ctx.scope] }} · 오늘 {{ day|md }}</p>
+<h1 class="display">면담 기록</h1>
+<p class="lede">팀원별 면담 날짜와 약속 사항을 남기고 다음 면담을 챙깁니다. 다음 면담이 {{ DUE_DAYS }}일 안이면 알림함에 뜹니다.</p>
+{% if flash %}<div class="{{ 'okmsg' if flash.kind == 'ok' else 'alert bad' }}" role="status" style="margin-top:24px">{{ flash.text }}</div>{% endif %}
+
+<div class="grid g3 keep" style="margin-top:32px">
+  <div class="card"><div class="k">지남</div><div class="mid">{{ n_over }}<span class="unit">명</span></div></div>
+  <div class="card"><div class="k">임박</div><div class="mid">{{ n_soon }}<span class="unit">명</span></div></div>
+  <div class="card"><div class="k">기록 없음</div><div class="mid">{{ n_none }}<span class="unit">명</span></div></div>
+</div>
+
+{% if picked %}
+<article class="card board-open" id="form" style="margin-top:20px">
+  <div class="notif-meta"><span>{{ picked.org or '-' }}</span><span>{{ picked.code }}</span>{{ state_chip(picked) }}</div>
+  <h2 class="confirm-title board-title">{{ picked.name }}</h2>
+  <form class="wide" method="post" action="{{ path }}"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="action" value="add"><input type="hidden" name="agent_id" value="{{ picked.agent_id }}">
+    <div class="frow">
+      <label class="f">면담 날짜<input type="date" name="met_on" value="{{ day }}" max="{{ day }}" required></label>
+      <label class="f">다음 면담<input type="date" name="next_on" min="{{ day }}"></label>
+    </div>
+    <label class="f">약속 사항 · {{ PROMISE_MAX }}자까지<textarea name="promises" rows="3" maxlength="{{ PROMISE_MAX }}" placeholder="예: 이번 주 통화 20건, 금요일까지 보수교육 수료"></textarea></label>
+    <div class="actions"><button class="primary" type="submit">남기기</button><a class="pill quiet big-pill" href="{{ path }}">닫기</a></div>
+  </form>
+  <h3 class="subsec">지난 면담 {{ picked.history|length }}건</h3>
+  {% if picked.history %}<div class="notif-list" style="padding:0">{% for h in picked.history %}
+    <div class="notif"><span class="dot off"></span><div class="notif-main"><div class="notif-meta"><span>{{ h.met_on|md }}</span><span>{{ h.manager_name or '-' }}</span>{% if h.next_on %}<span>다음 {{ h.next_on|md }}</span>{% endif %}</div>
+      <div class="notif-body board-body" style="font-size:15px;margin-top:4px">{{ h.promises or '약속 사항을 적지 않았습니다' }}</div></div></div>{% endfor %}</div>
+  {% else %}<p class="cap">아직 남긴 면담이 없습니다.</p>{% endif %}
+</article>
+{% endif %}
+
+<h2 class="sec">팀원 {{ members|length }}명</h2>
+{% if members %}
+<div class="card tablecard"><table>
+<tr><th>성명</th><th class="hide-sm">소속</th><th class="hide-sm">마지막 면담</th><th class="hide-sm hide-md">약속 사항</th><th>다음 면담</th></tr>
+{% for m in members %}
+<tr><td class="strong wrap-sm"><a href="{{ path }}?agent={{ m.agent_id }}#form">{{ m.name }}</a> <span class="req-code">{{ m.code }}</span>
+  <div class="sm-sub"><span>{{ m.org or '-' }} · {{ ('마지막 ' ~ (m.last.met_on|md)) if m.last else '면담 기록 없음' }}</span></div></td>
+<td class="hide-sm">{{ m.org or '-' }}</td><td class="hide-sm">{{ m.last.met_on|md if m.last else '-' }}</td>
+<td class="hide-sm hide-md cell-wrap">{{ (m.last.promises or '-') if m.last else '-' }}</td>
+<td>{{ state_chip(m) }}</td></tr>
+{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">범위 안 팀원이 없습니다</div></div>{% endif %}
+<p class="cap">면담 기록은 그 팀원이 범위 안인 관리자에게 보입니다. 설계사 본인에게는 보이지 않습니다. 지우지 않고, 고칠 일이 있으면 새 기록을 남깁니다.</p>
+{% endblock %}

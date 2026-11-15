@@ -1426,3 +1426,317 @@ CREATE TABLE IF NOT EXISTS promotion_inst13_contract (
 );
 CREATE INDEX IF NOT EXISTS idx_promotion_inst13_contract ON promotion_inst13_contract(inst13_id);
 -- [promotion_confirm:end]
+
+-- ---------------------------------------------------------------------------
+-- 제도 (파트 I, S4). 기관별 기준 버전, 커리어 회차와 승인, 영업우수 선발. 계산은 app/engine/standards.py, career.py, certification.py 다.
+-- 기준 버전은 판정할 때 쓴 기준의 사본이다. 같은 기관의 같은 해 기준이 고쳐지면 판이 하나 늘고, 앞의 판정은 앞의 판을 가리킨다.
+-- 승인과 선발은 메인 관리자만 한다. 지우지 않는다. 무르면 voided_at, voided_by, void_reason 을 채운다. 무르기 여부는 열린 결정이라 가정이다.
+-- 사람 이름과 금액은 넣지 않는다. 오래된 DB 에서도 이 묶음만 다시 돌릴 수 있게 IF NOT EXISTS 로 쓴다. standards.ensure 가 이 묶음을 읽는다.
+-- [program_s4:begin]
+CREATE TABLE IF NOT EXISTS standard_version (
+    version_id      INTEGER PRIMARY KEY,
+    scope           TEXT NOT NULL,                    -- cert(인증, 임원제도, 영업우수) / career(커리어패스)
+    std_key         TEXT NOT NULL,                    -- cert 는 프로그램 코드, career 는 'FC>SFC' 처럼 단계 코드 짝
+    issuer          TEXT,                             -- 주관 기관. 커리어 기준은 기관 칸이 없어 자사로 본다
+    year            INTEGER NOT NULL,                 -- 기준의 해. 커리어는 회차 기준월의 해
+    version_no      INTEGER NOT NULL,                 -- 같은 scope, std_key, year 안에서 1 부터
+    content_hash    TEXT NOT NULL,                    -- 기준 줄을 정렬한 JSON 의 SHA-256 앞 16자
+    criteria_json   TEXT NOT NULL,                    -- 판정 때의 기준 줄 사본
+    recorded_by     TEXT NOT NULL,
+    recorded_at     TEXT NOT NULL,
+    UNIQUE (scope, std_key, year, content_hash)
+);
+
+CREATE TABLE IF NOT EXISTS standard_use (
+    id              INTEGER PRIMARY KEY,
+    version_id      INTEGER NOT NULL REFERENCES standard_version(version_id),
+    used_in         TEXT NOT NULL,                    -- cert_run(인증 계산 run) / career_round(커리어 회차)
+    ref_id          INTEGER NOT NULL,                 -- run_id 또는 round_id
+    used_at         TEXT NOT NULL,
+    UNIQUE (used_in, ref_id, version_id)
+);
+CREATE INDEX IF NOT EXISTS idx_standard_use_ref ON standard_use(used_in, ref_id);
+
+CREATE TABLE IF NOT EXISTS career_round (
+    round_id        INTEGER PRIMARY KEY,
+    round_key       TEXT NOT NULL,                    -- 판정에 쓴 최근 끝난 분기. 2026Q3
+    as_of_ym        TEXT NOT NULL,                    -- 회차를 연 기준월
+    n_members       INTEGER NOT NULL,
+    n_eligible      INTEGER NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'open',     -- open / replaced(같은 분기의 회차를 다시 열어 바뀐 것)
+    opened_by       TEXT NOT NULL,                    -- 메인 관리자의 login_id
+    opened_at       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS career_round_member (
+    id              INTEGER PRIMARY KEY,
+    round_id        INTEGER NOT NULL REFERENCES career_round(round_id),
+    agent_id        INTEGER NOT NULL REFERENCES agent(agent_id),
+    from_level_id   INTEGER NOT NULL REFERENCES career_level(level_id),
+    to_level_id     INTEGER NOT NULL REFERENCES career_level(level_id),
+    n_met           INTEGER NOT NULL,
+    n_total         INTEGER NOT NULL,
+    eligible        INTEGER NOT NULL,                 -- 기준을 모두 채운 후보
+    detail_json     TEXT NOT NULL,                    -- 지표별 실적, 기준, 충족
+    version_id      INTEGER REFERENCES standard_version(version_id),
+    UNIQUE (round_id, agent_id)
+);
+
+CREATE TABLE IF NOT EXISTS career_decision (
+    decision_id     INTEGER PRIMARY KEY,
+    round_id        INTEGER NOT NULL REFERENCES career_round(round_id),
+    agent_id        INTEGER NOT NULL REFERENCES agent(agent_id),
+    from_level_id   INTEGER NOT NULL REFERENCES career_level(level_id),
+    to_level_id     INTEGER NOT NULL REFERENCES career_level(level_id),
+    decision        TEXT NOT NULL CHECK (decision IN ('approved','rejected')),
+    effective_ym    TEXT,                             -- 승인이면 새 단계가 시작하는 달
+    note            TEXT,
+    history_id      INTEGER REFERENCES agent_career_history(id),   -- 승인으로 넣은 단계 이력
+    prev_history_id INTEGER REFERENCES agent_career_history(id),   -- 승인으로 닫은 앞 단계 이력
+    prev_effective_to TEXT,                           -- 닫기 전 앞 이력의 effective_to. 무를 때 되돌린다
+    version_id      INTEGER REFERENCES standard_version(version_id),
+    decided_by      TEXT NOT NULL,
+    decided_at      TEXT NOT NULL,
+    voided_by       TEXT,
+    voided_at       TEXT,
+    void_reason     TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_career_decision_live ON career_decision(round_id, agent_id) WHERE voided_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS excellence_selection (
+    selection_id    INTEGER PRIMARY KEY,
+    program_id      INTEGER NOT NULL REFERENCES certification_program(program_id),
+    year            INTEGER NOT NULL,
+    agent_id        INTEGER NOT NULL REFERENCES agent(agent_id),
+    status_run_id   INTEGER REFERENCES calc_run(run_id),           -- 선발 때 본 인증 계산 run
+    version_id      INTEGER REFERENCES standard_version(version_id),
+    note            TEXT,
+    selected_by     TEXT NOT NULL,
+    selected_at     TEXT NOT NULL,
+    voided_by       TEXT,
+    voided_at       TEXT,
+    void_reason     TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_excellence_selection_live ON excellence_selection(program_id, year, agent_id) WHERE voided_at IS NULL;
+-- [program_s4:end]
+
+-- ---------------------------------------------------------------------------
+-- 영업 바탕과 팀 코칭 (파트 J, S4, web-screen). app/sales 가 쓴다. 기존 CREATE 문은 그대로 두고 덧붙이기만 한다.
+-- D-12 제안대로 둔 가정: DB 와 고객의 이름과 연락처는 저장하되 화면 목록에서는 가린다. 원문은 담당 설계사와 직속 관리자만 보고,
+--   메인 관리자는 사유를 적은 뒤 본다. 원문을 본 일은 audit_log 에 sales_contact_view 로 남긴다.
+-- D-13 제안대로 둔 가정: 상담 이력의 원본은 이 묶음의 sales_activity 다. 노션은 읽기용으로 남기고 이번에는 잇지 않는다.
+-- D-24 제안대로 둔 가정: 해촉 설계사의 고객은 직속 관리자에게 넘기고 handover_status 를 pending 으로 둔다.
+--   메인 관리자가 준법 확인을 남기기 전까지 받은 관리자에게도 연락처는 가려진다. 진행 중인 DB 는 회수해 조직 풀로 돌린다.
+-- 가이드 자료는 새 표 없이 공지와 자료실 board_post 의 분류 guide, script, needs 로 둔다. /sales/guide 가 그 셋을 모아 보인다.
+-- D-29 제안대로 둔 가정: 상담 신청 랜딩은 이름, 연락처, 지역, 상담 희망 시간과 동의 시각만 받는다. 접속 IP 는 저장하지 않는다.
+-- 주민번호, 계좌번호, 소득은 칸이 없다. 지우지 않는다. 회수와 넘기기는 sales_assign_log 에 남기고 줄은 그대로 둔다.
+-- 오래된 DB 에서도 이 묶음만 다시 돌릴 수 있게 쓴다. app/sales/core.py 의 ensure 가 이 묶음을 읽는다. 묶음 안에는 ; 가 든 글자를 두지 않는다.
+-- [sales:begin]
+CREATE TABLE IF NOT EXISTS sales_lead (
+    lead_id          INTEGER PRIMARY KEY,
+    source           TEXT NOT NULL,                   -- landing(상담 신청) / self(직접 등록) / company(회사 DB) / referral(소개) / event(행사)
+    name             TEXT NOT NULL,
+    phone            TEXT NOT NULL,                   -- 숫자와 줄표만. 화면 목록에서는 가운데를 가린다
+    region           TEXT NOT NULL,                   -- 시도 이름. app/sales/core.py 의 REGIONS
+    preferred_time   TEXT,                            -- 상담 희망 시간. app/sales/core.py 의 TIMES
+    memo             TEXT,
+    consent_at       TEXT,                            -- 수집과 이용 동의 시각
+    consent_version  TEXT,                            -- 동의 문구의 판. 준법 확인 전 문구는 draft 로 시작한다
+    status           TEXT NOT NULL DEFAULT 'new',     -- new(미배정) / assigned(배정) / working(진행 중) / won(체결) / lost(종료)
+    agent_id         INTEGER REFERENCES agent(agent_id),       -- 담당. 미배정이면 NULL
+    pool_org_id      INTEGER REFERENCES org_unit(org_id),      -- 미배정일 때 배정할 조직. NULL 이면 메인 관리자의 본부 풀
+    assigned_at      TEXT,
+    assigned_by      TEXT,
+    last_activity_at TEXT,
+    reclaim_count    INTEGER NOT NULL DEFAULT 0,
+    closed_at        TEXT,
+    close_reason     TEXT,
+    customer_id      INTEGER,
+    created_by       TEXT NOT NULL,
+    created_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sales_lead_agent ON sales_lead(agent_id, status);
+CREATE INDEX IF NOT EXISTS idx_sales_lead_pool ON sales_lead(status, pool_org_id);
+
+CREATE TABLE IF NOT EXISTS sales_assign_log (
+    id               INTEGER PRIMARY KEY,
+    lead_id          INTEGER NOT NULL REFERENCES sales_lead(lead_id),
+    action           TEXT NOT NULL,                   -- assign / auto / reclaim / pool / handover
+    from_agent_id    INTEGER,
+    to_agent_id      INTEGER,
+    pool_org_id      INTEGER,
+    reason           TEXT,
+    by_login         TEXT NOT NULL,
+    at               TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sales_assign_log_lead ON sales_assign_log(lead_id);
+
+CREATE TABLE IF NOT EXISTS sales_activity (
+    activity_id      INTEGER PRIMARY KEY,
+    lead_id          INTEGER NOT NULL REFERENCES sales_lead(lead_id),
+    agent_id         INTEGER NOT NULL REFERENCES agent(agent_id),
+    kind             TEXT NOT NULL CHECK (kind IN ('call','consult','proposal','application')),   -- 통화 / 상담 / 제안 / 청약
+    done_on          TEXT NOT NULL,                   -- YYYY-MM-DD
+    result           TEXT,                            -- 짧은 결과. 고객의 건강, 소득 같은 민감한 내용은 적지 않는다
+    created_by       TEXT NOT NULL,
+    created_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sales_activity_agent ON sales_activity(agent_id, done_on);
+CREATE INDEX IF NOT EXISTS idx_sales_activity_lead ON sales_activity(lead_id);
+
+CREATE TABLE IF NOT EXISTS sales_region_pref (
+    agent_id         INTEGER NOT NULL REFERENCES agent(agent_id),
+    region           TEXT NOT NULL,
+    set_by           TEXT NOT NULL,
+    set_at           TEXT NOT NULL,
+    PRIMARY KEY (agent_id, region)
+);
+
+CREATE TABLE IF NOT EXISTS sales_customer (
+    customer_id      INTEGER PRIMARY KEY,
+    lead_id          INTEGER REFERENCES sales_lead(lead_id),
+    agent_id         INTEGER NOT NULL REFERENCES agent(agent_id),   -- 지금 담당
+    name             TEXT NOT NULL,
+    phone            TEXT NOT NULL,
+    region           TEXT,
+    birth_md         TEXT,                            -- 생일 MM-DD. 연도는 받지 않는다
+    anniv_md         TEXT,                            -- 다른 기념일 MM-DD
+    anniv_label      TEXT,
+    next_action      TEXT,                            -- 다음 할 일
+    next_on          TEXT,                            -- 다음 할 일의 날짜 YYYY-MM-DD
+    handed_from_agent_id INTEGER REFERENCES agent(agent_id),       -- 해촉자에게서 넘겨받았으면 그 설계사
+    handover_status  TEXT,                            -- NULL / pending(준법 확인 대기) / confirmed(준법 확인)
+    handover_at      TEXT,
+    handover_by      TEXT,
+    compliance_by    TEXT,
+    compliance_at    TEXT,
+    created_by       TEXT NOT NULL,
+    created_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sales_customer_agent ON sales_customer(agent_id);
+
+CREATE TABLE IF NOT EXISTS sales_customer_contract (
+    customer_id      INTEGER NOT NULL REFERENCES sales_customer(customer_id),
+    contract_id      INTEGER NOT NULL UNIQUE REFERENCES contract(contract_id),
+    linked_by        TEXT NOT NULL,
+    linked_at        TEXT NOT NULL,
+    PRIMARY KEY (customer_id, contract_id)
+);
+
+CREATE TABLE IF NOT EXISTS team_coaching (
+    coaching_id      INTEGER PRIMARY KEY,
+    agent_id         INTEGER NOT NULL REFERENCES agent(agent_id),   -- 면담한 팀원
+    manager_agent_id INTEGER NOT NULL REFERENCES agent(agent_id),   -- 면담한 관리자
+    met_on           TEXT NOT NULL,                   -- YYYY-MM-DD
+    promises         TEXT,                            -- 약속 사항
+    next_on          TEXT,                            -- 다음 면담 날짜
+    created_by       TEXT NOT NULL,
+    created_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_team_coaching_agent ON team_coaching(agent_id, met_on);
+-- [sales:end]
+
+-- ---------------------------------------------------------------------------
+-- 앱 안 AI (파트 K, ai-features, S4). app/ai 가 쓴다. 설계는 docs/13 1.4 와 2.4 다.
+-- ai_budget: 기능별 월 한도. D-26 제안대로 둔 가정이다. 바꿀 때마다 줄을 더하고 마지막 줄을 쓴다. 줄이 없으면 AI_MONTHLY_LIMIT_USD 를 쓴다.
+-- ai_call: API 호출 한 번이 한 줄이다. 쓴 토큰과 비용 추정, 상태만 남긴다. 키, 프롬프트 본문, 응답 본문은 남기지 않는다.
+--   status 는 ok, error, budget 이다. budget 은 한도에 닿아 부르지 않은 것이다. 이번 달 쓴 비용은 ym 의 cost_usd 합이다.
+-- ai_output: 해석 보조와 묻고 답하기의 한 번 실행. 입력 해시, 지침 버전, 가린 뒤의 컨텍스트, 출력, 자동 점검 결과, 사람의 결재와 고친 문안.
+-- ai_review: 7나이츠 심사 한 건. required 는 고객에게 나가는 글이라 통과가 필수인지다(D-15 가정). 처음 글, 마지막 글, 사람이 확정한 글을 둔다.
+-- ai_review_opinion: 회전마다 다빈치의 형상화(verdict shape)와 자리별 판정, 근거 인용, 고친 문안. adopted 는 다음 회전에 받은 문안이다.
+-- 이름, 연락처, 주민번호는 가린 뒤에만 들어간다. 지우지 않는다. 오래된 DB 에서도 이 묶음만 다시 돌릴 수 있게 쓴다. app/ai/store.py 의 ensure 가 읽는다.
+-- [ai:begin]
+CREATE TABLE IF NOT EXISTS ai_budget (
+    budget_id         INTEGER PRIMARY KEY,
+    feature           TEXT NOT NULL,                  -- plan_interpret, plan_qa, review, report, cardnews, monthly_report
+    monthly_limit_usd NUMERIC NOT NULL,
+    set_by            TEXT NOT NULL,
+    set_at            TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_budget_feature ON ai_budget(feature, budget_id);
+
+CREATE TABLE IF NOT EXISTS ai_call (
+    call_id         INTEGER PRIMARY KEY,
+    feature         TEXT NOT NULL,
+    ym              TEXT NOT NULL,                    -- 한도를 세는 달 YYYYMM
+    called_at       TEXT NOT NULL,
+    login_id        TEXT,
+    model           TEXT,
+    guide_version   TEXT,
+    input_hash      TEXT,
+    status          TEXT NOT NULL,                    -- ok / error / budget
+    input_tokens    INTEGER NOT NULL DEFAULT 0,
+    output_tokens   INTEGER NOT NULL DEFAULT 0,
+    cost_usd        NUMERIC NOT NULL DEFAULT 0,       -- 가격표로 낸 추정
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    error           TEXT                              -- 실패 종류만. timeout, connect, http_429 같은 것
+);
+CREATE INDEX IF NOT EXISTS idx_ai_call_month ON ai_call(feature, ym);
+
+CREATE TABLE IF NOT EXISTS ai_output (
+    output_id       INTEGER PRIMARY KEY,
+    feature         TEXT NOT NULL,
+    login_id        TEXT,
+    created_at      TEXT NOT NULL,
+    input_hash      TEXT,
+    guide_version   TEXT,
+    context_json    TEXT,                             -- 가린 뒤의 근거 줄, 계산값, 질문
+    output_text     TEXT,
+    parsed_json     TEXT,                             -- 해석 보조의 구조화된 초안
+    status          TEXT NOT NULL,                    -- draft, blocked, answered, no_evidence, off, budget, error
+    problems_json   TEXT,                             -- 자동 점검에서 찾은 것
+    call_id         INTEGER REFERENCES ai_call(call_id),
+    ref_kind        TEXT,                             -- plan_line 같은 대상의 종류
+    ref_id          INTEGER,
+    decision        TEXT,                             -- approved / rejected. 비면 결재 전
+    decided_by      TEXT,
+    decided_at      TEXT,
+    edited_text     TEXT,                             -- 사람이 고친 문안
+    decision_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ai_output_ref ON ai_output(feature, ref_kind, ref_id);
+
+CREATE TABLE IF NOT EXISTS ai_review (
+    review_id       INTEGER PRIMARY KEY,
+    kind            TEXT NOT NULL,                    -- cardnews, report_form, notice, standard_text, landing, report, monthly_report
+    audience        TEXT NOT NULL,                    -- customer / agent / internal
+    title           TEXT,
+    requested_by    TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    input_hash      TEXT NOT NULL,
+    guide_version   TEXT NOT NULL,
+    panel_version   TEXT NOT NULL,
+    forbidden_version TEXT NOT NULL,
+    required        INTEGER NOT NULL DEFAULT 0,       -- 1 이면 통과해야 승인한다
+    draft_text      TEXT NOT NULL,
+    current_text    TEXT NOT NULL,                    -- 마지막 회전의 글
+    status          TEXT NOT NULL,                    -- running, passed, stopped, approved, rejected
+    stop_reason     TEXT,                             -- rounds, reject, number, off, budget, error
+    rounds          INTEGER NOT NULL DEFAULT 0,
+    parent_id       INTEGER REFERENCES ai_review(review_id),
+    decided_by      TEXT,
+    decided_at      TEXT,
+    final_text      TEXT,                             -- 사람이 승인한 글
+    human_edited    INTEGER NOT NULL DEFAULT 0,
+    decision_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ai_review_status ON ai_review(status, review_id);
+
+CREATE TABLE IF NOT EXISTS ai_review_opinion (
+    opinion_id      INTEGER PRIMARY KEY,
+    review_id       INTEGER NOT NULL REFERENCES ai_review(review_id),
+    round_no        INTEGER NOT NULL,
+    seat_key        TEXT NOT NULL,                    -- davinci, themis, seat2 같은 자리
+    seat_name       TEXT NOT NULL,
+    verdict         TEXT NOT NULL,                    -- shape, pass, revise, reject, error
+    quote           TEXT,
+    quote_ok        INTEGER NOT NULL DEFAULT 1,       -- 인용이 심사한 글에 있는지
+    reason          TEXT,                             -- 판정 이유. shape 이면 형상화 글
+    revised_text    TEXT,
+    adopted         INTEGER NOT NULL DEFAULT 0,
+    call_id         INTEGER REFERENCES ai_call(call_id),
+    created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_review_opinion ON ai_review_opinion(review_id, round_no);
+-- [ai:end]

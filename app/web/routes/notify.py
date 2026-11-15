@@ -13,10 +13,14 @@
 | 명함 권한 요청 | 메인 관리자 | card_grant.pending_requests | 조직장과 대리 화면과 같다 |
 | 새 공지 | 공지의 대상 안인 사람 | board.recent_notices | 공지와 자료실과 같은 보는 사람 규칙. 최근 board.NOTICE_DAYS 일. 올린 사람은 뺀다 |
 | 13회차 도래 | 설계사, 관리자 | persist.inst13_due | 본인. 관리자는 범위 안. 이번 주(일요일부터 토요일) 건수 하나만. 계약을 가리키는 것은 넣지 않는다 |
+| DB 배정 | 설계사, 관리자 | app/sales/leads.py | 본인. 배정받은 지 new_days 일 안이고 활동이 없는 DB 의 건수 |
+| DB 방치 | 설계사, 관리자 | app/sales/leads.py | 본인은 회수 예고와 회수 대상 건수. 관리자는 범위 안 팀원의 방치 건수 |
+| 미배정 DB | 메인 관리자, 관리자 | app/sales/leads.py | 배정 화면의 풀과 같은 범위. 건수만 |
+| 다음 면담 | 관리자 | app/sales/coaching.py | 범위 안 팀원 가운데 다음 면담이 지났거나 3일 안인 사람 수 |
 
 - 프로모션 알림의 기준일은 프로모션 화면과 같은 pm.ref_date(자료 기준 달)이다.
 - 교육 기한은 팀 교육 진척도와 같은 deps.edu_today(오늘)로 따진다. 교육은 실적 자료와 상관없는 날짜 일이다.
-- 알림 글에는 고객 이름, 연락처, 시상 금액을 넣지 않는다. 구간 근접에는 본인의 남은 실적만 적는다.
+- 알림 글에는 고객 이름, 연락처, 시상 금액을 넣지 않는다. 영업 알림은 건수와 사람 수만 적는다. 영업 알림 넷은 조직별 설정의 항목이 아직 없어 끌 수 없다. 구간 근접에는 본인의 남은 실적만 적는다.
 - 조직별 설정(app/org/settings.py)에서 그 사람의 조직이 꺼 둔 종류는 내지 않는다. 명함 승인 대기와 권한 요청은 끌 수 없다.
 - 마감 임박 날짜 수(notify.promo_due_days)와 구간 근접 비율(promo.near_pct)도 조직별 설정이다. 본인 몫은 보는 사람 조직의 값,
   관리자의 팀원 수는 팀원마다 소속 조직의 값으로 센다. app/web/org_values.py 가 고른다.
@@ -42,6 +46,8 @@ from app.engine import persist as ps
 from app.engine import promotion as pm
 from app.org import card_grant as cg
 from app.org import settings as org_settings
+from app.sales import coaching, core
+from app.sales import leads as ld
 from app.web import board as bd
 from app.web import menu, org_values
 from app.web.deps import _cards, edu_today, get_con, guard, page, templates
@@ -55,9 +61,10 @@ DUE_DAYS = org_values.default(org_values.DUE_DAYS_KEY)   # docs/09 6장: 프로�
 BADGE_TTL = 60               # 종 아이콘의 숫자에 쓰는 목록을 담아 두는 초
 KEY_RE = re.compile(r"^[a-z][a-z0-9_]*:[0-9A-Za-z:_\-]{1,80}$")
 KIND_KO = {"promo_new": "새 프로모션", "promo_due": "마감 임박", "tier_near": "구간 근접", "edu_due": "교육 기한",
-           "card_pending": "명함 승인 대기", "card_grant": "명함 권한 요청", "board_new": "새 공지", "inst13_due": "13회차 도래"}
+           "card_pending": "명함 승인 대기", "card_grant": "명함 권한 요청", "board_new": "새 공지", "inst13_due": "13회차 도래",
+           "sales_new": "DB 배정", "sales_stale": "DB 방치", "sales_pool": "미배정 DB", "coach_due": "다음 면담"}
 TONE = {"promo_new": "blue", "promo_due": "bad", "tier_near": "good", "edu_due": "warn", "card_pending": "warn", "card_grant": "warn",
-        "board_new": "blue", "inst13_due": "warn"}
+        "board_new": "blue", "inst13_due": "warn", "sales_new": "blue", "sales_stale": "warn", "sales_pool": "blue", "coach_due": "warn"}
 
 
 # ---------------------------------------------------------------- 표
@@ -241,14 +248,57 @@ def _board_notes(con, ctx) -> list:
     return out
 
 
+def _sales_notes(con, ctx) -> list:
+    """DB 배정, 방치, 미배정, 다음 면담. 건수만 적고 고객 이름과 연락처는 넣지 않는다. 표가 없는 오래된 DB 면 없다."""
+    day = core.today()
+    out = []
+    try:
+        if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='team_coaching'").fetchone():
+            return []
+        me = ctx.get("agent_id")
+        if me and ctx["role"] != "main":
+            mine = ld.for_agent(con, me, day, "open")
+            fresh = [r for r in mine if r["status"] == "assigned" and r["idle"] is not None and r["idle"] < core.setting("new_days")]
+            if fresh:
+                out.append(_note("sales_new", f"{day.isoformat()}:{len(fresh)}", f"새 DB {len(fresh)}건이 배정됐습니다",
+                                 "내 DB 에서 통화 결과를 남겨 주세요.", day.isoformat(), _link(ctx, "/sales/leads")))
+            warn = [r for r in mine if r["warn"]]
+            stale = [r for r in mine if r["stale"]]
+            if warn or stale:
+                title = f"회수 대상 DB {len(stale)}건" if stale else f"DB {len(warn)}건이 곧 회수 대상입니다"
+                out.append(_note("sales_stale", f"me:{day.isoformat()}:{len(warn)}:{len(stale)}", title,
+                                 f"활동 없이 {core.setting('stale')}일이 지나면 관리자가 회수할 수 있습니다.", day.isoformat(), _link(ctx, "/sales/leads")))
+        if ctx["role"] == "manager":
+            team = [a for a in sorted(ctx["agent_ids"]) if a != me]
+            n = len(ld.stale(con, team, day)) if team else 0
+            if n:
+                out.append(_note("sales_stale", f"team:{day.isoformat()}:{n}", f"팀 방치 DB {n}건", "DB 배정과 성과에서 회수하거나 독려합니다.",
+                                 day.isoformat(), _link(ctx, "/sales/assign")))
+            due = coaching.due(con, team, day)
+            if due:
+                over = sum(1 for d in due if d["state"] == "over")
+                out.append(_note("coach_due", f"{day.isoformat()}:{len(due)}", f"다음 면담 {len(due)}명" + (f" · 지남 {over}명" if over else ""),
+                                 f"다음 면담이 지났거나 {coaching.DUE_DAYS}일 안인 팀원입니다.", day.isoformat(), _link(ctx, "/team/coaching")))
+        if ctx["role"] in ("main", "manager"):
+            n = len(ld.pool(con, ctx, day))
+            if n:
+                out.append(_note("sales_pool", f"{day.isoformat()}:{n}", f"미배정 DB {n}건", "지역 매칭으로 배정합니다.", day.isoformat(),
+                                 _link(ctx, "/sales/assign")))
+    except sqlite3.OperationalError:
+        con.rollback()
+        return []
+    return out
+
+
 def collect(con, ctx, light: bool = False) -> list:
     """그 사람의 알림 전부. 읽음 여부는 붙이지 않는다. 최근 것부터."""
     ref = pm.ref_date(ctx["ym"])
     out = (_promo_notes(con, ctx, ref) + _edu_notes(con, ctx) + _due_notes(con, ctx) + _approval_notes(con, ctx, ref, light)
-           + _board_notes(con, ctx))
+           + _board_notes(con, ctx) + _sales_notes(con, ctx))
     off = org_settings.notify_off(con, ctx)                     # 조직별 설정에서 그 사람의 조직이 그 달에 꺼 둔 종류. 승인 대기 둘은 끌 수 없다
     out = [n for n in out if n["kind"] not in off]
-    order = {"card_grant": 0, "card_pending": 0, "promo_due": 1, "edu_due": 2, "inst13_due": 2, "board_new": 3, "tier_near": 4, "promo_new": 5}
+    order = {"card_grant": 0, "card_pending": 0, "promo_due": 1, "edu_due": 2, "inst13_due": 2, "board_new": 3, "tier_near": 4, "promo_new": 5,
+             "sales_stale": 2, "coach_due": 2, "sales_new": 3, "sales_pool": 3}
     out.sort(key=lambda n: order[n["kind"]])
     out.sort(key=lambda n: n["at"], reverse=True)               # 날짜가 같으면 승인 대기, 마감 임박, 교육 기한 순
     seen, uniq = set(), []

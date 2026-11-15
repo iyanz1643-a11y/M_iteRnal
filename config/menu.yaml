@@ -82,9 +82,9 @@ groups:
          desc: "과정별 수료율, 미수료자, 수료 확인 처리"}
       - {id: team-onboarding, name: 신인 정착, path: /team/onboarding, roles: {main: all, manager: org}, phase: 2, status: built,
          desc: "위촉 뒤 필수 교육, 첫 계약, 첫 가동까지의 체크리스트"}
-      - {id: team-coaching, name: 면담 기록, path: /team/coaching, roles: {manager: org}, phase: 3, status: planned,
+      - {id: team-coaching, name: 면담 기록, path: /team/coaching, roles: {manager: org}, phase: 3, status: built,
          desc: "팀원별 면담 날짜와 약속 사항, 다음 면담 알림"}
-      - {id: team-activity, name: 활동 깔때기, path: /team/activity, roles: {main: all, manager: org}, phase: 3, status: planned,
+      - {id: team-activity, name: 활동 깔때기, path: /team/activity, roles: {main: all, manager: org}, phase: 3, status: built,
          desc: "통화, 상담, 제안, 청약 건수와 전환율"}
 
   - id: edu
@@ -115,13 +115,13 @@ groups:
     name: 영업·제안
     icon: "✆"
     items:
-      - {id: sales-leads, name: 내 DB, path: /sales/leads, roles: {manager: self, agent: self}, phase: 3, status: planned,
+      - {id: sales-leads, name: 내 DB, path: /sales/leads, roles: {manager: self, agent: self}, phase: 3, status: built,
          desc: "배정받은 DB와 통화·상담·제안 기록"}
-      - {id: sales-assign, name: DB 배정과 성과, path: /sales/assign, roles: {main: all, manager: org}, phase: 3, status: planned,
+      - {id: sales-assign, name: DB 배정과 성과, path: /sales/assign, roles: {main: all, manager: org}, phase: 3, status: built,
          desc: "지역 매칭 배정, 방치 DB 회수, 팀·지점·본부 단위 체결률"}
-      - {id: sales-customers, name: 고객, path: /sales/customers, roles: {manager: self, agent: self}, phase: 3, status: planned,
+      - {id: sales-customers, name: 고객, path: /sales/customers, roles: {manager: self, agent: self}, phase: 3, status: built,
          desc: "체결 고객의 계약, 기념일, 다음 할 일"}
-      - {id: sales-guide, name: 가이드 자료, path: /sales/guide, roles: {main: all, manager: org, agent: self}, phase: 3, status: planned,
+      - {id: sales-guide, name: 가이드 자료, path: /sales/guide, roles: {main: all, manager: org, agent: self}, phase: 3, status: built,
          desc: "보장분석 가이드, TA 스크립트, 니즈환기 자료"}
       - {id: sales-report, name: 제안 리포트, path: /sales/report, roles: {manager: self, agent: self}, phase: 3, status: planned,
          desc: "보장분석 보고서 제작지침에 따른 맞춤 제안 리포트"}

@@ -10,7 +10,7 @@
 
 <div class="card board-hero" style="margin-top:32px">
   <div><div class="k">게시 중</div><div class="big">{{ n_live }}<span class="unit">건</span></div>
-    <div class="cap">공지 {{ counts.notice }}건 · 자료 {{ counts.plan + counts.lesson + counts.form }}건</div></div>
+    <div class="cap">공지 {{ counts.notice }}건 · 자료 {{ (counts.values()|sum) - counts.notice }}건</div></div>
   {% if is_main %}<a class="pill big-pill" href="{{ path }}?new=1{{ '&cat=' ~ cat if cat }}#post-form">올리기</a>{% endif %}
 </div>
 

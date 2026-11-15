@@ -209,7 +209,7 @@ def test_post_without_csrf_token_is_refused(env):
 # guard 없이 열리는 주소. 로그인과 나가기, 자료가 없는 브라우저 아이콘, 로그인 전 랜딩인 앱 소개와 초대 링크뿐이다.
 # 나가기는 CSRF 토큰을 실은 POST /logout 이고 GET /logout 은 확인 화면만 보여 준다. tests/test_platform_s3.py
 # scripts/check_context.py 의 NON_MENU_ROUTES 에서 마지막 라우트를 뺀 것과 같아야 한다
-OPEN_ROUTES = {"/login", "/logout", "/favicon.ico", "/welcome", "/invite", "/healthz"}     # /welcome 과 /invite 는 앱 소개와 초대 랜딩. tests/test_web_s3_landing.py. /healthz 는 상태 점검. tests/test_platform_s3.py
+OPEN_ROUTES = {"/login", "/logout", "/favicon.ico", "/welcome", "/invite", "/consult", "/healthz"}     # /welcome 과 /invite 는 앱 소개와 초대 랜딩. tests/test_web_s3_landing.py. /consult 는 상담 신청 랜딩. tests/test_sales.py. /healthz 는 상태 점검. tests/test_platform_s3.py
 
 
 def test_open_routes_match_check_context():

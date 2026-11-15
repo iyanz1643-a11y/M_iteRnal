@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{# 활동 깔때기. 한 달의 통화, 상담, 제안, 청약, 체결 건수와 전환율. 범위 안 사람만. 금액은 없다(D-17).
+   청약은 설계사가 남긴 활동이라 업적 집계의 청약 건수와 다를 수 있다 #}
+{% block body %}
+<p class="eyebrow">팀 관리 · {{ SCOPES[ctx.scope] }} · {{ now|when }} 기준</p>
+<h1 class="display">활동 깔때기</h1>
+<p class="lede">{{ month[:4] }}년 {{ month[5:]|int }}월에 남긴 통화, 상담, 제안, 청약과 체결입니다. 각 단계가 앞 단계의 몇 퍼센트인지 봅니다.</p>
+<nav class="seg perf-seg" aria-label="달">{% for mm in months %}<a class="{{ 'on' if mm == month }}" href="{{ path }}?m={{ mm }}">{{ mm[5:]|int }}월</a>{% endfor %}</nav>
+
+<div class="grid g2" style="margin-top:24px">
+  <div class="card"><div class="ringbox">{{ ui.ring(overall or 0, '통화 대비 체결') }}
+    <div><div class="k">통화 대비 체결</div><div class="mid">{{ total.won }}<span class="unit">/ {{ total.call }}건</span></div><div class="cap">이 달에 고객으로 바꾼 DB</div></div></div></div>
+  <div class="card"><div class="k">단계별 건수</div>{{ ui.bars(steps, 'label', 'sub', 'n') }}</div>
+</div>
+
+<h2 class="sec">사람별 {{ rows|length }}명</h2>
+{% if rows %}
+<div class="card tablecard"><table>
+<tr><th>성명</th><th class="num hide-sm">통화</th><th class="num hide-sm">상담</th><th class="num hide-sm">제안</th><th class="num hide-sm">청약</th><th class="num">체결</th></tr>
+{% for r in rows %}
+<tr><td class="strong wrap-sm">{{ r.name }} <span class="req-code">{{ r.code }}</span>
+  <div class="sm-sub"><span>{{ r.org or '-' }}</span><span>통화 {{ r.call }} · 상담 {{ r.consult }} · 제안 {{ r.proposal }} · 청약 {{ r.application }}</span></div></td>
+<td class="num hide-sm">{{ r.call }}</td><td class="num hide-sm">{{ r.consult }}</td><td class="num hide-sm">{{ r.proposal }}</td><td class="num hide-sm">{{ r.application }}</td>
+<td class="num">{{ r.won }}{% if r.rate is not none %}<div class="cap" style="margin:2px 0 0">통화의 {{ '%g'|format(r.rate) }}%</div>{% endif %}</td></tr>
+{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">이 달에 남긴 활동이 없습니다</div><div class="cap">설계사가 내 DB 에서 통화, 상담, 제안, 청약을 남기면 여기에 모입니다.</div></div>{% endif %}
+<p class="cap">기준 시각 {{ now|when }}. 기간은 {{ first|md }}부터 {{ last|md }}까지 활동 날짜 기준입니다. 전환율은 같은 DB 의 이동이 아니라 이 달 건수의 비입니다. 청약은 설계사가 남긴 활동이라 업적 집계의 청약 건수와 다를 수 있습니다.</p>
+{% endblock %}

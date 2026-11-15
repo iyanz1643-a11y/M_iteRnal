@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{# 내 DB. 본인 DB 만 보인다. 목록의 연락처는 가리고, 상세에서만 원문을 보며 본 일은 기록에 남는다. D-12 가정. 금액은 없다 #}
+{% macro flashbox(f) %}{% if f %}<div class="{{ 'okmsg' if f.kind == 'ok' else 'alert bad' }}" role="status" style="margin-top:24px">{{ f.text }}</div>{% endif %}{% endmacro %}
+{% macro idle_chip(r) %}{% if r.stale %}<span class="chip bad">활동 없이 {{ r.idle }}일 · 회수 대상</span>{% elif r.warn %}<span class="chip warn">{{ r.left }}일 뒤 회수 대상</span>{% elif r.idle is not none %}<span class="chip">마지막 활동 {{ r.idle }}일 전</span>{% endif %}{% endmacro %}
+{% block body %}
+<p class="eyebrow">영업·제안 · {{ SCOPES[ctx.scope] }} · {{ now|when }} 기준</p>
+<h1 class="display">내 DB</h1>
+<p class="lede">배정받은 DB 와 직접 등록한 DB 입니다. 통화, 상담, 제안, 청약을 남기면 상태가 바뀌고, 체결하면 고객으로 바꿉니다.</p>
+{{ flashbox(flash) }}
+
+<div class="grid g2" style="margin-top:32px">
+  <div class="card"><div class="k">진행 중인 DB</div><div class="big">{{ counts.open }}<span class="unit">건</span></div>
+    <div class="cap">보유 한도 {{ HOLD }}건 · 활동 없이 {{ STALE }}일이 지나면 관리자가 회수할 수 있습니다</div></div>
+  <div class="card"><div class="k">곧 회수 대상</div><div class="big">{{ warn + stale }}<span class="unit">건</span></div>
+    <div class="cap">{% if stale %}이미 회수 대상 {{ stale }}건이 있습니다. 활동을 남겨 주세요{% else %}활동을 남기면 날짜가 다시 셉니다{% endif %}</div></div>
+</div>
+<div class="grid g3 keep" style="margin-top:16px">
+  {% for k in ('call', 'consult', 'proposal') %}<div class="card"><div class="k">이번 달 {{ KIND_KO[k] }}</div><div class="mid">{{ acts.get(k, 0) }}<span class="unit">건</span></div></div>{% endfor %}
+</div>
+
+{% if opened %}
+<article class="card board-open" id="lead" style="margin-top:20px">
+  <div class="notif-meta"><span class="chip {{ opened.tone }}">{{ opened.status_ko }}</span><span>{{ opened.source_ko }}</span><span>{{ opened.region }}</span>
+    {% if opened.time_ko %}<span>{{ opened.time_ko }} 희망</span>{% endif %}{{ idle_chip(opened) }}</div>
+  <h2 class="confirm-title board-title">{{ opened.name_v }}</h2>
+  <div class="perf-split"><div><div class="k">연락처</div><div class="perf-num"><a href="tel:{{ opened.phone_v }}">{{ opened.phone_v }}</a></div></div>
+    <div><div class="k">받은 날</div><div class="perf-num">{{ (opened.assigned_at or opened.created_at)|md }}</div></div></div>
+  {% if opened.memo %}<p class="board-body">{{ opened.memo }}</p>{% endif %}
+  <p class="cap">연락처를 본 일은 변경 기록에 남습니다. 활동 결과에는 건강, 소득 같은 민감한 내용을 적지 마세요.</p>
+
+  {% if opened.status in ('assigned', 'working', 'won') %}
+  <h3 class="subsec" id="act">활동 남기기</h3>
+  <form class="wide" method="post" action="{{ path }}"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="action" value="activity"><input type="hidden" name="lead_id" value="{{ opened.lead_id }}">
+    <div class="frow">
+      <label class="f">종류<select name="kind">{% for k, v in KIND_KO.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></label>
+      <label class="f">날짜<input type="date" name="done_on" value="{{ day }}" max="{{ day }}" required></label>
+    </div>
+    <label class="f">결과 · 200자까지<input class="sm" type="text" name="result" maxlength="200" placeholder="예: 다음 주 화요일 방문 약속"></label>
+    <div class="actions"><button class="primary" type="submit">남기기</button></div>
+  </form>
+  {% endif %}
+  {% if opened.status in ('assigned', 'working') %}
+  <div class="actions" style="margin-top:16px">
+    <form method="post" action="{{ path }}" class="out"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input type="hidden" name="action" value="convert"><input type="hidden" name="lead_id" value="{{ opened.lead_id }}">
+      <button class="second lift" type="submit">체결해서 고객으로 바꾸기</button></form>
+    <form method="post" action="{{ path }}" class="out"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input type="hidden" name="action" value="close"><input type="hidden" name="lead_id" value="{{ opened.lead_id }}"><input type="hidden" name="reason" value="담당 종료">
+      <button class="second lift" type="submit">종료하기</button></form>
+  </div>
+  {% elif opened.status == 'won' and opened.customer_id %}
+  <p style="margin-top:16px"><a class="pill" href="/sales/customers?id={{ opened.customer_id }}">고객 카드 보기</a></p>
+  {% endif %}
+
+  <h3 class="subsec">활동 {{ opened.acts|length }}건</h3>
+  {% if opened.acts %}<div class="notif-list" style="padding:0">{% for a in opened.acts %}
+    <div class="notif"><span class="dot"></span><div class="notif-main"><div class="notif-meta"><span class="chip blue">{{ a.kind_ko }}</span><span>{{ a.done_on|md }}</span></div>
+      <div class="notif-body">{{ a.result or '결과를 적지 않았습니다' }}</div></div></div>{% endfor %}</div>
+  {% else %}<p class="cap">아직 남긴 활동이 없습니다.</p>{% endif %}
+
+  {% if opened.guides %}
+  <h3 class="subsec">함께 볼 가이드 자료</h3>
+  <ul class="board-files">{% for g in opened.guides %}<li><a class="board-file" href="/board?post={{ g.post_id }}#post"><span class="board-fname">{{ g.title }}</span></a></li>{% endfor %}</ul>
+  {% endif %}
+  <p style="margin-top:20px"><a href="{{ path }}?status={{ status }}">목록으로</a></p>
+</article>
+{% endif %}
+
+{% if new %}
+<section class="card confirm" id="new" style="margin-top:20px">
+  <div class="k">직접 등록</div>
+  <h2 class="confirm-title">새 DB</h2>
+  {% if error %}<div class="alert bad" role="alert">{{ error }}</div>{% endif %}
+  <form class="wide" method="post" action="{{ path }}"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="action" value="create">
+    <div class="frow">
+      <label class="f">이름<input class="sm" type="text" name="name" value="{{ form.name or '' }}" maxlength="20" required></label>
+      <label class="f">휴대폰 번호<input class="sm" type="tel" name="phone" value="{{ form.phone or '' }}" maxlength="13" inputmode="tel" required></label>
+    </div>
+    <div class="frow">
+      <label class="f">지역<select name="region" required><option value="">고르세요</option>{% for r in REGIONS %}<option{{ ' selected' if form.region == r }}>{{ r }}</option>{% endfor %}</select></label>
+      <label class="f">출처<select name="source">{% for k in ('self', 'referral', 'event') %}<option value="{{ k }}"{{ ' selected' if form.source == k }}>{{ SOURCE_KO[k] }}</option>{% endfor %}</select></label>
+    </div>
+    <label class="f">메모 · 200자까지<input class="sm" type="text" name="memo" value="{{ form.memo or '' }}" maxlength="200"></label>
+    <div class="checks"><label><input type="checkbox" name="consent" value="1" required> 고객에게 개인정보 수집과 이용 동의를 받았습니다</label></div>
+    <div class="actions"><button class="primary" type="submit">등록하기</button><a class="pill quiet big-pill" href="{{ path }}">취소</a></div>
+  </form>
+</section>
+{% endif %}
+
+<div class="block-head" style="margin-top:8px">
+  <nav class="seg" aria-label="상태">
+    {% for k, v in (('open', '진행 중'), ('won', '체결'), ('lost', '종료'), ('all', '전체')) %}<a class="{{ 'on' if status == k }}" href="{{ path }}?status={{ k }}">{{ v }} {{ counts[k] }}</a>{% endfor %}
+  </nav>
+  {% if not new %}<a class="pill" style="margin-top:20px" href="{{ path }}?new=1#new">직접 등록</a>{% endif %}
+</div>
+
+{% if rows %}
+<div class="card tablecard"><table>
+<tr><th>이름</th><th class="hide-sm">지역</th><th class="hide-sm">출처</th><th class="hide-sm hide-md">연락처</th><th class="hide-sm">활동</th><th>상태</th></tr>
+{% for r in rows %}
+<tr><td class="strong wrap-sm"><a href="{{ path }}?id={{ r.lead_id }}&status={{ status }}#lead">{{ r.name_v }}</a>
+  <div class="sm-sub"><span>{{ r.region }} · {{ r.source_ko }}</span>{% if r.stale or r.warn %}<span>{{ idle_chip(r) }}</span>{% endif %}</div></td>
+<td class="hide-sm">{{ r.region }}</td><td class="hide-sm">{{ r.source_ko }}</td><td class="hide-sm hide-md">{{ r.phone_v }}</td>
+<td class="hide-sm">{{ idle_chip(r) or '-' }}</td>
+<td><span class="chip {{ r.tone }}">{{ r.status_ko }}</span></td></tr>
+{% endfor %}
+</table></div>
+{% else %}
+<div class="card"><div class="k">이 상태의 DB 가 없습니다</div><div class="cap">관리자가 배정하거나 직접 등록하면 여기에 보입니다.</div></div>
+{% endif %}
+<p class="cap">기준 시각 {{ now|when }}. 청약은 직접 남긴 활동이라 업적 집계의 청약과 다를 수 있습니다. 연락처는 목록에서 가리고 상세에서만 보입니다.</p>
+{% endblock %}

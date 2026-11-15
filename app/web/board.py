@@ -5,6 +5,7 @@
 | 무엇 | 규칙 |
 | --- | --- |
 | 올리기, 고치기, 내리기 | 메인 관리자만. docs/09 2.4 에 관리자의 공지 올리기가 없어서다 |
+| 가이드 자료 | 보장분석 가이드, TA 스크립트, 니즈환기 자료도 이 게시판의 분류다. /sales/guide 가 그 셋만 모아 보인다(S4) |
 | 대상 | 조직과 역할을 함께 고른다. 조직은 그 아래까지다. 비우면 모두다 |
 | 보는 사람 | 메인 관리자는 모두. 그 밖에는 게시 중이고 대상 안인 사람만 |
 | 대상 안 | 역할이 맞고, 소속 조직이나 맡은 조직이 대상 조직과 같거나 그 아래다. 관리자는 맡은 조직이 대상 조직의 위여도 대상 안이다. 지점 공지를 본부장도 본다(가정, 2026-11-15) |
@@ -30,7 +31,8 @@ from app.engine import orgs
 from app.ops.storage import LocalStorage
 
 BEGIN, END = "-- [board:begin]", "-- [board:end]"
-CATEGORY_KO = {"notice": "공지", "plan": "시상안 원문", "lesson": "교안", "form": "양식"}
+CATEGORY_KO = {"notice": "공지", "plan": "시상안 원문", "lesson": "교안", "form": "양식", "guide": "보장분석 가이드", "script": "TA 스크립트", "needs": "니즈환기 자료"}
+GUIDE_CATS = ("guide", "script", "needs")       # 영업·제안 묶음의 가이드 자료 /sales/guide 가 보이는 분류. 올리기와 보는 사람 규칙은 공지와 같다
 ROLE_KO = {"manager": "관리자", "agent": "설계사"}
 KIND_KO = {"pdf": "PDF", "image": "그림", "excel": "엑셀", "hwp": "한글", "word": "워드"}
 MAX_BYTES = 20 * 1024 * 1024

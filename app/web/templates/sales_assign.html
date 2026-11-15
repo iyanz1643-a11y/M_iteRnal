@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{# DB 배정과 성과. 메인 관리자는 전체, 관리자는 맡은 조직. 미배정 DB 의 이름은 가리고 연락처는 싣지 않는다.
+   담당이 있는 DB 의 원문은 직속 관리자에게만, 메인 관리자는 사유를 적은 뒤 본다. D-12 가정. 해촉자 고객 넘기기는 D-24 가정. 금액은 없다 #}
+{% macro flashbox(f) %}{% if f %}<div class="{{ 'okmsg' if f.kind == 'ok' else 'alert bad' }}" role="status" style="margin-top:24px">{{ f.text }}</div>{% endif %}{% endmacro %}
+{% macro hidden(action) %}<input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="action" value="{{ action }}">{% endmacro %}
+{% block body %}
+<p class="eyebrow">영업·제안 · {{ SCOPES[ctx.scope] }} · {{ now|when }} 기준</p>
+<h1 class="display">DB 배정과 성과</h1>
+<p class="lede">미배정 DB 를 지역에 맞춰 나누고, 활동 없이 {{ STALE }}일이 지난 DB 를 회수합니다. 체결률은 팀, 지점, 본부 단위로 봅니다.</p>
+{{ flashbox(flash) }}
+{% if error %}<div class="alert bad" role="alert" style="margin-top:24px">{{ error }}</div>{% endif %}
+
+<div class="grid g2" style="margin-top:32px">
+  <div class="card"><div class="ringbox">{{ ui.ring(rate or 0, '체결률') }}
+    <div><div class="k">체결률</div><div class="mid">{{ won }}<span class="unit">/ {{ total }}건</span></div><div class="cap">배정한 DB 가운데 고객으로 바꾼 것</div></div></div></div>
+  <div class="card"><div class="k">미배정</div><div class="big">{{ pool|length }}<span class="unit">건</span></div>
+    <div class="cap">들고 있는 DB {{ held_n }}건 · 방치 {{ n_stale }}건</div></div>
+</div>
+
+{% if opened %}
+<article class="card board-open" id="lead" style="margin-top:20px">
+  <div class="notif-meta"><span class="chip {{ opened.tone }}">{{ opened.status_ko }}</span><span>{{ opened.source_ko }}</span><span>{{ opened.region }}</span>
+    {% if opened.time_ko %}<span>{{ opened.time_ko }} 희망</span>{% endif %}<span>{{ opened.created_at|md }} 접수</span></div>
+  <h2 class="confirm-title board-title">{{ opened.name_v }}</h2>
+  <div class="perf-split"><div><div class="k">연락처</div><div class="perf-num">{{ opened.phone_v }}</div></div>
+    <div><div class="k">담당</div><div class="perf-num">{{ opened.agent_name or '미배정' }}</div></div></div>
+  {% if opened.plain %}<p class="cap">원문을 본 일은 변경 기록에 남았습니다.</p>
+  {% elif opened.access == 'reason' %}
+  <form class="wide" method="post" action="{{ path }}" style="margin-top:16px">{{ hidden('reveal') }}<input type="hidden" name="lead_id" value="{{ opened.lead_id }}">
+    <label class="f">조회 사유 · 5자에서 200자. 변경 기록에 남습니다<input class="sm" type="text" name="reason" minlength="5" maxlength="200" required></label>
+    <div class="actions"><button class="second lift" type="submit">사유를 적고 원문 보기</button></div></form>
+  {% else %}<p class="cap">원문은 담당 설계사와 직속 관리자만 봅니다.</p>{% endif %}
+  <h3 class="subsec">활동 {{ opened.acts|length }}건</h3>
+  {% if opened.acts %}<div class="notif-list" style="padding:0">{% for a in opened.acts %}
+    <div class="notif"><span class="dot"></span><div class="notif-main"><div class="notif-meta"><span class="chip blue">{{ a.kind_ko }}</span><span>{{ a.done_on|md }}</span></div>
+      <div class="notif-body">{{ a.result or '결과를 적지 않았습니다' }}</div></div></div>{% endfor %}</div>
+  {% else %}<p class="cap">남긴 활동이 없습니다.</p>{% endif %}
+  {% if opened.history %}<h3 class="subsec">배정 이력</h3>
+  <ul class="notes">{% for h in opened.history %}<li>{{ h.at|when }} · {{ {'assign': '배정', 'auto': '지역 매칭 배정', 'reclaim': '회수', 'pool': '조직 풀로', 'handover': '넘김'}.get(h.action, h.action) }}
+    {% if h.to_name %} · {{ h.to_name }}{% endif %}{% if h.from_name %} · {{ h.from_name }}에게서{% endif %}{% if h.pool_name %} · {{ h.pool_name }}{% endif %}{% if h.reason %} · {{ h.reason }}{% endif %}</li>{% endfor %}</ul>{% endif %}
+  <p style="margin-top:12px"><a href="{{ path }}">닫기</a></p>
+</article>
+{% endif %}
+
+<div class="block-head sales-head"><h2 class="sec">미배정 {{ pool|length }}건</h2>
+  {% if pool %}<form method="post" action="{{ path }}" class="out sec-act">{{ hidden('auto') }}<button class="primary" type="submit" style="padding:0 24px">지역 매칭으로 한 번에 배정</button></form>{% endif %}</div>
+{% if pool %}
+<div class="card tablecard"><table class="assign">
+<tr><th>DB</th><th class="hide-sm">지역</th><th class="hide-sm hide-md">출처</th><th class="hide-sm">풀</th><th class="num">배정</th></tr>
+{% for r in pool %}
+<tr><td class="strong wrap-sm"><a href="{{ path }}?lead={{ r.lead_id }}#lead">{{ r.name_v }}</a> <span class="req-code">{{ r.created_at|md }}</span>
+  <div class="sm-sub"><span>{{ r.region }} · {{ r.source_ko }}{% if r.reclaim_count %} · 회수 {{ r.reclaim_count }}번{% endif %}</span></div></td>
+<td class="hide-sm">{{ r.region }}{% if r.time_ko %}<div class="cap" style="margin:2px 0 0">{{ r.time_ko }}</div>{% endif %}</td>
+<td class="hide-sm hide-md">{{ r.source_ko }}{% if r.reclaim_count %}<div class="cap" style="margin:2px 0 0">회수 {{ r.reclaim_count }}번</div>{% endif %}</td>
+<td class="hide-sm">{{ r.pool_name }}</td>
+<td class="acts"><form method="post" action="{{ path }}" class="assign-form">{{ hidden('assign') }}<input type="hidden" name="lead_id" value="{{ r.lead_id }}">
+  <select name="agent_id" aria-label="받을 사람">{% for c in cands %}<option value="{{ c.agent_id }}">{{ c.name }}{% if r.region in c.regions %} · {{ r.region }}{% endif %} · {{ c.held }}건</option>{% endfor %}</select>
+  <button class="ghost" type="submit">배정</button></form>
+  {% if is_main %}<form method="post" action="{{ path }}" class="assign-form">{{ hidden('pool') }}<input type="hidden" name="lead_id" value="{{ r.lead_id }}">
+  <select name="org_id" aria-label="넘길 조직">{% for oid, t in orgs %}<option value="{{ oid }}"{{ ' selected' if oid == r.pool_org_id }}>{{ t }}</option>{% endfor %}</select>
+  <button class="ghost" type="submit">조직 풀로</button></form>{% endif %}</td></tr>
+{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">미배정 DB 가 없습니다</div><div class="cap">상담 신청이 들어오거나 회수한 DB 가 생기면 여기에 보입니다.</div></div>{% endif %}
+
+<div class="block-head sales-head"><h2 class="sec">방치와 회수 예고 {{ stale_rows|length }}건</h2>
+  {% if n_stale %}<form method="post" action="{{ path }}" class="out sec-act">{{ hidden('reclaim_all') }}<button class="second lift" type="submit">방치 {{ n_stale }}건 모두 회수</button></form>{% endif %}</div>
+{% if stale_rows %}
+<div class="card tablecard"><table>
+<tr><th>DB</th><th class="hide-sm">담당</th><th class="hide-sm">지역</th><th>활동 없음</th><th class="num">회수</th></tr>
+{% for r in stale_rows %}
+<tr><td class="strong wrap-sm"><a href="{{ path }}?lead={{ r.lead_id }}#lead">{{ r.name_v }}</a><div class="sm-sub"><span>{{ r.agent_name }} · {{ r.region }}</span></div></td>
+<td class="hide-sm">{{ r.agent_name }}</td><td class="hide-sm">{{ r.region }}</td>
+<td>{% if r.stale %}<span class="chip bad">{{ r.idle }}일</span>{% else %}<span class="chip warn">{{ r.idle }}일 · {{ r.left }}일 뒤</span>{% endif %}</td>
+<td class="acts">{% if r.stale %}<form method="post" action="{{ path }}">{{ hidden('reclaim') }}<input type="hidden" name="lead_id" value="{{ r.lead_id }}"><button class="ghost" type="submit">회수</button></form>{% else %}-{% endif %}</td></tr>
+{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">방치된 DB 가 없습니다</div><div class="cap">활동 없이 {{ WARN }}일이 지나면 예고하고 {{ STALE }}일이 지나면 회수할 수 있습니다.</div></div>{% endif %}
+
+<h2 class="sec" id="people">사람별 보유와 맡은 지역</h2>
+{% if pick_agent %}
+<section class="card confirm" id="regions" style="margin-bottom:16px">
+  <div class="k">맡을 지역</div><h2 class="confirm-title">{{ pick_agent.name }}</h2>
+  <form class="wide" method="post" action="{{ path }}">{{ hidden('regions') }}<input type="hidden" name="agent_id" value="{{ pick_agent.agent_id }}">
+    <div class="checks">{% for g in REGIONS %}<label><input type="checkbox" name="region" value="{{ g }}"{{ ' checked' if g in pick_agent.regions }}> {{ g }}</label>{% endfor %}</div>
+    <p class="cap" style="margin:0">상담 신청과 한 번에 배정은 그 지역을 맡은 사람 가운데 들고 있는 DB 가 적은 사람에게 갑니다. 보유 한도는 {{ HOLD }}건입니다.</p>
+    <div class="actions"><button class="primary" type="submit">저장</button><a class="pill quiet big-pill" href="{{ path }}#people">취소</a></div>
+  </form>
+</section>
+{% endif %}
+{% set busy = cands|selectattr('regions')|list + cands|rejectattr('regions')|selectattr('total')|list %}
+{% set idle = cands|rejectattr('regions')|rejectattr('total')|list %}
+{% if cands %}
+<div class="card tablecard"><table>
+<tr><th>성명</th><th class="hide-sm">맡은 지역</th><th class="num hide-sm">보유</th><th class="num">체결률</th><th class="num hide-sm">지역</th></tr>
+{% for c in busy %}
+<tr><td class="strong wrap-sm">{{ c.name }} <span class="req-code">{{ c.code }}</span>
+  <div class="sm-sub"><span>{{ c.regions|join(', ') if c.regions else '지역 없음' }} · 보유 {{ c.held }}/{{ HOLD }}</span><span><a href="{{ path }}?regions={{ c.agent_id }}#regions">지역 정하기</a></span></div></td>
+<td class="hide-sm cell-wrap">{{ c.regions|join(', ') if c.regions else '정하지 않음' }}</td>
+<td class="num hide-sm">{{ c.held }}<span class="unit">/ {{ HOLD }}</span></td>
+<td class="num">{{ '%g'|format(c.rate) ~ '%' if c.rate is not none else '-' }}<div class="cap" style="margin:2px 0 0">{{ c.won }}/{{ c.total }}건</div></td>
+<td class="num hide-sm"><a href="{{ path }}?regions={{ c.agent_id }}#regions">정하기</a></td></tr>
+{% endfor %}
+{% if not busy %}<tr><td colspan="5" class="cap">맡은 지역이나 DB 가 있는 사람이 아직 없습니다.</td></tr>{% endif %}
+</table></div>
+{% if idle %}<details class="wt" style="margin-top:12px"><summary>지역도 DB 도 없는 {{ idle|length }}명</summary>
+  <div class="chips" style="padding:4px 0 8px">{% for c in idle %}<a class="ghost" href="{{ path }}?regions={{ c.agent_id }}#regions">{{ c.name }} {{ c.code }}</a>{% endfor %}</div></details>{% endif %}
+{% else %}<div class="card"><div class="k">범위 안 재직자가 없습니다</div></div>{% endif %}
+
+<h2 class="sec">조직 단위 체결률</h2>
+<nav class="seg perf-seg" aria-label="조직 단위">{% for lv in LEVELS %}<a class="{{ 'on' if level == lv }}" href="{{ path }}?level={{ lv }}">{{ LEVEL_KO.get(lv, lv) }}</a>{% endfor %}</nav>
+{% if conv %}
+<div class="card tablecard" style="margin-top:16px"><table>
+<tr><th>조직</th><th class="num hide-sm">사람</th><th class="num hide-sm">배정</th><th class="num hide-sm">체결</th><th class="num">체결률</th></tr>
+{% for r in conv %}<tr><td class="strong wrap-sm">{{ r.name }}<div class="sm-sub"><span>{{ r.people }}명 · 배정 {{ r.total }} · 체결 {{ r.won }}</span></div></td>
+<td class="num hide-sm">{{ r.people }}</td><td class="num hide-sm">{{ r.total }}</td><td class="num hide-sm">{{ r.won }}</td>
+<td class="num"><span class="minibar"><i style="width:{{ r.rate or 0 }}%"></i></span> {{ '%g'|format(r.rate) ~ '%' if r.rate is not none else '-' }}</td></tr>{% endfor %}
+</table></div>
+{% else %}<div class="card" style="margin-top:16px"><div class="k">이 단위로 셀 DB 가 없습니다</div></div>{% endif %}
+<p class="cap">기준 시각 {{ now|when }}. 체결률은 지금 담당이 있는 DB 가운데 고객으로 바꾼 것의 비율입니다. 조직은 {{ ctx.ym[:4] }}년 {{ ctx.ym[4:]|int }}월 소속 기준입니다. 금액은 싣지 않습니다.</p>
+
+{% if is_main %}
+<h2 class="sec" id="handover">해촉자 고객 넘기기</h2>
+<p class="cap land-note">해촉한 설계사의 고객은 마지막 소속 조직의 조직장에게 넘기고, 들고 있던 DB 는 회수합니다. 넘긴 고객은 준법 확인을 남기기 전까지 받은 관리자에게도 연락처가 가려집니다. D-24 가정입니다.</p>
+{% if ask %}
+<section class="card confirm" style="margin-bottom:16px">
+  <div class="k">확인</div><h2 class="confirm-title">{{ ask.name }}의 고객 {{ ask.n_customers }}명을 {{ ask.to_name or '받을 사람 없음' }}에게 넘길까요</h2>
+  <ul class="notes"><li>들고 있던 DB {{ ask.n_leads }}건은 회수해 조직 풀로 돌립니다.</li><li>넘긴 뒤 준법 확인을 따로 남겨야 연락처가 보입니다.</li><li>넘긴 일은 변경 기록에 남고 되돌리려면 다시 넘겨야 합니다.</li></ul>
+  <form method="post" action="{{ path }}" class="actions">{{ hidden('handover') }}<input type="hidden" name="agent_id" value="{{ ask.agent_id }}"><input type="hidden" name="confirm" value="1">
+    <button class="primary" type="submit">넘기기</button><a class="pill quiet big-pill" href="{{ path }}#handover">취소</a></form>
+</section>
+{% endif %}
+{% if handover %}
+<div class="card tablecard"><table>
+<tr><th>해촉자</th><th class="hide-sm">해촉일</th><th class="num hide-sm">고객</th><th class="num hide-sm">DB</th><th>받을 관리자</th><th class="num">넘기기</th></tr>
+{% for h in handover %}<tr><td class="strong wrap-sm">{{ h.name }} <span class="req-code">{{ h.code }}</span><div class="sm-sub"><span>고객 {{ h.n_customers }} · DB {{ h.n_leads }}</span></div></td>
+<td class="hide-sm">{{ h.termination_date or '-' }}</td><td class="num hide-sm">{{ h.n_customers }}</td><td class="num hide-sm">{{ h.n_leads }}</td>
+<td>{{ h.to_name or '없음' }}</td>
+<td class="acts">{% if h.to_agent_id or not h.n_customers %}<a class="ghost" href="{{ path }}?ask={{ h.agent_id }}#handover">넘기기</a>{% else %}<span class="chip warn">조직장 지정 필요</span>{% endif %}</td></tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">넘길 해촉자 고객이 없습니다</div></div>{% endif %}
+
+<h3 class="subsec">준법 확인 대기 {{ pending|length }}명</h3>
+{% if pending %}
+<div class="card tablecard"><table>
+<tr><th>고객</th><th class="hide-sm">넘긴 사람</th><th class="hide-sm">받은 사람</th><th class="hide-sm hide-md">넘긴 때</th><th class="num">준법 확인</th></tr>
+{% for p in pending %}<tr><td class="strong wrap-sm">{{ p.name }}<div class="sm-sub"><span>{{ p.from_name or '-' }}에게서 {{ p.to_name }}에게</span></div></td>
+<td class="hide-sm">{{ p.from_name or '-' }}</td><td class="hide-sm">{{ p.to_name }}</td><td class="hide-sm hide-md">{{ p.handover_at|when }}</td>
+<td class="acts"><form method="post" action="{{ path }}">{{ hidden('confirm') }}<input type="hidden" name="customer_id" value="{{ p.customer_id }}"><button class="ghost" type="submit">확인 남기기</button></form></td></tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">준법 확인을 기다리는 고객이 없습니다</div></div>{% endif %}
+
+<h2 class="sec" id="add">DB 넣기</h2>
+<section class="card">
+  <form class="wide" method="post" action="{{ path }}">{{ hidden('add') }}
+    <div class="frow">
+      <label class="f">이름<input class="sm" type="text" name="name" maxlength="20" required></label>
+      <label class="f">휴대폰 번호<input class="sm" type="tel" name="phone" maxlength="13" inputmode="tel" required></label>
+      <label class="f">지역<select name="region" required><option value="">고르세요</option>{% for g in REGIONS %}<option>{{ g }}</option>{% endfor %}</select></label>
+    </div>
+    <div class="frow">
+      <label class="f">출처<select name="source">{% for k in ('company', 'referral', 'event') %}<option value="{{ k }}">{{ SOURCE_KO[k] }}</option>{% endfor %}</select></label>
+      <label class="f">조직 풀<select name="org_id"><option value="">본부 풀</option>{% for oid, t in orgs %}<option value="{{ oid }}">{{ t }}</option>{% endfor %}</select></label>
+    </div>
+    <div class="checks"><label><input type="checkbox" name="consent" value="1" required> 고객의 개인정보 수집과 이용 동의를 확인했습니다</label></div>
+    <div class="actions"><button class="primary" type="submit">미배정 풀에 넣기</button></div>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

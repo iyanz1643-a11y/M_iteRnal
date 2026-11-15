@@ -342,14 +342,16 @@ S2_POSTS = (("/board", {"action": "save", "category": "notice", "title": "토큰
 def test_s2_posts_without_csrf_are_refused_for_admin(env):
     con = env["con"]
     admin = login(env, "admin")
+    board = lambda: con.execute("SELECT COUNT(*) FROM board_post").fetchone()[0] if \
+        con.execute("SELECT 1 FROM sqlite_master WHERE name='board_post'").fetchone() else 0
     before = {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("edu_course", "edu_session", "edu_completion", "audit_log")}
+    posts = board()                       # run_demo 의 영업 샘플이 가이드 글 셋을 넣는다(S4). 토큰 없는 POST 가 글을 늘리지 않는지 본다
     for path, data in S2_POSTS:
         assert admin.post(path, data=data, csrf=False).status_code == 403, path
         assert admin.post(path, data={**data, "csrf_token": "wrong"}, csrf=False).status_code == 403, path
     after = {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in before}
     assert before == after
-    assert not con.execute("SELECT 1 FROM sqlite_master WHERE name='board_post'").fetchone() or \
-        con.execute("SELECT COUNT(*) FROM board_post").fetchone()[0] == 0
+    assert board() == posts
 
 
 def test_main_only_writes_are_refused_for_manager_and_agent(env):

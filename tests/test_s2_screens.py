@@ -196,7 +196,8 @@ def _role_logins(env):
     return {"main": "admin", "manager": manager, "agent": agent}
 
 
-@pytest.mark.parametrize("role,sales", [("agent", "/sales/card"), ("manager", "/sales/card"), ("main", "/sales/card-approve")])
+# 영업·제안은 S4 에 내 DB 와 DB 배정과 성과를 만들어 묶음 안 첫 built 화면이 바뀌었다. 설계사와 관리자는 내 DB, 메인 관리자는 배정이다
+@pytest.mark.parametrize("role,sales", [("agent", "/sales/leads"), ("manager", "/sales/leads"), ("main", "/sales/assign")])
 def test_tabbar_goes_to_first_built_screen(env, role, sales):
     from app.web import menu
     c = login(env, _role_logins(env)[role])
@@ -204,7 +205,9 @@ def test_tabbar_goes_to_first_built_screen(env, role, sales):
     tabbar = re.search(r'<nav class="tabbar"[^>]*>(.*?)</nav>', html, re.S).group(1)
     hrefs = re.findall(r'href="([^"]+)"', tabbar)
     assert sales in hrefs, (role, hrefs)
-    assert "/sales/leads" not in hrefs and "/sales/assign" not in hrefs, (role, hrefs)
+    uid = env["con"].execute("SELECT user_id FROM user_account WHERE login_id=?", (_role_logins(env)[role],)).fetchone()[0]
+    sales_group = next(g for g in menu.for_ctx(auth.context(env["con"], uid)) if g["id"] == "sales")
+    assert menu.entry(sales_group) == sales and "/sales/card" not in hrefs and "/sales/card-approve" not in hrefs, (role, hrefs)
     for h in hrefs:                                                            # 아래 탭은 모두 만들어진 화면이고 그 사람에게 열린다
         it = menu.find(h)
         assert it and it["status"] == "built", (role, h)

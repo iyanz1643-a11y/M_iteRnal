@@ -13,6 +13,7 @@ import sys
 from app import db, masters, samples, samples_edu
 from app.engine import career, certification, commission, incentive, payments, performance, ranking, reconcile
 from app.loader import excel_loader, incentive_plan, pdf_incentive
+from app.sales import samples as sales_samples
 from app.samples import AS_OF, MONTHS
 from app.web import auth as web_auth
 
@@ -76,6 +77,8 @@ def main(path=db.DEFAULT_DB, raw=None):
     edu = samples_edu.seed(con)
     print(f"[education] 샘플 과정 {edu['courses']}개 (필수 {edu['required']}개), 차수 {edu['sessions']}개, 수료 {edu['completions']}건 (명부 양식 D-09 확인 전이라 샘플)")
     print("\n".join(samples_edu.summary_lines(con)))
+    sal = sales_samples.seed(con)
+    print(f"[sales] 샘플 DB {sal['leads']}건, 고객 {sal['customers']}명, 면담 {sal['coaching']}건, 가이드 {sal['guides']}건 (가짜 이름과 번호. D-12, D-24, D-29 가정)")
 
     # 4) 원수사 정산서 엑셀 생성 → 적재 → 대사
     stmt_files, injected = samples.write_statement_files(con, AS_OF, raw)

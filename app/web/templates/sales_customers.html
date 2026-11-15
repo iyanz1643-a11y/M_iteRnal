@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{# 고객. 본인 고객만 보인다. 목록의 연락처는 가리고 상세에서만 원문을 보며 본 일은 기록에 남는다. D-12 가정.
+   해촉자에게서 넘겨받은 고객은 준법 확인 전까지 가린다. D-24 가정. 계약은 본인 계약만 잇는다. 금액은 싣지 않는다 #}
+{% macro flashbox(f) %}{% if f %}<div class="{{ 'okmsg' if f.kind == 'ok' else 'alert bad' }}" role="status" style="margin-top:24px">{{ f.text }}</div>{% endif %}{% endmacro %}
+{% macro mdko(md) %}{% if md %}{{ md[:2]|int }}월 {{ md[3:5]|int }}일{% endif %}{% endmacro %}
+{% block body %}
+<p class="eyebrow">영업·제안 · {{ SCOPES[ctx.scope] }} · {{ now|when }} 기준</p>
+<h1 class="display">고객</h1>
+<p class="lede">체결한 고객의 계약, 기념일, 다음 할 일입니다. 앞으로 30일 안의 일을 먼저 보여 드립니다.</p>
+{{ flashbox(flash) }}
+
+<div class="grid g2" style="margin-top:32px">
+  <div class="card"><div class="k">내 고객</div><div class="big">{{ rows|length }}<span class="unit">명</span></div>
+    <div class="cap">이은 계약 {{ rows|sum(attribute='n_contracts') }}건</div></div>
+  <div class="card"><div class="k">30일 안의 일</div><div class="big">{{ events|length }}<span class="unit">건</span></div>
+    <div class="cap">기념일과 다음 할 일{% set late = events|selectattr('tone', 'equalto', 'bad')|list|length %}{% if late %} · 지난 할 일 {{ late }}건{% endif %}</div></div>
+</div>
+
+{% if opened %}
+<article class="card board-open" id="customer" style="margin-top:20px">
+  <div class="notif-meta"><span class="chip good">고객</span>{% if opened.region %}<span>{{ opened.region }}</span>{% endif %}
+    {% if opened.handover_ko %}<span class="chip {{ 'warn' if opened.handover_status == 'pending' else 'blue' }}">넘겨받음 · {{ opened.handover_ko }}</span>{% endif %}</div>
+  <h2 class="confirm-title board-title">{{ opened.name_v }}</h2>
+  <div class="perf-split"><div><div class="k">연락처</div><div class="perf-num">{% if opened.plain %}<a href="tel:{{ opened.phone_v }}">{{ opened.phone_v }}</a>{% else %}{{ opened.phone_v }}{% endif %}</div></div>
+    {% if opened.birth_md %}<div><div class="k">생일</div><div class="perf-num">{{ mdko(opened.birth_md) }}</div></div>{% endif %}
+    {% if opened.anniv_md %}<div><div class="k">{{ opened.anniv_label or '기념일' }}</div><div class="perf-num">{{ mdko(opened.anniv_md) }}</div></div>{% endif %}</div>
+  {% if opened.access == 'pending' %}
+  <div class="alert" style="margin-top:16px">해촉한 설계사에게서 넘겨받은 고객입니다. 메인 관리자가 준법 확인을 남기면 연락처가 보이고 고칠 수 있습니다.</div>
+  {% else %}
+  <p class="cap">연락처를 본 일은 변경 기록에 남습니다.</p>
+  <h3 class="subsec">다음 할 일과 기념일</h3>
+  <form class="wide" method="post" action="{{ path }}"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="action" value="plan"><input type="hidden" name="customer_id" value="{{ opened.customer_id }}">
+    <div class="frow">
+      <label class="f">다음 할 일<input class="sm" type="text" name="next_action" value="{{ opened.next_action or '' }}" maxlength="200" placeholder="예: 보장 점검 결과 설명"></label>
+      <label class="f">날짜<input type="date" name="next_on" value="{{ opened.next_on or '' }}"></label>
+    </div>
+    <div class="frow">
+      <label class="f">생일 · 연도는 받지 않습니다<input type="date" name="birth_md" value="{{ '2000-' ~ opened.birth_md if opened.birth_md }}"></label>
+      <label class="f">다른 기념일 이름<input class="sm" type="text" name="anniv_label" value="{{ opened.anniv_label or '' }}" maxlength="20" placeholder="예: 결혼기념일"></label>
+      <label class="f">그 날짜<input type="date" name="anniv_md" value="{{ '2000-' ~ opened.anniv_md if opened.anniv_md }}"></label>
+    </div>
+    <div class="actions"><button class="primary" type="submit">저장</button></div>
+  </form>
+  {% endif %}
+
+  <h3 class="subsec">계약 {{ opened.contracts|length }}건</h3>
+  {% if opened.contracts %}
+  <div class="tablecard" style="padding:0"><table>
+  <tr><th>증권번호</th><th class="hide-sm">보험사</th><th class="hide-sm hide-md">상품</th><th class="hide-sm">계약일</th><th>상태</th></tr>
+  {% for k in opened.contracts %}<tr><td class="strong wrap-sm">{{ k.no }}<div class="sm-sub"><span>{{ k.insurer or '-' }} · {{ (k.contract_date or k.application_date or '')|md }}</span></div></td>
+    <td class="hide-sm">{{ k.insurer or '-' }}</td><td class="hide-sm hide-md cell-wrap">{{ k.product or '-' }}</td><td class="hide-sm">{{ k.contract_date or k.application_date or '-' }}</td>
+    <td><span class="chip">{{ k.status_ko }}</span></td></tr>{% endfor %}
+  </table></div>
+  {% else %}<p class="cap">아직 이은 계약이 없습니다.</p>{% endif %}
+  {% if opened.linkable %}
+  <form class="perf-pick" method="post" action="{{ path }}"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input type="hidden" name="action" value="link"><input type="hidden" name="customer_id" value="{{ opened.customer_id }}">
+    <label class="f">내 계약 잇기<select name="contract_id">{% for k in opened.linkable %}<option value="{{ k.contract_id }}">{{ k.no }} · {{ k.insurer or '-' }} · {{ k.status_ko }}</option>{% endfor %}</select></label>
+    <button class="ghost perf-go" type="submit">잇기</button></form>
+  {% endif %}
+
+  {% if opened.acts %}<h3 class="subsec">DB 때의 활동 {{ opened.acts|length }}건</h3>
+  <ul class="notes">{% for a in opened.acts %}<li>{{ a.done_on|md }} {{ a.kind_ko }}{% if a.result %} · {{ a.result }}{% endif %}</li>{% endfor %}</ul>{% endif %}
+  <p style="margin-top:12px"><a href="{{ path }}">목록으로</a></p>
+</article>
+{% endif %}
+
+<h2 class="sec">30일 안의 일 {{ events|length }}건</h2>
+{% if events %}
+<div class="card notif-list">{% for e in events %}
+  <div class="notif"><span class="dot {{ 'bad' if e.tone == 'bad' else ('warn' if e.tone == 'warn' else '') }}"></span><div class="notif-main">
+    <div class="notif-meta"><span>{{ e.date|md }}</span>{% if e.todo %}<span class="chip {{ e.tone }}">할 일</span>{% else %}<span class="chip {{ e.tone }}">기념일</span>{% endif %}</div>
+    <div class="notif-title"><a href="{{ path }}?id={{ e.customer_id }}#customer">{{ e.name }} · {{ e.kind }}</a></div></div></div>{% endfor %}
+</div>
+{% else %}<div class="card"><div class="k">30일 안의 기념일과 할 일이 없습니다</div><div class="cap">고객 카드에서 생일, 기념일, 다음 할 일을 적으면 여기에 보입니다.</div></div>{% endif %}
+
+<h2 class="sec">고객 {{ rows|length }}명</h2>
+{% if rows %}
+<div class="card tablecard"><table>
+<tr><th>고객</th><th class="hide-sm">연락처</th><th class="num hide-sm">계약</th><th class="hide-sm">다음 할 일</th><th>날짜</th></tr>
+{% for c in rows %}<tr><td class="strong wrap-sm"><a href="{{ path }}?id={{ c.customer_id }}#customer">{{ c.name_v }}</a>{% if c.handover_ko %} <span class="chip {{ 'warn' if c.handover_status == 'pending' else '' }}">{{ c.handover_ko }}</span>{% endif %}
+  <div class="sm-sub"><span>계약 {{ c.n_contracts }}건{% if c.next_action %} · {{ c.next_action }}{% endif %}</span></div></td>
+  <td class="hide-sm">{{ c.phone_v }}</td><td class="num hide-sm">{{ c.n_contracts }}</td><td class="hide-sm cell-wrap">{{ c.next_action or '-' }}</td>
+  <td>{{ c.next_on|md if c.next_on else '-' }}</td></tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">아직 고객이 없습니다</div><div class="cap">내 DB 에서 체결한 DB 를 고객으로 바꾸면 여기에 보입니다.</div></div>{% endif %}
+<p class="cap">기준 시각 {{ now|when }}. 계약 상태는 계약 엑셀 적재 기준입니다. 연락처는 목록에서 가리고 상세에서만 보입니다.</p>
+{% endblock %}

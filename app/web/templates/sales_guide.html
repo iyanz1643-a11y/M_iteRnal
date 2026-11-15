@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{# 가이드 자료. 공지와 자료실의 분류 셋(보장분석 가이드, TA 스크립트, 니즈환기 자료)을 모아 보인다. 보는 사람 규칙은 공지와 자료실과 같다.
+   올리기, 고치기, 내리기는 메인 관리자가 공지와 자료실에서 한다. 고객에게 보이는 자료는 심사를 거친 뒤 올린다 #}
+{% block body %}
+<p class="eyebrow">영업·제안 · {{ SCOPES[ctx.scope] }}</p>
+<h1 class="display">가이드 자료</h1>
+<p class="lede">보장분석 가이드, TA 스크립트, 니즈환기 자료를 모았습니다. 눌러서 열고 첨부를 내려받습니다.</p>
+
+<div class="card board-hero" style="margin-top:32px">
+  <div><div class="k">게시 중</div><div class="big">{{ total }}<span class="unit">건</span></div>
+    <div class="cap">{% for k, v in CATS.items() %}{{ v }} {{ counts[k] }}건{% if not loop.last %} · {% endif %}{% endfor %}</div></div>
+  {% if is_main %}<a class="pill big-pill" href="/board?new=1&cat={{ cat or 'guide' }}#post-form">올리기</a>{% endif %}
+</div>
+
+<nav class="seg" aria-label="분류">
+  <a class="{{ 'on' if not cat }}" href="{{ path }}">전체 {{ total }}</a>
+  {% for k, v in CATS.items() %}<a class="{{ 'on' if cat == k }}" href="{{ path }}?cat={{ k }}">{{ v }} {{ counts[k] }}</a>{% endfor %}
+</nav>
+
+{% if posts %}
+<div class="card notif-list board-list" style="margin-top:12px">{% for p in posts %}
+  <div class="notif board-row"><span class="dot off"></span><div class="notif-main">
+    <div class="notif-meta"><span class="chip blue">{{ CATS[p.category] }}</span><span>{{ p.posted_at|md }}</span>{% if p.n_files %}<span>첨부 {{ p.n_files }}개</span>{% endif %}</div>
+    <div class="notif-title"><a href="/board?post={{ p.post_id }}&cat={{ p.category }}#post">{{ p.title }}</a></div></div></div>{% endfor %}
+</div>
+{% else %}
+<div class="card" style="margin-top:12px"><div class="k">{{ '이 분류에 ' if cat }}게시 중인 자료가 없습니다</div>
+  <div class="cap">{% if is_main %}올리기를 누르면 공지와 자료실에서 이 분류로 올립니다.{% else %}메인 관리자가 올리면 여기에 보입니다.{% endif %}</div></div>
+{% endif %}
+<p class="cap">자료는 내부 영업 참고용입니다. 고객에게 그대로 보내는 자료는 심사를 거친 것만 씁니다.</p>
+{% endblock %}
