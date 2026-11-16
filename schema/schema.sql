@@ -1740,3 +1740,64 @@ CREATE TABLE IF NOT EXISTS ai_review_opinion (
 );
 CREATE INDEX IF NOT EXISTS idx_ai_review_opinion ON ai_review_opinion(review_id, round_no);
 -- [ai:end]
+
+-- 사람별 기간 실적 집계 (파트 B, data-loader). 인별실적 파일에서 온다. 적재기는 app/loader/person_perf.py, 매핑은 config/mapping/eternal_person_perf.yaml 이다.
+-- 계약 단위 원장(contract)과 섞지 않는다. 업적 집계 규칙(성립한 달에 더하고 철회한 달에 뺀다)은 이 표를 읽지 않는다.
+-- agent_period_perf: 한 사람의 한 기간(start_ym 에서 end_ym) 한 줄. 사원명은 저장하지 않는다. 칸 이름이 _count 면 건수, _amt 면 원 단위 금액이다.
+--   org_ 칸은 파일에 적힌 소속의 원문이다. 조직 트리와 잇지 않는다. agent_id 는 적재 때 사원번호로 찾은 설계사이고 없으면 비어 있다.
+--   perf_tier 는 유실적 구분이다. elite_50, active_10, some, none 이고 파일의 묶음 값으로만 정한다.
+-- agent_period_perf_insurer: 보험사 묶음의 건수와 월납보험료. insurer_name 은 파일의 원문이고 insurer_id 는 마스터에서 찾은 것이다.
+-- 같은 기간의 파일을 다시 넣으면 이전 배치는 import_batch.status 가 superseded 가 된다. 읽을 때는 v_agent_period_perf 를 쓴다.
+-- [person_perf:begin]
+CREATE TABLE IF NOT EXISTS agent_period_perf (
+    perf_id         INTEGER PRIMARY KEY,
+    batch_id        INTEGER NOT NULL REFERENCES import_batch(batch_id),
+    employee_no     TEXT NOT NULL,
+    agent_id        INTEGER REFERENCES agent(agent_id),
+    start_ym        TEXT NOT NULL,
+    end_ym          TEXT NOT NULL,
+    row_no          INTEGER,
+    position        TEXT,
+    org_general     TEXT,
+    org_hq          TEXT,
+    org_branch      TEXT,
+    org_direct_branch TEXT,
+    org_team        TEXT,
+    perf_tier       TEXT NOT NULL,
+    total_count     INTEGER NOT NULL DEFAULT 0,
+    total_monthly_premium_amt REAL NOT NULL DEFAULT 0,
+    total_premium_per_policy_amt REAL NOT NULL DEFAULT 0,
+    total_insurer_perf_amt REAL NOT NULL DEFAULT 0,
+    total_global_perf_amt REAL NOT NULL DEFAULT 0,
+    active_small_count INTEGER,
+    active_small_monthly_premium_amt REAL,
+    active_10_count INTEGER NOT NULL DEFAULT 0,
+    active_10_monthly_premium_amt REAL NOT NULL DEFAULT 0,
+    elite_50_count  INTEGER NOT NULL DEFAULT 0,
+    elite_50_premium_amt REAL NOT NULL DEFAULT 0,
+    single_count    INTEGER NOT NULL DEFAULT 0,
+    single_premium_amt REAL NOT NULL DEFAULT 0,
+    single_insurer_perf_amt REAL NOT NULL DEFAULT 0,
+    auto_count      INTEGER NOT NULL DEFAULT 0,
+    auto_premium_amt REAL NOT NULL DEFAULT 0,
+    auto_global_perf_amt REAL NOT NULL DEFAULT 0,
+    general_count   INTEGER NOT NULL DEFAULT 0,
+    general_premium_amt REAL NOT NULL DEFAULT 0,
+    general_global_perf_amt REAL NOT NULL DEFAULT 0,
+    UNIQUE (batch_id, employee_no)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_period_perf_period ON agent_period_perf(start_ym, end_ym, agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_period_perf_emp ON agent_period_perf(employee_no);
+
+CREATE TABLE IF NOT EXISTS agent_period_perf_insurer (
+    perf_id         INTEGER NOT NULL REFERENCES agent_period_perf(perf_id),
+    insurer_name    TEXT NOT NULL,
+    insurer_id      INTEGER REFERENCES insurer(insurer_id),
+    policy_count    INTEGER NOT NULL DEFAULT 0,
+    monthly_premium_amt REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (perf_id, insurer_name)
+);
+
+CREATE VIEW IF NOT EXISTS v_agent_period_perf AS
+SELECT p.* FROM agent_period_perf p JOIN import_batch b ON b.batch_id = p.batch_id AND b.status = 'active';
+-- [person_perf:end]

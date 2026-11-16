@@ -216,7 +216,7 @@ def test_sensitive_columns_are_not_stored(env):
 def test_employee_parser_drops_sensitive_and_returns_only_allowed(env):
     out = ee.parse_employee_file(env["emp_path"])
     src = fe.fake_employee_rows(env["roster"])
-    assert len(out["rows"]) == len(env["roster"]) and out["sheet"] == "조회"
+    assert len(out["rows"]) == len(env["roster"]) and out["sheet"] == fe.EMPLOYEE_SHEET == "사원현황조회"
     assert sorted(out["dropped_columns"]) == sorted(fe.SENSITIVE_EMPLOYEE)
     allowed = {"employee_no", "name", "org", "org_path", "position", "hire_date", "termination_date", "life", "nonlife", "_row"}
     assert all(set(r) == allowed for r in out["rows"])
@@ -580,3 +580,77 @@ def test_employee_file_with_wrong_header_fails_without_batch(connect_env):
     assert res.status == FAILED and "머리글" in res.reason
     assert env["con"].execute("SELECT COUNT(*) FROM import_batch").fetchone()[0] == 0
     assert env["con"].execute("SELECT COUNT(*) FROM agent").fetchone()[0] == 0
+
+
+# ------------------------------------------------------------------ 2026-11-16 실제 파일 대조에서 고친 것
+def test_employee_parser_never_reads_work_sheets(env):
+    """실제 파일은 가공 시트 "정리 (2)" 와 "정리" 가 조회 시트 앞에 있고, 둘 다 사원번호와 사원명이 있다.
+    파서는 매핑에 적은 "사원현황조회" 만 읽는다. "정리 (2)" 의 이행보증, 예치금, 소득 값은 어디에도 나오지 않는다."""
+    wb = openpyxl.load_workbook(env["emp_path"], read_only=True)
+    assert wb.sheetnames == ["정리 (2)", "정리", fe.EMPLOYEE_SHEET]
+    wb.close()
+    out = ee.parse_employee_file(env["emp_path"])
+    assert out["sheet"] == fe.EMPLOYEE_SHEET and out["unknown_columns"] == []
+    text = repr(out)
+    for r in fe.fake_employee_rows(env["roster"]):
+        for k in ("이행보증보험금액", "예치금", "소득(전년)", "계좌번호", "핸드폰번호", "이메일", "자택주소"):
+            if r[k] and len(str(r[k])) >= 6:
+                assert str(r[k]) not in text, k
+
+
+def test_employee_file_without_query_sheet_is_blocked_with_reason(env):
+    """조회 시트가 없고 시트가 여럿이면 다른 시트로 넘어가지 않고 막는다. 시트가 하나뿐이면 그 시트를 읽는다."""
+    rows = fe.fake_employee_rows(env["roster"])
+    work2 = [fe.WORK_SHEET_HEADERS] + [[r["사원번호"], r["사원명"], r["본부"], r["지점"], r["이행보증보험금액"], r["예치금"], r["소득(전년)"]] for r in rows]
+    path = fe.write_xlsx(env["tmp"] / "emp_renamed.xlsx", fe.EMPLOYEE_HEADERS, rows, sheet="조회", extra_sheets={"정리 (2)": work2})
+    with pytest.raises(HeaderMismatch) as e:
+        ee.parse_employee_file(path)
+    assert "사원현황조회" in str(e.value) and "정리 (2)" in str(e.value)
+    single = fe.write_xlsx(env["tmp"] / "emp_single.xlsx", fe.EMPLOYEE_HEADERS, rows, sheet="Sheet1")
+    assert len(ee.parse_employee_file(single)["rows"]) == len(rows)
+
+
+def test_contract_file_with_extra_sheet_and_no_contract_sheet_is_blocked(env):
+    path = fe.write_xlsx(env["tmp"] / "c_renamed.xlsx", fe.CONTRACT_HEADERS, env["rows"], sheet="Sheet1", extra_sheets={"피봇 테이블 1": [["행 레이블"]]})
+    with pytest.raises(HeaderMismatch) as e:
+        ec.load_contract(env["con"], path, YM)
+    assert "계약현황" in str(e.value)
+    assert env["con"].execute("SELECT COUNT(*) FROM import_batch").fetchone()[0] == 0
+
+
+def _with_total_row(env, rows, name, bump=0):
+    total = {h: "" for h in fe.CONTRACT_HEADERS}
+    total["No."] = "합계"
+    for k in ("초회보험료", "수금보험료", "1차년성적", "인정보험료"):
+        total[k] = sum(int(str(r[k]).replace(",", "")) for r in rows) + bump
+    path = fe.write_xlsx(env["tmp"] / name, fe.CONTRACT_HEADERS, list(rows) + [total], sheet="계약현황",
+                         extra_sheets={"피봇 테이블 2": [["행 레이블", "합계"]]})
+    return path
+
+
+def test_total_row_is_not_a_contract_and_not_a_block(env):
+    """실제 2월 파일의 마지막 행은 증권번호가 빈 합계 행이다. 계약으로 넣지 않고 막힌 행으로도 세지 않는다."""
+    con, rows = env["con"], env["rows"]
+    src = _source_totals(env["path"])
+    s = ec.load_contract(con, _with_total_row(env, rows, "c_total.xlsx"), YM)
+    assert s["block"] == 0 and s["skipped"] == 0
+    assert s["file_rows"] == s["loaded"] == len(rows) and s["summary_rows"] == 1 and s["summary_matches"] is True
+    assert s["file_recognized_sum"] == src["recognized"] == s["loaded_recognized_sum"]
+    codes = _codes(con, s["batch_id"])
+    assert "summary_row" in codes and "summary_mismatch" not in codes and "no_gap" not in codes
+    assert con.execute("SELECT COUNT(*) FROM raw_row WHERE batch_id=?", (s["batch_id"],)).fetchone()[0] == len(rows) + 1   # 원본 행에는 남긴다
+    assert con.execute("SELECT row_count FROM import_batch WHERE batch_id=?", (s["batch_id"],)).fetchone()[0] == len(rows)
+
+
+def test_total_row_mismatch_and_no_gaps_are_warned_with_ratio_only(env):
+    """합계 행이 계약 행의 합과 다르면 차이 비율만 경고한다. No. 가 비면 빠진 번호 수를 경고한다. 금액은 메시지에 없다."""
+    con = env["con"]
+    rows = [dict(r) for r in env["rows"] if r["No."] % 10]          # 열에 하나를 걸러 낸 파일
+    s = ec.load_contract(con, _with_total_row(env, rows, "c_total_bad.xlsx", bump=1_000_000), YM)
+    assert s["block"] == 0 and s["loaded"] == len(rows) and s["summary_matches"] is False and s["summary_diff_pct"] > 0
+    assert s["no_gaps"] == len(env["rows"]) // 10 - (1 if len(env["rows"]) % 10 == 0 else 0)
+    msgs = {r["check_code"]: r["message"] for r in con.execute("SELECT check_code, message FROM quality_issue WHERE batch_id=?", (s["batch_id"],))}
+    assert "%" in msgs["summary_mismatch"] and "빠진 번호" in msgs["no_gap"]
+    total = sum(int(str(r["인정보험료"]).replace(",", "")) for r in rows)
+    for m in msgs.values():
+        assert str(total) not in m.replace(",", "") and f"{total:,}" not in m

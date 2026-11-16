@@ -7,6 +7,8 @@
 - 인정보험료는 파일 값을 그대로 쓴다. 1차년에서 4차년 성적은 보관만 한다 (D-03).
 - 철회 계약의 금액이 음수로 오면 원장에는 절댓값으로 넣고 품질 기록에 건수만 남긴다 (D-31, 매핑의 sign_align).
   원본 행과 file_recognized_sum 은 원래 부호 그대로다. 철회가 아닌 계약의 음수는 값을 두고 경고만 남긴다.
+- 맨 끝의 합계 행(매핑의 summary_row)은 계약으로 넣지 않고 막힌 행으로도 세지 않는다. 원본 행에는 남긴다.
+  합계 행의 인정보험료가 계약 행의 합과 다르면 차이 비율만 경고한다. No. 가 1부터 이어지지 않으면 빠진 번호 수를 경고한다.
 - 경고와 오류 메시지에는 사람 이름과 금액을 넣지 않는다. 사번, 보험사, 상품종류 같은 분류 값만 넣는다.
 """
 import hashlib
@@ -19,7 +21,7 @@ from app import db
 from app.loader import mapping, org_path
 from app.loader.excel_loader import SIGN_ALIGN_MESSAGE, DuplicateFile, align_withdrawn_sign, finish_batch, issue, register_batch, summary  # noqa: F401  (DuplicateFile 을 여기서도 꺼내 쓴다)
 from app.loader.sheet import HeaderMismatch, check_headers, iter_raw, open_sheet, to_standard
-from app.loader.transforms import normalize_header, normalize_policy_no
+from app.loader.transforms import apply, normalize_header, normalize_policy_no
 from app.periods import date_ym
 
 CATEGORY_MAP = mapping.MAPPING_DIR / "product_category_map.yaml"
@@ -61,6 +63,25 @@ def preview(path, period_ym):
 # ------------------------------------------------------------------ 적재
 def _insurer_code(name):
     return "AUTO_" + hashlib.sha1(name.encode("utf-8")).hexdigest()[:8].upper()
+
+
+def _is_summary_row(raw, rule) -> bool:
+    """매핑의 summary_row 꼴인가: blank_column 이 비고 label_column 이 labels 가운데 하나다."""
+    if not rule:
+        return False
+    key = raw.get(normalize_header(rule["blank_column"]))
+    if key not in (None, "") and str(key).strip():
+        return False
+    label = raw.get(normalize_header(rule["label_column"]))
+    labels = {normalize_header(x).lower() for x in rule.get("labels", [])}
+    return isinstance(label, str) and normalize_header(label).lower() in labels
+
+
+def _diff_pct(a, b) -> float:
+    """a 가 b 보다 몇 % 다른가. b 가 0 이면 a 가 0 일 때만 0 이다."""
+    if b == 0:
+        return 0.0 if a == 0 else float("inf")
+    return (a - b) / abs(b) * 100
 
 
 class _Agg:
@@ -110,14 +131,28 @@ def _load_rows(con, m, ws, hrow, headers, batch_id, dropped):
     agg = _Agg()
 
     raw_buf, file_rows, file_sum = [], 0, 0
+    srule = m.get("summary_row")
+    summary_rows, summary_sum = 0, None       # 원본의 합계 행 수와 그 행의 인정보험료. 대조에만 쓰고 메시지에는 비율만 넣는다
+    src_nos = []
     sign_fixed, sign_fixed_amount = 0, 0   # D-31 으로 부호를 맞춘 행 수와 그 인정보험료의 절댓값 합. 대조에만 쓰고 메시지에는 넣지 않는다
     stats = dict(inserted=0, updated=0, refreshed=0, stale=0, skipped=0, history=0)
     written = {}  # (insurer_id, policy_no) → 인정보험료. 파일 안에서 같은 키가 다시 오면 뒤 행이 남는다
     seen_rows = {}
     for r_idx, raw in iter_raw(ws, hrow, headers, drop_kw):
-        file_rows += 1
         raw_buf.append((batch_id, ws.title, r_idx, json.dumps(raw, ensure_ascii=False, default=str)))
+        if _is_summary_row(raw, srule):
+            summary_rows += 1
+            try:
+                v = apply(raw.get(normalize_header(srule["compare_column"])), ["parse_money"])
+            except (ValueError, TypeError):
+                v = None
+            if isinstance(v, (int, float)):
+                summary_sum = (summary_sum or 0) + v
+            continue
+        file_rows += 1
         std, blocks, warns = to_standard(raw, m["columns"], m.get("transforms", {}), required)
+        if isinstance(std.get("src_no"), int):
+            src_nos.append(std["src_no"])
         if isinstance(std.get("recognized_premium"), (int, float)):
             file_sum += std["recognized_premium"]
         for w in warns:
@@ -246,6 +281,22 @@ def _load_rows(con, m, ws, hrow, headers, batch_id, dropped):
     con.executemany("INSERT INTO raw_row(batch_id, sheet_name, row_no, raw_json) VALUES(?,?,?,?)", raw_buf)
     agg.flush(con, batch_id)
 
+    # ---------- 원본의 합계 행과 No. ----------
+    summary_diff_pct = None
+    if summary_rows:
+        issue(con, batch_id, "warn", "summary_row", f"원본의 합계 행 {summary_rows}개를 계약으로 넣지 않았습니다. 원본 행에는 남겼습니다")
+        if summary_sum is not None:
+            summary_diff_pct = _diff_pct(summary_sum, file_sum)
+            if abs(summary_sum - file_sum) > 0.5:
+                issue(con, batch_id, "warn", "summary_mismatch",
+                      f"원본 합계 행의 인정보험료가 계약 행의 합과 {summary_diff_pct:+.2f}% 다릅니다. 행이 빠졌거나 걸러 낸 파일일 수 있습니다")
+    no_gaps = 0
+    if src_nos:
+        distinct = set(src_nos)
+        no_gaps = max(distinct) - len(distinct) if min(distinct) >= 1 else 0
+        if no_gaps:
+            issue(con, batch_id, "warn", "no_gap", f"No. 가 1부터 이어지지 않습니다. 빠진 번호 {no_gaps}개. 원본에서 행을 걸러 낸 파일일 수 있습니다")
+
     # ---------- 건수와 합계 대조 ----------
     db_n, db_sum = con.execute("SELECT COUNT(*), COALESCE(SUM(converted_premium),0) FROM contract WHERE last_batch_id=?", (batch_id,)).fetchone()
     exp_sum = sum(written.values())
@@ -258,6 +309,8 @@ def _load_rows(con, m, ws, hrow, headers, batch_id, dropped):
     # file_recognized_sum 은 원본 부호 그대로의 합이다. 철회 음수의 부호를 맞춘 합은 file_recognized_sum_aligned 이고, 막힌 행이 없으면 원장 합과 같다
     return summary(con, batch_id, file_rows=file_rows, file_recognized_sum=file_sum, file_recognized_sum_aligned=file_sum + 2 * sign_fixed_amount,
                    loaded=len(written), loaded_recognized_sum=db_sum, sign_fixed=sign_fixed,
+                   summary_rows=summary_rows, summary_matches=None if summary_sum is None else abs(summary_sum - file_sum) <= 0.5,
+                   summary_diff_pct=summary_diff_pct, no_gaps=no_gaps,
                    dropped_columns=dropped, category_map=cmap["_meta"], **stats)
 
 

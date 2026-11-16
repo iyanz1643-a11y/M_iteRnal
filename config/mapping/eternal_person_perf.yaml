@@ -1,0 +1,109 @@
+# 이터널 인별실적 엑셀 → 사람별 기간 실적 집계 (agent_period_perf, agent_period_perf_insurer)
+# 2026-11-16 실제 파일 둘(3월에서 5월, 6월에서 8월)의 머리글로 만들었다. 적재기는 app/loader/person_perf.py 다.
+#
+# 파일의 꼴
+# - 머리글이 두 줄이다. 1행은 묶음(월간Total, 유실적, 일시납, 보험사 이름), 2행은 그 묶음의 칸(건수, 월납보험료).
+#   사람 칸(사원번호, 사원명, 직위, 조직)은 1행에만 있다. 같은 묶음은 1행 칸이 비어 있으면 왼쪽 묶음이 이어진다.
+# - 열의 순서는 시트와 파일마다 다르다. 그래서 순서는 보지 않고 (묶음, 칸) 이름으로 찾는다.
+# - 마지막에 사원번호와 사원명이 빈 합계 행이 하나 있다. 사람으로 넣지 않고 합계 대조에만 쓴다.
+#
+# 원천은 "인별" 시트다. "정리" 시트는 같은 값을 가진 부분집합이고(2026-11-16 대조에서 겹치는 칸이 모두 같았다),
+# 사원현황 파일의 "정리" 시트는 월납보험료 합계만 있다. 사원현황 파일의 "정리 (2)" 는 이행보증과 소득이 있어 쓰지 않는다.
+#
+# 칸 이름 규칙: 건수는 _count, 원 단위 금액은 _amt 로 끝난다.
+# 사원명은 사원번호와 맞춰 보는 데만 쓰고 저장하지 않는다. 원본 행(raw_row)에도 남기지 않는다.
+source: eternal
+data_type: person_perf
+versions:
+  - version: 1
+    effective_from: "202601"
+    file:
+      sheet: "인별"
+      header_rows: 2
+    drop_keywords: ["주민", "생년월일", "계좌", "은행", "예금주", "소득", "이행보증", "예치금", "4대보험", "보험업계고유번호",
+                    "핸드폰", "휴대폰", "전화", "이메일", "주소", "우편번호"]
+    # 1행에만 있는 사람 칸. 같은 이름이 두 번 나오면 앞의 것을 쓴다(실제 인별 시트에 직위가 두 번 있고 값이 같았다).
+    person:
+      "사원번호": employee_no
+      "사원명": name          # 맞춰 보기에만 쓴다. 저장하지 않는다
+      "직위": position
+      "총괄": org_general
+      "본부": org_hq
+      "지점": org_branch
+      "직할지점": org_direct_branch
+      "팀": org_team
+    person_required: [employee_no, name]
+    # 1행에만 있고 읽지 않는 열. 이 밖의 1행 칸이 새로 오면 머리글이 바뀐 것으로 보고 막는다.
+    ignore: ["No."]
+    # 묶음과 칸. match 는 1행 묶음 이름의 정규식이다(공백은 지우고 견준다).
+    # required 묶음이 없거나 칸이 모자라면 적재 전에 막는다.
+    groups:
+      total:
+        match: "Total$"          # 월간Total, 2026년03~05월간Total
+        required: true
+        subs:
+          "건수": total_count
+          "월납보험료": total_monthly_premium_amt
+          "건당보험료": total_premium_per_policy_amt
+          "원수사성적": total_insurer_perf_amt
+          "글로벌성적": total_global_perf_amt
+      active_small:
+        match: "^유실적\\(0\\.1만이상\\)$"   # 실제 파일에서는 모든 칸이 비어 있었다
+        required: false
+        subs:
+          "건수": active_small_count
+          "월납보험료": active_small_monthly_premium_amt
+      active_10:
+        match: "^유실적\\(10만이상\\)$"
+        required: true
+        subs:
+          "건수": active_10_count
+          "월납보험료": active_10_monthly_premium_amt
+      elite_50:
+        match: "^정예\\(50만이상\\)$"
+        required: true
+        subs:
+          "건수": elite_50_count
+          "보험료": elite_50_premium_amt
+      single:
+        match: "^일시납$"
+        required: true
+        subs:
+          "건수": single_count
+          "보험료": single_premium_amt
+          "원수사성적": single_insurer_perf_amt
+      auto:
+        match: "^자동차$"
+        required: true
+        subs:
+          "건수": auto_count
+          "보험료": auto_premium_amt
+          "글로벌성적": auto_global_perf_amt
+      general:
+        match: "^일반$"
+        required: true
+        subs:
+          "건수": general_count
+          "보험료": general_premium_amt
+          "글로벌성적": general_global_perf_amt
+    # 위 묶음이 아니고 칸이 꼭 이 둘인 묶음은 보험사로 본다.
+    insurer_subs:
+      "건수": policy_count
+      "월납보험료": monthly_premium_amt
+    # 2026-11-16 실제 파일의 보험사 묶음 37개. 여기 없는 보험사가 오면 적재하고 경고한다. 빠진 보험사도 경고한다.
+    known_insurers: ["동양생명", "미래에셋생명", "한화생명", "DB생명", "KDB생명", "교보생명", "삼성생명", "IM라이프", "신한라이프", "흥국생명",
+                     "AIA생명", "ABL생명", "메트라이프", "라이나생명", "푸본현대생명", "KB라이프", "농협생명", "IBK연금보험", "PCA생명",
+                     "오렌지라이프", "처브라이프", "푸르덴셜생명", "카디프생명", "하나생명", "삼성화재", "현대해상", "KB손보", "메리츠화재",
+                     "DB손보", "한화손보", "롯데손보", "흥국화재", "예별손보", "농협손보", "AIG손보", "라이나손보", "하나손보"]
+    # 파일의 보험사 이름과 원수사 마스터 이름이 다른 것. 마스터에서 찾을 때만 쓴다. 원문 이름은 그대로 저장한다.
+    insurer_alias:
+      "IM라이프": "iM라이프"
+      "농협생명": "NH생명"
+      "IBK연금보험": "IBK연금"
+      "처브라이프": "처브라이프생명"
+    # 유실적 구분. 파일의 묶음 값으로만 정한다. 앱이 기준 금액을 따로 계산하지 않는다.
+    #   elite_50: 정예(50만이상) 건수가 0 보다 크다
+    #   active_10: 유실적(10만이상) 건수가 0 보다 크다
+    #   some: 월간Total 건수가 0 보다 크다
+    #   none: 월간Total 건수가 0 이다 (무실적)
+    tiers: [elite_50, active_10, some, none]

@@ -22,8 +22,15 @@ def is_sensitive(header: str, keywords) -> bool:
 
 def open_sheet(path, sheet=None, header_row=None, must_have=()):
     """시트와 머리글 행을 고른다. header_row 가 없으면 앞 10행에서 must_have 가 모두 있는 행을 찾는다.
-    돌려주는 것: (workbook, worksheet, header_row, headers). headers 는 정규화한 머리글이고 끝의 빈 칸은 뺀다."""
+    돌려주는 것: (workbook, worksheet, header_row, headers). headers 는 정규화한 머리글이고 끝의 빈 칸은 뺀다.
+
+    sheet 를 주었는데 그 이름의 시트가 없으면, 시트가 하나뿐인 파일만 그 시트를 읽고 여럿이면 막는다.
+    다른 시트로 넘어가지 않는 까닭은 실제 사원현황처럼 사람이 만든 가공 시트에 민감 정보가 있을 수 있어서다."""
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    if sheet and sheet not in wb.sheetnames and len(wb.sheetnames) > 1:
+        names = ", ".join(f"'{n}'" for n in wb.sheetnames)
+        wb.close()
+        raise HeaderMismatch([f"시트 '{sheet}' 가 없습니다. 있는 시트: {names}. 다른 시트는 가공 시트일 수 있어 읽지 않았습니다"])
     sheets = [wb[sheet]] if sheet and sheet in wb.sheetnames else list(wb.worksheets)
     for ws in sheets:
         rows = list(ws.iter_rows(min_row=1, max_row=header_row or 10, values_only=True))
