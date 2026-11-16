@@ -93,18 +93,18 @@
 {% if tools %}
 <section class="main-tools" id="main-tools">
 <p class="eyebrow" style="margin-top:48px">메인 관리자 전용</p>
-<h2 class="sec" style="margin-top:4px">배지 만료 예정 {{ tools.expiring|length + tools.expiring_more }}건</h2>
-<p class="cap" style="margin:-6px 0 16px">명함 주소가 이어진 설계사 가운데 {{ tools.days }}일 안에 배지 유효기간이 끝나는 사람입니다. {{ tools.as_of }} 기준 판정입니다. 명함 그림 안의 배지는 앱이나 명함 사이트에서 지울 수 없어 설계사가 명함을 다시 만들어야 합니다.</p>
-{% if tools.expiring_error %}<div class="alert">배지 기록을 읽지 못했습니다. 잠시 뒤 다시 열어 주세요.</div>
-{% elif tools.expiring %}
-<div class="card reqs">{% for r in tools.expiring %}
-  <div class="req" data-expiring="{{ r.agent_id }}"><div class="req-main">{{ who(r) }}
-    <div class="req-meta"><span class="chip warn">{{ r.label }}</span><span>{{ r.until }}까지 · {{ r.days_left }}일 남음</span><span>{{ r.field_ko }}</span><span>명함 주소 {{ r.slug }}</span></div>
-    <details class="badge-more"><summary>설계사에게 보낼 안내</summary><p class="badge-notice">{{ r.notice }}</p></details>
+<h2 class="sec" style="margin-top:4px" id="new-year">새 연도 자격 안내 {{ tools.notices|length + tools.notices_more }}건</h2>
+<p class="cap" style="margin:-6px 0 16px">명함 주소가 이어진 설계사 가운데 {{ tools.days }}일 안에 같은 배지의 새 연도 자격이 확정된 사람입니다. {{ tools.as_of }} 기준 판정입니다. 배지와 명함은 퇴사 전까지 유지되어 지난 연도 배지를 내리지 않아도 됩니다. 새 연도 배지를 올리려면 설계사가 명함을 다시 신청합니다.</p>
+{% if tools.notices_error %}<div class="alert">배지 기록을 읽지 못했습니다. 잠시 뒤 다시 열어 주세요.</div>
+{% elif tools.notices %}
+<div class="card reqs">{% for r in tools.notices %}
+  <div class="req" data-new-year="{{ r.agent_id }}"><div class="req-main">{{ who(r) }}
+    <div class="req-meta"><span class="chip blue">{{ r.newer }}</span><span>지금 명함 {{ r.label }}</span><span>{{ r.field_ko }}</span><span>명함 주소 {{ r.slug }}</span></div>
+    <details class="badge-more"><summary>설계사에게 보낼 안내</summary><p class="badge-notice new-year">{{ r.notice }}</p></details>
   </div></div>
 {% endfor %}</div>
-{% if tools.expiring_more %}<p class="cap">이 밖에 {{ tools.expiring_more }}건이 더 있습니다. 남은 날이 적은 차례로 {{ tools.expiring|length }}건만 보여 드립니다.</p>{% endif %}
-{% else %}<div class="card"><div class="k">{{ tools.days }}일 안에 끝나는 배지가 없습니다</div></div>{% endif %}
+{% if tools.notices_more %}<p class="cap">이 밖에 {{ tools.notices_more }}건이 더 있습니다. 새 자격이 늦게 생긴 차례로 {{ tools.notices|length }}건만 보여 드립니다.</p>{% endif %}
+{% else %}<div class="card"><div class="k">{{ tools.days }}일 안에 새 연도 자격이 생긴 분이 없습니다</div></div>{% endif %}
 
 <h2 class="sec" id="removal">해촉자 명함 내리기 후보 {{ tools.cands|length }}건</h2>
 <p class="cap" style="margin:-6px 0 16px">명함 주소가 이어진 해촉자 가운데 마지막으로 확인한 명함이 공개 중이거나 승인 대기인 사람입니다. 저절로 내리지 않습니다. 하나씩 확인하고 내려 주세요.

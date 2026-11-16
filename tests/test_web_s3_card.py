@@ -1,7 +1,8 @@
 """S3 2차 화면 시험: 명함 연동 3차 화면, 비밀번호 규칙 통일, 조직별 설정 값의 화면 연결.
 
-- 내 명함의 배지는 본인 것만 보인다. 상태 넷(유효, 만료 임박, 만료, 예정)과 재발급 안내, 예정은 올릴 수 없다는 안내
-- 배지 만료 예정 목록과 해촉자 명함 내리기 후보는 메인 관리자만 본다
+- 내 명함의 배지는 본인 것만 보인다. 상태 둘(유효, 확정 전)과 새 연도 자격 안내, 확정 전은 올릴 수 없다는 안내. 만료 문구는 없다. D-55
+- 유효한 배지마다 공개와 비공개 토글이 있다. 기본은 비공개이고 본인만 CSRF 를 거쳐 바꾼다. D-77
+- 새 연도 자격 안내와 해촉자 명함 내리기 후보는 메인 관리자만 본다
 - 내리기는 메인 관리자만, 확인 단계와 CSRF 를 거친다. 쓰기가 꺼져 있으면 보내지 않고 안내한다. 결과 여덟 가지마다 존댓말이 있다
 - 내 정보의 비밀번호 바꾸기는 초대 링크와 같은 password_error 를 쓴다
 - 조직별 설정 값이 화면에 반영된다. 조직마다 다른 값이면 사람마다 소속 조직의 값이 보인다
@@ -178,18 +179,45 @@ def _audit(con, action):
 
 
 # ---------------------------------------------------------------- 내 명함의 배지
-def test_my_card_badges_only_own_with_four_states_and_notice(env):
+EXPIRY_WORDS = ("만료", "유효기간", "남음")
+
+
+def _row(html, label) -> str:
+    """배지 목록에서 그 배지의 줄 하나. 다음 줄이나 목록 끝까지다."""
+    sec = html[html.index('id="badges"'):]
+    i = sec.index(f'<span class="strong">{label}</span>')
+    ends = [k for k in (sec.find('<div class="req" data-badge', i), sec.find("명함 상태는 명함 사이트에서", i)) if k > 0]
+    return sec[i:min(ends)]
+
+
+def _toggle(html, label) -> str:
+    """배지 하나의 공개 토글 폼. 없으면 빈 글이다."""
+    row = _row(html, label)
+    j = row.find('<form method="post"')
+    return row[j:row.index("</form>", j)] if j >= 0 else ""
+
+
+def test_my_card_badges_only_own_with_two_states_and_notice(env):
     html = login(env, env["code_in"]).get("/sales/card").text
     sec = html[html.index('id="badges"'):]
     states = dict(re.findall(r'<span class="strong">([^<]+)</span> <span class="chip [a-z]*">([^<]+)</span>', sec))
     assert states["MDRT 2030"] == "유효"                                  # D-55 퇴사 전까지 유지. 연도가 지나도 만료가 없다
     assert states["MDRT 2031"] == "유효"
     assert states["우수인증설계사 2029"] == "유효"
-    assert states["2031 영업우수설계사"] == "예정"
-    assert card_route.EXPECTED_NOTE in sec and "명함에 올릴 수 없습니다" in sec
-    assert "유효기간이" not in sec and "만료 임박</span>" not in sec          # 만료 안내가 없다
+    assert states["2031 영업우수설계사"] == "확정 전"
+    assert card_route.EXPECTED_NOTE in sec and "확정 전, 명함에 올릴 수 없습니다" in sec
+    assert card_route.KEEP_NOTE in sec and "퇴사 전까지 유지됩니다" in sec
+    for word in EXPIRY_WORDS:                                             # 만료 이야기가 화면 어디에도 없다
+        assert word not in html, word
     assert "자격·수상에서 MDRT 를 고르고 연도에 2031 를 넣습니다" in sec
     assert "2031년 12월 10일 기준" in sec
+    # 새 연도 자격 안내. MDRT 2031 이 열흘 전에 확정됐고 MDRT 2030 이 있다
+    assert "새 연도 자격 안내" in sec and "MDRT 2031 자격이 생겼습니다" in sec
+    # 확정 전 배지에는 토글이 없고, 유효한 배지는 모두 비공개가 기본이다
+    assert sec.count('class="pub-toggle"') == sum(1 for v in states.values() if v == "유효") >= 3
+    assert 'aria-pressed="true">비공개</button>' in _toggle(html, "MDRT 2030")
+    assert 'name="csrf_token"' in _toggle(html, "MDRT 2030") and 'name="agent_id"' not in _toggle(html, "MDRT 2030")
+    assert _toggle(html, "2031 영업우수설계사") == ""
     # 남의 배지는 보이지 않는다. 관리자도 본인 것만이다
     for login_id in (env["code_out"], env["manager"]):
         other = login(env, login_id).get("/sales/card").text
@@ -203,13 +231,73 @@ def test_my_badges_function_takes_one_person():
     assert card_route.my_badges(None, None) is None
 
 
+# ---------------------------------------------------------------- 배지 공개 토글. D-77
+MDRT30 = "cert:MDRT:2030"
+
+
+def _pub(con, agent_id) -> dict:
+    return {r[0]: r[1] for r in con.execute("SELECT item_key, published FROM card_publish WHERE agent_id=?", (agent_id,))}
+
+
+def test_publish_toggle_is_own_only_with_csrf(env):
+    con, inside = env["con"], env["inside"]
+    me = login(env, env["code_in"])
+    form = {"action": "publish", "item_key": MDRT30, "published": "1"}
+    # CSRF 토큰이 없으면 403 이고 아무것도 바뀌지 않는다
+    assert me.post("/sales/card", data=form, csrf=False).status_code == 403
+    assert not _pub(con, inside)
+    # 본인이 공개로 바꾼다. 화면에 결과와 눌린 단추가 보이고, 변경 기록에 남는다
+    r = me.post("/sales/card", data=form)
+    assert r.status_code == 303 and r.headers["location"] == "/sales/card#badges"
+    assert _pub(con, inside) == {MDRT30: 1}
+    html = me.get("/sales/card").text
+    assert "공개로 바꿨습니다." in html and 'aria-pressed="true">공개</button>' in _toggle(html, "MDRT 2030")
+    assert 'aria-pressed="true">비공개</button>' in _toggle(html, "MDRT 2031")       # 다른 항목은 그대로 비공개다
+    log = _audit(con, "card_publish")
+    assert log and log[-1]["actor"] == env["code_in"] and log[-1]["target"] == f"agent:{inside}"
+    # 같은 값을 다시 보내면 바꾸지 않는다
+    me.post("/sales/card", data=form)
+    assert "이미 공개로 두셨습니다." in me.get("/sales/card").text and len(_audit(con, "card_publish")) == len(log)
+    # 확정 전 배지와 없는 항목은 공개할 수 없다
+    for key in ("award:SALES_EXCELLENT:2031", "cert:MDRT:1999"):
+        me.post("/sales/card", data={**form, "item_key": key})
+        assert key not in _pub(con, inside), key
+    assert "자격이 확인된 항목만 공개할 수 있습니다." in me.get("/sales/card").text
+    # 다른 사람은 남의 항목을 바꾸지 못한다. 폼에 설계사 번호 칸이 없어 늘 자기 것으로만 간다
+    other = login(env, env["code_out"])
+    other.post("/sales/card", data={**form, "published": "0", "agent_id": str(inside)})
+    mgr = login(env, env["manager"])
+    mgr.post("/sales/card", data={**form, "published": "0", "agent_id": str(inside)})
+    assert _pub(con, inside) == {MDRT30: 1}
+    # 메인 관리자는 화면 자체가 없다. 엔진도 남의 것은 거절한다
+    assert login(env, "admin").post("/sales/card", data={**form, "published": "0"}).status_code == 403
+    assert cb.set_publish(con, inside, MDRT30, False, "admin").status == cb.DENIED
+    assert cb.set_publish(con, inside, MDRT30, False, env["manager"]).status == cb.DENIED
+    assert _pub(con, inside) == {MDRT30: 1}
+    # 잘못된 요청은 400 이다
+    assert me.post("/sales/card", data={**form, "published": "yes"}).status_code == 400
+    assert me.post("/sales/card", data={**form, "action": "remove"}).status_code == 400
+    # 본인이 다시 비공개로 돌린다
+    me.post("/sales/card", data={**form, "published": "0"})
+    assert _pub(con, inside) == {MDRT30: 0}
+
+
+def test_publish_toggle_touch_target_is_48px():
+    css = (db.ROOT / "app" / "web" / "static" / "app.css").read_text(encoding="utf-8")
+    rule = re.search(r"\.pub-toggle button\{([^}]*)\}", css).group(1)
+    assert "min-height:48px" in rule
+
+
 # ---------------------------------------------------------------- 메인 관리자 전용 묶음
-def test_expiring_and_removal_candidates_only_for_main(env):
+def test_new_year_notice_and_removal_candidates_only_for_main(env):
     admin = login(env, "admin").get(PATH).text
     tools = admin[admin.index('id="main-tools"'):]
-    expiring = tools[:tools.index('id="removal"')]
+    notices = tools[:tools.index('id="removal"')]
     removal = tools[tools.index('id="removal"'):]
-    assert "MDRT 2030" not in expiring and "MDRT 2031" not in expiring      # D-55 로 만료가 없어 만료 예정 목록은 비어 있다
+    for word in EXPIRY_WORDS:                                               # D-55 로 만료 예정 묶음은 없어졌다
+        assert word not in admin, word
+    assert "새 연도 자격 안내 1건" in notices                               # 명함이 이어진 설계사의 MDRT 2031
+    assert f'data-new-year="{env["inside"]}"' in notices and "MDRT 2031" in notices and "card-in" in notices
     assert env["names"][env["gone"]] in removal and GONE_SLUG in removal and "해촉" in removal
     assert env["names"][env["inside"]] not in removal
     # 관리자는 같은 화면을 열어도 묶음이 없고, 확인 단계도 열리지 않는다
@@ -406,8 +494,8 @@ def test_award_top_n_default_follows_org(env):
 
 
 def test_badge_constants_match_engine():
-    """화면의 상태 이름은 엔진의 네 상태를 모두 덮는다."""
-    assert set(card_route.BADGE_KO) == {cb.VALID, cb.EXPIRING, cb.EXPIRED, cb.EXPECTED}
+    """화면의 상태 이름은 판정이 내는 두 상태를 덮는다. 만료 상태는 없다. D-55"""
+    assert set(card_route.BADGE_KO) == {cb.VALID, cb.EXPECTED}
 
 
 def test_education_soon_days_from_engine_follow_each_persons_org(env):

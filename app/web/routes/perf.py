@@ -7,6 +7,10 @@
 - 랭킹: results.ranking_for() 가 고를 수 있는 조직(ranking_orgs)을 막고 보이는 줄을 거른다(상위 10명과 자기 범위).
 - 조직 비교: 범위 안 조직 목록(ctx['org_ids'])만 넘긴다.
 - 명예의전당: 저장된 전월 랭킹 run(ranking_snapshot)과 확정한 조직 부문 수상(org_award_result), 수상 이력(agent_certification_award).
+  수상자 줄과 수상 이력은 D-77, D-80 으로 본인이 공개한 항목만 다른 사람에게 보인다. 메인 관리자도 같다.
+  줄은 card_badges.program_key 와 org_award_key 로 공개 열쇠를 만들고 card_badges.published_keys 로 거른다.
+  열쇠가 없는 줄은 공개할 수 없는 항목이라 본인에게만 보인다. 본인 줄은 늘 보이고 공개 여부를 붙인다.
+  전월 순위는 공개 항목이 아니라 랭킹 화면과 같은 규칙으로 그대로 보인다. D-81
 
 D-17. 이 묶음에는 수수료와 시상 금액을 싣지 않는다. 명예의전당의 조직 부문 시상 내용은 D-45 제안대로(가정) 모두에게
 공개하는 순위별 상품표로 보고 모든 역할에게 적는다. 규칙은 app/web/awards.py 한 곳이고 조직 부문 시상 화면과 같다.
@@ -15,6 +19,7 @@ D-17. 이 묶음에는 수수료와 시상 금액을 싣지 않는다. 명예의
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
+from app.connect import card_badges as cb
 from app.engine import org_award as oa
 from app.engine import orgs
 from app.engine import results as rs
@@ -197,32 +202,58 @@ def hall_ranking(con, ctx, prev, metric) -> dict | None:
     return {"root": root, "rows": oa.view_rows(rows, ctx), "total": len(rows), "run_at": run_at, "me": me}
 
 
+def _publish(con, ctx, rows: list, key_of) -> list:
+    """명예의전당의 수상과 자격 줄을 본인 공개로 거른다. D-77, D-80
+    본인 줄은 늘 남기고 mine, published 를 붙인다. 남의 줄은 그 사람이 그 열쇠를 공개했을 때만 남긴다. 역할로 풀어 주지 않는다."""
+    me = ctx.get("agent_id")
+    keys = {id(r): key_of(r) for r in rows}
+    pub = cb.published_keys(con, {r["agent_id"] for r in rows if keys[id(r)]})
+    out = []
+    for r in rows:
+        k = keys[id(r)]
+        on = bool(k) and k in pub.get(r["agent_id"], ())
+        if r["agent_id"] == me:
+            out.append({**r, "mine": True, "published": on, "can_publish": bool(k)})
+        elif on:
+            out.append({**r, "mine": False, "published": True, "can_publish": True})
+    return out
+
+
 def hall_divisions(con, ctx, prev) -> list:
-    """전월에 확정한 조직 부문 수상자. 볼 수 있는 부문(org_award.visible)만, 줄은 상위 10명과 자기 범위다.
-    순위별 시상 내용은 모두에게 공개하는 상품표라 역할과 상관없이 싣는다. 합계는 만들지 않는다 (awards.py, D-45 가정, D-17)."""
+    """전월에 확정한 조직 부문 수상자. 볼 수 있는 부문(org_award.visible)만, 줄은 상위 10명과 자기 범위 가운데 공개한 사람과 본인이다.
+    순위별 시상 내용은 모두에게 공개하는 상품표라 역할과 공개 설정과 상관없이 싣는다. 합계는 만들지 않는다 (awards.py, D-45 가정, D-17)."""
     out = []
     for d in oa.visible(con, ctx, prev, include_inactive=True):
         done = oa.confirmed(con, d["division_id"], prev)
-        rows = awards.label_rows(oa.view_rows(done, ctx))
-        if not rows:
+        if not done:
             continue
-        out.append({**d, "winners": rows, "prizes": awards.confirmed_prizes(done)})
+        key = cb.org_award_key(d["division_id"], prev)
+        rows = _publish(con, ctx, awards.label_rows(oa.view_rows(done, ctx)), lambda r, k=key: k)
+        out.append({**d, "winners": rows, "prizes": awards.confirmed_prizes(done), "confirmed_at": str(done[0].get("confirmed_at") or "")[:10]})
     return out
 
 
 def hall_history(con, ctx) -> list:
-    """수상 이력. 조직 부문 확정 수상과 영업우수·명예의전당 같은 수상 프로그램. 범위 안 사람만이다."""
+    """수상 이력. 조직 부문 확정 수상과 영업우수·명예의전당 같은 수상 프로그램. 범위 안 사람 가운데 공개한 줄과 본인 줄이다.
+    공개 열쇠를 만들려고 프로그램의 code, category 와 부문 번호를 함께 읽는다."""
     ids = scope_ids(con, ctx)
     if not ids:
         return []
     q, params = _in(ids)
-    awards = _q(con, f"""SELECT w.agent_id, a.name, a.internal_code code, p.name title, CAST(w.year AS TEXT) at, 'program' kind
-                         FROM agent_certification_award w JOIN agent a ON a.agent_id=w.agent_id JOIN certification_program p ON p.program_id=w.program_id
-                         WHERE w.agent_id IN ({q}) AND p.category='award'""", params)
-    org = _q(con, f"""SELECT r.agent_id, a.name, a.internal_code code, d.name || ' ' || r.rank_no || '위' title, r.period_ym at, 'division' kind
+    progs = _q(con, f"""SELECT w.agent_id, a.name, a.internal_code code, p.name title, CAST(w.year AS TEXT) at, 'program' kind,
+                               p.code program_code, p.category, w.year, NULL division_id
+                        FROM agent_certification_award w JOIN agent a ON a.agent_id=w.agent_id JOIN certification_program p ON p.program_id=w.program_id
+                        WHERE w.agent_id IN ({q}) AND p.category='award'""", params)
+    org = _q(con, f"""SELECT r.agent_id, a.name, a.internal_code code, d.name || ' ' || r.rank_no || '위' title, r.period_ym at, 'division' kind,
+                             NULL program_code, NULL category, NULL year, r.division_id
                       FROM org_award_result r JOIN agent a ON a.agent_id=r.agent_id JOIN org_award_division d ON d.division_id=r.division_id
                       WHERE r.agent_id IN ({q})""", params)
-    rows = awards + org
+
+    def key_of(r):
+        if r["kind"] == "division":
+            return cb.org_award_key(r["division_id"], r["at"])
+        return cb.program_key(r["program_code"], r["title"], r["category"], r["year"])
+    rows = _publish(con, ctx, progs + org, key_of)
     rows.sort(key=lambda r: (r["at"] or "", r["code"]), reverse=True)
     return rows
 

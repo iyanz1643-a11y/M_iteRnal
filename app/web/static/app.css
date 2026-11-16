@@ -462,8 +462,19 @@ a.btn.primary{background:var(--blue);color:#fff}a.btn.second{background:var(--ca
 .badge-notice{margin:10px 0 0;padding:12px 14px;border-radius:14px;background:rgba(255,159,10,.14);color:var(--ink);font-size:15px;line-height:1.5;word-break:keep-all}
 .badge-notice.bad{background:rgba(255,59,48,.10)}
 .badge-more{margin-top:10px}.badge-more summary{cursor:pointer;color:var(--blue);font-size:14px;font-weight:600;min-height:32px}
+.badge-notice.new-year{background:var(--tint)}
+.badge-notice .strong{font-weight:700;margin-right:4px}
+/* 배지 공개 토글. 공개와 비공개 두 단추, 누르는 곳은 48픽셀. D-77 */
+.pub-toggle{display:inline-flex;flex:none;gap:4px;padding:4px;border-radius:999px;background:var(--bg);align-self:center}
+.pub-toggle button{min-height:48px;min-width:84px;padding:0 18px;border:none;border-radius:999px;background:none;color:var(--quiet);font:inherit;font-size:15px;font-weight:600;cursor:pointer}
+.pub-toggle button.on{background:var(--card);color:var(--ink);box-shadow:0 1px 4px rgba(0,0,0,.12)}
+.pub-toggle button[value="1"].on{background:var(--blue);color:#fff}
+.pub-toggle button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.hall-pub{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;margin-top:4px;font-size:13px;font-weight:400}
+.hall-pub a{display:inline-flex;align-items:center;min-height:48px;margin:-12px 0}
+@media (max-width:760px){.pub-toggle{display:flex;align-self:stretch}.pub-toggle button{flex:1}}
 li.strong-note{color:var(--ink);font-weight:600}
-#main-tools,#removal,#rm-confirm,#badges{scroll-margin-top:72px}
+#main-tools,#removal,#rm-confirm,#badges,#new-year{scroll-margin-top:72px}
 @media (max-width:760px){.confirm-acts button.danger{flex:1 1 100%}}
 
 /* ---------- 지난 프로모션의 무르기, 달성자 명단, 13회차 판정과 구간 입력의 창별 구간표. S3 확정 기능 */

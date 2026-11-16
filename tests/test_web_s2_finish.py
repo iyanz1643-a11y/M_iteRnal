@@ -3,7 +3,7 @@
 
 | 무엇 | 보는 것 |
 | --- | --- |
-| 시상 내용 | 조직 부문 시상과 명예의전당이 같은 순위별 시상표를 세 역할 모두에게 보인다. 합계는 없다. 두 화면이 awards.py 한 곳을 쓴다 |
+| 시상 내용 | 조직 부문 시상과 명예의전당이 같은 순위별 시상표를 세 역할 모두에게 보인다. 합계는 없다. 두 화면이 awards.py 한 곳을 쓴다. 명예의전당의 수상자 줄은 공개한 사람만이다 |
 | 공지 | 지점 대상 공지를 그 위의 관리자도 본다. 다른 지점 관리자와 대상 밖 설계사는 못 본다. 역할이 설계사인 글은 관리자가 못 본다 |
 | 기준 안내 | 달성 현황, 내 달성 현황, 내 시상 진척에 보험사 기준, 기준일, 철회 제외 안내가 있다 |
 | 계약 목록 | 이름을 가린다. 수수료 칸이 없다. 거르기가 범위를 넘지 않는다 |
@@ -28,6 +28,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import db
+from app.connect import card_badges as cb
 from app.engine import org_award as oa
 from app.periods import ym_add
 from app.web import auth
@@ -164,6 +165,10 @@ def division(env):
         con.execute("""INSERT INTO org_award_result(division_id, period_ym, rank_no, agent_id, value, reward_label, confirmed_by, confirmed_at)
                        VALUES(?,?,?,?,?,?,?,?)""", (did, prev, rank, agent, 1000 * (10 - rank), PRIZES[rank], "admin", db.now()))
     con.commit()
+    # 명예의전당의 수상자 줄은 본인이 공개해야 남에게 보인다(D-77, D-80). 이 시험은 상품표를 보므로 세 사람 모두 공개해 둔다
+    key = cb.org_award_key(did, prev)
+    for agent in ranked:
+        assert cb.set_publish(con, agent, key, True, env["login_of"](agent)).status == "ok"
     return did
 
 

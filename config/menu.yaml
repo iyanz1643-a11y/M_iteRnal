@@ -68,7 +68,7 @@ groups:
       - {id: perf-ranking, name: 랭킹, path: /perf/ranking, roles: {main: all, manager: org, agent: self}, phase: 1, status: built,
          desc: "지표, 업권 조건, 조직 범위를 골라 순위를 낸다. 설계사에게는 상위 10명과 본인 순위"}
       - {id: perf-hall, name: 명예의전당, path: /perf/hall, roles: {main: all, manager: org, agent: self}, phase: 2, status: built,
-         desc: "확정된 전월 순위와 수상 이력"}
+         desc: "확정된 전월 순위와 수상 이력. 수상과 자격은 본인이 공개한 것만 남에게 보이고 메인 관리자도 같다. 본인 것은 늘 보인다. D-77, D-80"}
       - {id: perf-org-compare, name: 조직 비교, path: /perf/org-compare, roles: {main: all, manager: org}, phase: 2, status: built,
          desc: "지점별·팀별 실적과 가동률"}
 
@@ -128,9 +128,9 @@ groups:
       - {id: sales-cardnews, name: 카드뉴스, path: /sales/cardnews, roles: {main: all}, phase: 3, status: planned,
          desc: "리포트를 카드뉴스로 만들어 심사 뒤 게시한다"}
       - {id: sales-card, name: 모바일 명함, path: /sales/card, roles: {manager: self, agent: self}, phase: 3, status: built,
-         desc: "내 명함의 상태와 링크, 마지막 확인 시각. 반려 사유는 보이지 않는다. 명함에 올릴 수 있는 본인 배지와 유효기간, 만료 안내. 공유는 3단계. D-39"}
+         desc: "내 명함의 상태와 링크, 마지막 확인 시각. 반려 사유는 보이지 않는다. 명함에 올릴 수 있는 본인 배지와 항목마다 공개 정하기, 새 연도 자격 안내. 배지와 명함은 퇴사 전까지 유지된다. 공유는 3단계. D-39, D-55, D-77"}
       - {id: sales-card-approve, name: 명함 승인, path: /sales/card-approve, roles: {main: all, manager: org}, requires: card_approver, phase: 2, status: built,
-         desc: "명함 신청본을 앱에서 미리 보고 승인하거나 반려한다. 권한 승인 요청을 메인 관리자가 승인한 관리자만 범위 안 설계사의 요청을 처리하고, 관리자 본인의 명함은 메인 관리자가 처리한다. 메인 관리자는 설계사와 이어지지 않은 요청도 잇고 처리한다. 메인 관리자 전용 묶음에 배지 만료 예정과 해촉자 명함 내리기가 있다. D-44"}
+         desc: "명함 신청본을 앱에서 미리 보고 승인하거나 반려한다. 권한 승인 요청을 메인 관리자가 승인한 관리자만 범위 안 설계사의 요청을 처리하고, 관리자 본인의 명함은 메인 관리자가 처리한다. 메인 관리자는 설계사와 이어지지 않은 요청도 잇고 처리한다. 메인 관리자 전용 묶음에 새 연도 자격 안내와 해촉자 명함 내리기가 있다. D-44"}
 
   - id: data
     name: 데이터

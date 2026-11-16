@@ -41,35 +41,37 @@
 </div>
 {% endif %}
 {% if badges %}
-<h2 class="sec" id="badges">명함에 올릴 수 있는 배지</h2>
+<h2 class="sec" id="badges">명함 배지</h2>
 <p class="cap" style="margin:-6px 0 16px">{{ badges.as_of }} 기준으로 앱의 인증 확정과 조직 부문 수상 기록에서 판정했습니다. 배지는 명함 만들기에서 직접 고르고, 명함 사이트는 배지를 검사하지 않습니다.</p>
+{% if flash %}<div class="{{ 'okmsg' if flash.kind == 'ok' else 'alert' }}{{ ' bad' if flash.kind == 'bad' }}" role="status">{{ flash.text }}</div>{% endif %}
 {% if badges.error %}<div class="alert" role="status">배지 기록을 읽지 못했습니다. 잠시 뒤 <a href="{{ path }}#badges">새로 고쳐</a> 주세요.</div>
 {% elif not badges.rows %}<div class="card"><div class="k"><span class="dot off"></span>배지</div>
   <div class="mid word soft" style="margin-top:8px">아직 명함에 올릴 배지가 없습니다</div>
   <p class="cap">우수인증설계사, MDRT, COT, TOT 같은 인증이 확정되거나 조직 부문 시상에서 수상이 확정되면 여기에 보입니다.</p></div>
 {% else %}
 <div class="card"><div class="hero">
-  <div><div class="k"><span class="dot {{ 'warn' if badges.counts.expiring else ('' if badges.eligible else 'off') }}"></span>지금 올릴 수 있음</div>
+  <div><div class="k"><span class="dot {{ '' if badges.eligible else 'off' }}"></span>명함에 올릴 수 있음</div>
     <div class="big">{{ badges.eligible }}<span class="unit">개</span></div>
-    <div class="cap">유효 {{ badges.counts.valid }}개 · 만료 임박 {{ badges.counts.expiring }}개</div></div>
-  <div class="badge-split"><div><div class="k">예정</div><div class="mid">{{ badges.counts.expected }}<span class="unit">개</span></div></div>
-    <div><div class="k">만료</div><div class="mid">{{ badges.counts.expired }}<span class="unit">개</span></div></div></div>
+    <div class="cap">{{ keep_note }}</div></div>
+  <div class="badge-split"><div><div class="k">명예의전당 공개</div><div class="mid">{{ badges.published }}<span class="unit">개</span></div></div>
+    <div><div class="k">확정 전</div><div class="mid">{{ badges.counts.expected }}<span class="unit">개</span></div></div></div>
 </div></div>
-{% if badges.counts.expiring %}<div class="alert" role="status" style="margin-top:16px">유효기간이 곧 끝나는 배지가 {{ badges.counts.expiring }}개 있습니다. 아래 안내대로 명함을 다시 만들어 신청해 주세요.</div>{% endif %}
-<div class="card reqs badges" style="margin-top:16px">{% for r in badges.rows %}
-  <div class="req" data-badge="{{ r.status }}"><div class="req-main">
+{% for n in badges.notices %}<div class="badge-notice new-year" role="status" style="margin-top:16px"><span class="strong">새 연도 자격 안내</span> {{ n.notice }}</div>{% endfor %}
+<p class="cap" style="margin:16px 0 0">{{ publish_help }}</p>
+<div class="card reqs badges" style="margin-top:12px">{% for r in badges.rows %}
+  <div class="req" data-badge="{{ r.status }}"{% if r.can_publish %} data-published="{{ 1 if r.published else 0 }}"{% endif %}><div class="req-main">
     <div class="req-who"><span class="strong">{{ r.label }}</span> <span class="chip {{ r.tone }}">{{ r.status_ko }}</span></div>
     <div class="req-org">{{ r.field_ko }} · {{ r.basis_ko }}</div>
-    <div class="req-meta">{% if r.status == 'expected' %}<span>확정되면 {{ r.until }}까지 유효합니다</span>
-      {% elif r.status == 'expired' %}<span>{{ r.until }}에 끝났습니다</span>
-      {% else %}<span>{{ r.until }}까지 · {{ r.days_left }}일 남음</span>{% endif %}</div>
+    {% if r.eligible %}<div class="req-meta"><span>퇴사 전까지 유지됩니다</span>{% if r.can_publish %}<span>명예의전당 {{ '공개' if r.published else '비공개' }}{% if r.changed %} · {{ r.changed }} 바꿈{% endif %}</span>{% endif %}</div>{% endif %}
     {% if r.how %}<p class="cap badge-how">{{ r.how }}</p>{% endif %}
     {% if r.expected_note %}<p class="cap badge-note">{{ r.expected_note }}</p>{% endif %}
-    {% if r.notice and r.status == 'expired' %}<details class="badge-more"><summary>명함에 이 배지가 있다면</summary><p class="badge-notice bad">{{ r.notice }}</p></details>
-    {% elif r.notice %}<p class="badge-notice">{{ r.notice }}</p>{% endif %}
-  </div></div>
+  </div>
+  {% if r.can_publish %}<form method="post" action="{{ path }}" class="pub-toggle" role="group" aria-label="{{ r.label }} 명예의전당 공개 여부">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="action" value="publish"><input type="hidden" name="item_key" value="{{ r.key }}">
+    <button type="submit" name="published" value="1" class="{{ 'on' if r.published }}" aria-pressed="{{ 'true' if r.published else 'false' }}">공개</button>
+    <button type="submit" name="published" value="0" class="{{ 'on' if not r.published }}" aria-pressed="{{ 'false' if r.published else 'true' }}">비공개</button>
+  </form>{% endif %}</div>
 {% endfor %}</div>
-<p class="cap">유효기간은 연도 배지가 그다음 해 말일까지, 조직 부문 수상이 수상월에서 12개월 뒤 달의 말일까지입니다. 정해진 규정이 아니라 앱이 둔 가정입니다.</p>
 {% endif %}
 {% endif %}
 <p class="cap" style="margin-top:20px">명함 상태는 명함 사이트에서 읽기만 합니다. 공유는 다음 단계에 붙습니다.</p>

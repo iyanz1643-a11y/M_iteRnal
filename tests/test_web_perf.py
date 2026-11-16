@@ -304,6 +304,95 @@ def test_d45_hall_shows_award_content_to_everyone(env):
         con.commit()
 
 
+def _hall_rows(html, agent_id) -> list:
+    """명예의전당의 수상자 줄과 수상 이력 줄 가운데 그 사람의 줄."""
+    return re.findall(rf'<tr[^>]*data-hall-agent="{agent_id}"[^>]*>.*?</tr>', html, re.S)
+
+
+def _rank_part(html) -> str:
+    """명예의전당의 전월 순위 부분. 순위 제목에서 조직 부문 수상 제목 앞까지다."""
+    return html[html.index("월 전체 순위</h2>"):html.index("월 조직 부문 수상</h2>")]
+
+
+def test_d77_d80_hall_shows_only_published_items(env):
+    """명예의전당의 수상과 자격 줄은 본인이 공개한 것만 남에게 보인다. 메인 관리자, 관리자, 다른 설계사 모두 같다(D-80).
+    본인에게는 늘 보이고 공개 여부와 내 명함 링크가 붙는다. 전월 순위는 공개와 상관없이 그대로다(D-81)."""
+    from app.connect import card_badges as cb
+    con, mgr, who, code = env["con"], env["mgr"], env["who"], env["who_code"]
+    prev = ym_add(env["ym"], -1)
+    heads = {r[0] for r in con.execute("SELECT agent_id FROM org_manager")}
+    other = next(a for a in sorted(ctx_of(env, mgr["code"])["agent_ids"])
+                 if a not in heads and a not in (who, env["leaver"])
+                 and con.execute("SELECT 1 FROM agent a JOIN user_account u ON u.agent_id=a.agent_id WHERE a.agent_id=? AND a.status='active'",
+                                 (a,)).fetchone())
+    other_code = con.execute("SELECT login_id FROM user_account WHERE agent_id=?", (other,)).fetchone()[0]
+    prog = con.execute("SELECT program_id, code, name, category FROM certification_program WHERE category='award' ORDER BY program_id LIMIT 1").fetchone()
+    did = oa.save(con, by="admin", org_id=mgr["org_id"], name="시험 공개 부문", metric="converted_premium", top_n=2, effective_from=prev,
+                  rewards=[(1, "공개시험가"), (2, "공개시험나")])
+    for rank, agent, label in ((1, who, "공개시험가"), (2, other, "공개시험나")):
+        con.execute("""INSERT INTO org_award_result(division_id, period_ym, rank_no, agent_id, value, reward_label, confirmed_by, confirmed_at)
+                       VALUES(?,?,?,?,?,?,?,?)""", (did, prev, rank, agent, 1000 * (3 - rank), label, "admin", db.now()))
+    for agent in (who, other):
+        con.execute("INSERT INTO agent_certification_award(agent_id, program_id, year, awarded_at) VALUES(?,?,?,?)",
+                    (agent, prog["program_id"], 2019, "2019-12-01"))
+    con.commit()
+    div_key = cb.org_award_key(did, prev)
+    prog_key = cb.program_key(prog["code"], prog["name"], prog["category"], 2019)
+    assert div_key and prog_key
+    viewers = {"main": "admin", "manager": mgr["code"], "agent": other_code}
+    try:
+        before = {role: login(env, lid).get("/perf/hall").text for role, lid in viewers.items()}
+        mine = login(env, code).get("/perf/hall").text
+        # 비공개: 세 역할 누구에게도 남의 수상 줄이 없다. 상품표는 그대로 있다(D-45)
+        for role, html in before.items():
+            mine_rows = [r for r in _hall_rows(html, who) if "2019년" in r or "공개시험가" in r]
+            assert not mine_rows, (role, "비공개 항목")
+            assert "시험 공개 부문" in html and "공개시험가" in html, (role, "상품표")
+        # 본인에게는 늘 보이고 비공개 표시와 내 명함 링크가 있다
+        own = _hall_rows(mine, who)
+        assert any("공개시험가" in r for r in own) and any("2019년" in r for r in own)
+        assert all('data-mine-pub="0"' in r and 'href="/sales/card#badges"' in r for r in own if "공개시험가" in r or "2019년" in r)
+        # 다른 사람의 비공개 항목은 본인 화면에도 없다
+        assert not [r for r in _hall_rows(mine, other) if "공개시험나" in r or "2019년" in r]
+        # 공개하면 세 역할 모두에게 보인다
+        assert cb.set_publish(con, who, div_key, True, code).status == "ok"
+        assert cb.set_publish(con, who, prog_key, True, code).status == "ok"
+        after = {role: login(env, lid).get("/perf/hall").text for role, lid in viewers.items()}
+        for role, html in after.items():
+            rows = _hall_rows(html, who)
+            assert any("공개시험가" in r for r in rows), (role, "공개한 수상자 줄")
+            assert all('data-mine-pub' not in r for r in rows), (role, "남의 줄에 공개 표시")
+        for role in ("main", "manager"):                                    # 수상 이력은 범위가 있는 두 역할이 본다
+            assert any("2019년" in r for r in _hall_rows(after[role], who)), (role, "공개한 수상 이력")
+        assert any('data-mine-pub="1"' in r for r in _hall_rows(login(env, code).get("/perf/hall").text, who))
+        # 남의 비공개 항목은 여전히 없다
+        for role, html in after.items():
+            assert not [r for r in _hall_rows(html, other) if "공개시험나" in r or "2019년" in r] or role == "agent", (role, "남의 비공개")
+        # 전월 순위는 공개와 상관없이 그대로다. D-81
+        for role in viewers:
+            assert _rank_part(before[role]) == _rank_part(after[role]), (role, "순위")
+    finally:
+        con.execute("DELETE FROM card_publish WHERE agent_id IN (?,?)", (who, other))
+        con.execute("DELETE FROM agent_certification_award WHERE year=2019 AND program_id=? AND agent_id IN (?,?)", (prog["program_id"], who, other))
+        con.execute("DELETE FROM org_award_result WHERE division_id=?", (did,))
+        con.execute("DELETE FROM org_award_reward WHERE division_id=?", (did,))
+        con.execute("DELETE FROM org_award_division WHERE division_id=?", (did,))
+        con.commit()
+
+
+def test_d81_ranking_ignores_publish_settings(env):
+    """랭킹 화면은 공개 설정을 보지 않는다. 아무도 공개하지 않아도 설계사에게 상위 10명과 본인 순위가 보인다."""
+    con = env["con"]
+    assert not con.execute("SELECT 1 FROM card_publish WHERE published=1").fetchone()
+    html = login(env, env["who_code"]).get("/perf/ranking").text
+    shown = set(re.findall(r'data-agent="(\d+)"', html))
+    assert str(env["who"]) in shown and len(shown - {str(env["who"])}) >= 1
+    perf_src = (pathlib.Path(db.ROOT) / "app/web/routes/perf.py").read_text(encoding="utf-8")
+    ranking_src = perf_src[perf_src.index("def perf_ranking("):perf_src.index("# ---------------------------------------------------------------- 조직 비교")]
+    hall_rank_src = perf_src[perf_src.index("def hall_ranking("):perf_src.index("def _publish(")]
+    assert "card_badges" not in ranking_src + hall_rank_src and "cb." not in ranking_src + hall_rank_src
+
+
 def test_my_awards_amounts_are_marked_as_estimates(env):
     html = login(env, env["who_code"]).get("/my/awards").text
     assert "예상" in html and "적재 기준" in html

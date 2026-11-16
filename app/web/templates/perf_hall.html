@@ -26,18 +26,20 @@
 {% if rank.rows|length < rank.total %}<p class="cap">순위에 든 {{ rank.total }}명 가운데 {{ rank.rows|length }}명을 보여 줍니다.{% if ctx.role != 'main' %} 상위 10명과 {{ '우리 조직 사람' if ctx.role == 'manager' else '본인' }}입니다.{% endif %}</p>{% endif %}
 {% endif %}
 
+{% macro pubmark(x) %}{% if x.mine %}<div class="hall-pub" data-mine-pub="{{ 1 if x.published else 0 }}">{% if x.can_publish %}<span class="chip {{ 'blue' if x.published else '' }}">{{ '공개' if x.published else '비공개' }}</span><span>{{ '다른 분께도 보입니다' if x.published else '나에게만 보입니다' }}</span>{% if ctx.role != 'main' %}<a href="/sales/card#badges">내 명함에서 바꾸기</a>{% endif %}{% else %}<span class="chip">나에게만 보입니다</span>{% endif %}</div>{% endif %}{% endmacro %}
 <h2 class="sec">{{ prev[4:]|int }}월 조직 부문 수상</h2>
 {% if divisions %}{% for d in divisions %}
 <section class="card" style="margin-top:16px">
   <div class="chips"><span class="chip blue">{{ d.org_name }}</span><span class="chip">{{ d.name }}</span><span class="chip good">확정</span></div>
   {{ aw.prize_line(d.prizes, prize_note) }}
-  <div style="overflow-x:auto;margin-top:12px"><table>
+  {% if d.winners %}<div style="overflow-x:auto;margin-top:12px"><table>
     <tr><th>순위</th><th>성명</th><th class="num">{{ d.metric_ko }}</th><th class="hide-sm">시상</th></tr>
-    {% for w in d.winners %}<tr class="{{ 'me' if w.agent_id == ctx.agent_id }}"><td class="strong">{{ w.rank }}</td><td class="strong">{{ w.name }}</td>
+    {% for w in d.winners %}<tr class="{{ 'me' if w.mine }}" data-hall-agent="{{ w.agent_id }}" data-hall-div="{{ d.division_id }}"><td class="strong">{{ w.rank }}</td><td class="strong">{{ w.name }}{{ pubmark(w) }}</td>
       <td class="num">{% if d.metric == 'policy_count' %}{{ w.value|n }}건{% else %}{{ w.value|won }}원{% endif %}</td>
       <td class="hide-sm">{% if w.reward %}{{ w.reward }}{% else %}<span class="chip good">수상</span>{% endif %}</td></tr>{% endfor %}
   </table></div>
-  <p class="cap">{{ d.winners[0].confirmed_at[:10] }}에 확정했습니다. 시상 내용은 확정할 때의 순위별 상품표입니다.</p>
+  {% else %}<p class="cap" style="margin-top:12px">수상자가 이 수상을 공개하지 않아 이름을 보여 드리지 않습니다.</p>{% endif %}
+  <p class="cap">{{ d.confirmed_at }}에 확정했습니다. 시상 내용은 확정할 때의 순위별 상품표입니다. 수상자는 본인이 공개한 분만 보입니다.</p>
 </section>{% endfor %}
 {% else %}<div class="card"><div class="k">확정한 조직 부문 수상이 없습니다</div><div class="cap">메인 관리자가 지난달 수상자를 확정하면 여기에 보입니다.</div></div>{% endif %}
 
@@ -45,9 +47,9 @@
 {% if history %}
 <div class="card tablecard"><table>
 <tr><th>성명</th><th>수상</th><th class="hide-sm">시점</th></tr>
-{% for h in history %}<tr class="{{ 'me' if h.agent_id == ctx.agent_id }}"><td class="strong">{{ h.name }}<div class="sm-sub"><span>{{ h.at|ymko if h.kind == 'division' else h.at ~ '년' }}</span></div></td>
+{% for h in history %}<tr class="{{ 'me' if h.mine }}" data-hall-agent="{{ h.agent_id }}" data-hall-kind="{{ h.kind }}"><td class="strong">{{ h.name }}<div class="sm-sub"><span>{{ h.at|ymko if h.kind == 'division' else h.at ~ '년' }}</span></div>{{ pubmark(h) }}</td>
   <td>{{ h.title }}</td><td class="hide-sm">{{ h.at|ymko if h.kind == 'division' else h.at ~ '년' }}</td></tr>{% endfor %}
 </table></div>
-<p class="cap">{{ {'all': '전체', 'org': '우리 조직', 'self': '본인'}[ctx.scope] }}의 수상 이력입니다. 영업우수와 명예의전당 수상, 확정한 조직 부문 수상을 모았습니다.</p>
-{% else %}<div class="card"><div class="k">수상 이력이 없습니다</div></div>{% endif %}
+{% else %}<div class="card"><div class="k">보여 드릴 수상 이력이 없습니다</div></div>{% endif %}
+<p class="cap">{{ {'all': '전체', 'org': '우리 조직', 'self': '본인'}[ctx.scope] }}의 수상 이력입니다. 영업우수와 명예의전당 수상, 확정한 조직 부문 수상을 모았습니다. 다른 분의 수상과 자격은 그분이 공개한 항목만 보입니다.{% if ctx.agent_id and ctx.role != 'main' %} 내 수상은 늘 나에게 보이고, 공개 여부는 <a href="/sales/card#badges">내 명함</a>에서 정합니다.{% endif %}</p>
 {% endblock %}

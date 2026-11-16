@@ -8,7 +8,8 @@
 - 잇기는 메인 관리자만 한다. CardLinkTable 이 계정을 한 번 더 본다.
 - 수료 코드 발급은 이 화면에 없다. 발급은 /edu/completions 의 메인 관리자 묶음이다(app/web/routes/edu.py).
 - 메인 관리자 전용 묶음(S3 명함 연동 3차)이 같은 화면 아래에 있다. 관리자에게는 그리지 않고 값도 읽지 않는다.
-  배지 만료 예정은 card_badges.expiring_badges 를 guard 가 준 설계사 목록으로 부른다. 명함 주소가 이어진 사람만이다.
+  새 연도 자격 안내는 card_badges.new_year_notices 를 guard 가 준 설계사 목록으로 부른다. 명함 주소가 이어진 사람만이다.
+  배지와 명함은 퇴사 전까지 유지해 만료가 없다. D-55
   해촉자 명함 내리기 후보는 card_remove.removal_candidates, 내리기는 card_remove.remove_card 로만 보낸다.
   내리기는 확인 단계를 한 번 거친다. 확인 칸 confirm=1 이 없는 POST 는 확인 단계로 돌린다. 관리자가 보내면 403 이다.
   내리기 사유는 명함 사이트의 공개 상태 조회로 누구나 본다. 앱에는 저장하지 않고 변경 기록에도 길이만 남는다.
@@ -19,9 +20,11 @@
   다듬은 HTML 을 sandbox 값이 빈 iframe 의 srcdoc 에 넣고, 그림은 data: 로 넣는다. 가져온 신청본은 저장하지 않는다.
 
 내 명함 /sales/card 는 관리자와 설계사 본인이 쓴다. card_site.my_card 로 이어진 주소의 공개 상태를 한 번 읽는다(GET 만).
-- 명함에 올릴 수 있는 배지는 card_badges.judge_badges 를 본인 한 사람으로 부른다. 상태는 유효, 만료 임박, 만료, 예정 넷으로 보인다.
-  예정은 인증 계산에서 달성했지만 확정 전인 배지라 명함에 올릴 수 없다고 적는다. 만료 임박과 만료에는 reissue_notice 의 재발급 안내를 붙인다.
-  유효기간 규칙은 card_badges 의 가정을 따른다.
+- 명함에 올릴 수 있는 배지는 card_badges.judge_badges 를 본인 한 사람으로 부른다. 상태는 유효와 확정 전 둘이다.
+  확정 전은 인증 계산에서 달성했지만 확정 전인 배지라 명함에 올릴 수 없다고 적는다. 배지는 퇴사 전까지 유지한다. D-55
+- 유효한 배지마다 공개와 비공개를 고른다. 목록과 공개 여부는 card_badges.publish_items, 바꾸기는 card_badges.set_publish 로만 한다.
+  기본은 비공개이고 본인만 바꾼다. 설계사 번호는 세션의 ctx 에서만 읽고 폼으로 받지 않는다. D-77
+- 새 연도 자격 안내는 card_badges.new_year_notices 를 본인 한 사람으로 부른다.
 - 상태는 공개, 대기, 반려, 없음 넷으로 보인다. 반려 사유는 D-39 가 열려 있어 보여 주지 않고 반려됨만 보인다. CardStatus 에도 사유가 없다.
 - 주소가 이어지지 않았으면 메인 관리자에게 연결을 요청하라고 안내하고 명함 만들기 사이트 링크를 둔다. 주소는 사이트 주소 뒤 /make/ 로 둔 가정이다.
 - 사이트 주소가 설정되지 않았거나 읽지 못하면 연결 표에 남은 마지막 확인 상태와 시각을 보여 준다.
@@ -218,9 +221,9 @@ def _agent_choices(con, ym) -> list:
     return rows
 
 
-# ---------------------------------------------------------------- 메인 관리자 전용 묶음. 배지 만료 예정과 해촉자 명함 내리기
+# ---------------------------------------------------------------- 메인 관리자 전용 묶음. 새 연도 자격 안내와 해촉자 명함 내리기
 TOOLS = "main-tools"              # 묶음의 앵커
-EXPIRING_SHOW = 50                # 만료 예정 목록에 한 번에 싣는 줄 수
+NOTICE_SHOW = 50                  # 새 연도 자격 안내에 한 번에 싣는 줄 수
 AGENT_STATUS_KO = {"terminated": "해촉", "suspended": "정지", "active": "해촉일 지남"}
 REMOVE_REASON_HELP = "사유는 명함 사이트에서 누구나 볼 수 있습니다. 비워 두면 사이트 기본 문구가 들어갑니다."
 # 내리기 결과 여덟 가지마다 보이는 한 줄. 존댓말
@@ -250,16 +253,16 @@ def _day_ko(iso: str | None) -> str:
     return f"{v[:4]}년 {int(v[5:7])}월 {int(v[8:10])}일"
 
 
-def _expiring_rows(con, ctx) -> list:
-    """범위 안 설계사 가운데 명함 주소가 이어진 사람의 만료 예정 배지. 남은 날이 적은 차례다."""
-    notices = cb.expiring_badges(con, ctx["agent_ids"], today=_today())
+def _notice_rows(con, ctx) -> list:
+    """범위 안 설계사 가운데 명함 주소가 이어진 사람의 새 연도 자격 안내. 새 자격이 늦게 생긴 차례다. 만료는 없다. D-55"""
+    notices = cb.new_year_notices(con, ctx["agent_ids"], today=_today())
     who = _people(con, ctx["ym"], {n.agent_id for n in notices})
     out = []
     for n in notices:
         p = who.get(n.agent_id) or {}
         b = n.badge
         out.append({"agent_id": b.agent_id, "code": p.get("code"), "name": p.get("name"), "org": p.get("org"), "left": bool(p.get("left")),
-                    "slug": n.slug, "label": b.label, "until": _day_ko(b.valid_until), "days_left": b.days_left, "notice": n.notice,
+                    "slug": n.slug, "label": b.label, "newer": n.newer_label, "notice": n.notice,
                     "field_ko": FIELD_KO.get(b.card_field, b.card_field)})
     return out
 
@@ -282,15 +285,15 @@ def _candidate_rows(con, ctx, client, refresh: bool) -> tuple:
 
 def _tools(con, ctx, client, *, refresh=False, ask_remove=None) -> dict:
     """메인 관리자 전용 묶음의 값. 하나가 실패해도 다른 하나는 보인다."""
-    tools = {"expiring": [], "expiring_more": 0, "expiring_error": False, "cand_state": OK, "cands": [], "cand_note": "",
-             "rm_confirm": None, "rm_missing": False, "days": cb.EXPIRY_NOTICE_DAYS, "reason_help": REMOVE_REASON_HELP,
+    tools = {"notices": [], "notices_more": 0, "notices_error": False, "cand_state": OK, "cands": [], "cand_note": "",
+             "rm_confirm": None, "rm_missing": False, "days": cb.NOTICE_DAYS, "reason_help": REMOVE_REASON_HELP,
              "configured": client.configured, "at_label": _hm(datetime.now(KST)), "as_of": _day_ko(_today().isoformat()), "refreshed": refresh}
     try:
-        rows = _expiring_rows(con, ctx)
-        tools["expiring"], tools["expiring_more"] = rows[:EXPIRING_SHOW], max(len(rows) - EXPIRING_SHOW, 0)
+        rows = _notice_rows(con, ctx)
+        tools["notices"], tools["notices_more"] = rows[:NOTICE_SHOW], max(len(rows) - NOTICE_SHOW, 0)
     except sqlite3.Error:
         con.rollback()
-        tools["expiring_error"] = True
+        tools["notices_error"] = True
     tools["cand_state"], tools["cands"], tools["cand_note"] = _candidate_rows(con, ctx, client, refresh)
     if ask_remove:
         row = next((r for r in tools["cands"] if r["slug"] == ask_remove), None)
@@ -467,12 +470,16 @@ MY_STATE_KO = {"live": "공개", "pending": "대기", "rejected": "반려됨", "
 MAKE_PATH = "/make/"              # 명함 만들기 화면. 명함 사이트 public/make/index.html 을 사이트 주소 뒤에 둔 가정이다
 
 
-# 배지 상태의 화면 이름. 엔진의 STATUS_KO 와 뜻은 같고 설계사에게 보이는 말만 짧게 했다
-BADGE_KO = {cb.VALID: "유효", cb.EXPIRING: "만료 임박", cb.EXPIRED: "만료", cb.EXPECTED: "예정"}
-BADGE_TONE = {cb.VALID: "good", cb.EXPIRING: "warn", cb.EXPIRED: "bad", cb.EXPECTED: ""}
-BADGE_ORDER = {cb.EXPIRING: 0, cb.VALID: 1, cb.EXPECTED: 2, cb.EXPIRED: 3}
+# 배지 상태의 화면 이름. 배지는 퇴사 전까지 유지해 만료가 없다. D-55
+BADGE_KO = {cb.VALID: "유효", cb.EXPECTED: "확정 전"}
+BADGE_TONE = {cb.VALID: "good", cb.EXPECTED: ""}
+BADGE_ORDER = {cb.VALID: 0, cb.EXPECTED: 1}
 FIELD_KO = {cb.FIELD_CERTS: "자격·수상 배지", cb.FIELD_ETC: "그 밖의 자격·수상 칸"}
-EXPECTED_NOTE = "인증 계산에서 달성했지만 아직 확정 전이라 명함에 올릴 수 없습니다. 확정되면 올릴 수 있습니다."
+EXPECTED_NOTE = "확정 전, 명함에 올릴 수 없습니다. 인증이 확정되면 올릴 수 있습니다."
+KEEP_NOTE = "배지와 명함은 퇴사 전까지 유지됩니다. 해가 바뀌어도 지난 연도 배지를 그대로 두셔도 됩니다."
+PUBLISH_HELP = "공개로 두면 명예의전당에서 다른 분께도 이 항목이 보입니다. 기본은 비공개이고, 공개 여부는 본인만 바꿀 수 있습니다."
+MY_FLASH = "card_my_flash"
+MY_PATH = "/sales/card"
 
 
 def _how(b) -> str:
@@ -485,29 +492,33 @@ def _how(b) -> str:
 
 
 def my_badges(con, agent_id, today: date | None = None) -> dict | None:
-    """본인 한 사람의 배지. 설계사 번호가 없으면 None. 판정은 card_badges 가 하고 이 함수는 화면 꼴로 묶을 뿐이다."""
+    """본인 한 사람의 배지와 공개 여부. 설계사 번호가 없으면 None. 판정과 공개는 card_badges 가 하고 이 함수는 화면 꼴로 묶을 뿐이다."""
     if agent_id is None:
         return None
     today = today or _today()
     try:
         badges = cb.judge_badges(con, [agent_id], today=today)
-        notes = {n.badge.key: n.notice for n in cb.expiring_badges(con, [agent_id], today=today, include_expired=True, linked_only=False)}
+        pub = {i.item_key: i for i in cb.publish_items(con, agent_id, today=today)}
+        notices = cb.new_year_notices(con, [agent_id], today=today, linked_only=False)
     except sqlite3.Error:
         con.rollback()
-        return {"rows": [], "error": True, "as_of": _day_ko(today.isoformat()), "counts": {}}
+        return {"rows": [], "error": True, "as_of": _day_ko(today.isoformat()), "counts": {}, "notices": []}
     rows = []
     for b in badges:
         if b.agent_id != agent_id:                                # 본인 것만
             continue
+        item = pub.get(b.key)
         rows.append({"key": b.key, "label": b.label, "status": b.status, "status_ko": BADGE_KO.get(b.status, b.status),
                      "tone": BADGE_TONE.get(b.status, ""), "eligible": b.eligible, "field_ko": FIELD_KO.get(b.card_field, b.card_field),
-                     "until": _day_ko(b.valid_until), "days_left": b.days_left, "basis_ko": cb.BASIS_KO.get(b.basis, b.basis),
-                     "how": _how(b) if b.eligible else "", "notice": notes.get(b.key) if b.status in (cb.EXPIRING, cb.EXPIRED) else None,
+                     "basis_ko": cb.BASIS_KO.get(b.basis, b.basis), "origin": b.origin, "how": _how(b) if b.eligible else "",
+                     "can_publish": item is not None, "published": bool(item and item.published),
+                     "changed": _local(item.changed_at) if item and item.changed_at else "",
                      "expected_note": EXPECTED_NOTE if b.status == cb.EXPECTED else None})
-    rows.sort(key=lambda r: (BADGE_ORDER.get(r["status"], 9), r["days_left"] if r["days_left"] is not None else 0, r["label"]))
+    rows.sort(key=lambda r: (BADGE_ORDER.get(r["status"], 9), r["label"]))
     counts = {k: sum(1 for r in rows if r["status"] == k) for k in BADGE_KO}
     return {"rows": rows, "error": False, "as_of": _day_ko(today.isoformat()), "counts": counts,
-            "eligible": sum(1 for r in rows if r["eligible"]), "notices": [r for r in rows if r["notice"]]}
+            "eligible": sum(1 for r in rows if r["eligible"]), "published": sum(1 for r in rows if r["published"]),
+            "notices": [{"notice": n.notice, "newer": n.newer_label} for n in notices if n.agent_id == agent_id]}
 
 
 def _my_state(status: str, live: bool) -> str:
@@ -554,6 +565,23 @@ def my_card_page(request: Request, ctx: dict = Depends(guard), con=Depends(get_c
             view["url"] = client.card_url(slug) if row.get("last_live") else None
         view["checked"] = _local(row.get("last_checked_at"))
     view["state_ko"] = MY_STATE_KO.get(view["state"]) if view["state"] else None
-    resp = page(request, ctx, "card_my.html", v=view, badges=my_badges(con, agent_id))
+    resp = page(request, ctx, "card_my.html", v=view, badges=my_badges(con, agent_id), flash=request.session.pop(MY_FLASH, None),
+                keep_note=KEEP_NOTE, publish_help=PUBLISH_HELP)
     resp.headers["Cache-Control"] = "no-store"
     return resp
+
+
+@router.post("/sales/card", response_class=HTMLResponse)
+def my_card_publish(request: Request, action: str = Form(""), item_key: str = Form(""), published: str = Form(""),
+                    ctx: dict = Depends(guard), con=Depends(get_con)):
+    """배지 하나의 공개 여부를 본인이 바꾼다. D-77. 설계사 번호는 세션에서만 읽는다. 본인 확인과 자격 확인은 set_publish 가 한 번 더 한다."""
+    if action != "publish" or published not in ("0", "1") or not item_key or len(item_key) > 200:
+        raise HTTPException(400, "처리할 수 없는 요청입니다.")
+    agent_id = ctx.get("agent_id")
+    if agent_id is None:
+        raise HTTPException(403, "공개 여부는 본인만 바꿀 수 있습니다.")
+    out = cb.set_publish(con, agent_id, item_key, published == "1", ctx["login_id"], today=_today())
+    kind = "ok" if out.status == OK else ("warn" if out.status == cb.UNCHANGED else "bad")
+    text = (out.reason or "공개 여부를 저장하지 못했습니다. 잠시 뒤 다시 해 주세요").rstrip(".") + "."
+    request.session[MY_FLASH] = {"kind": kind, "text": text}
+    return RedirectResponse(f"{MY_PATH}#badges", status_code=303)
