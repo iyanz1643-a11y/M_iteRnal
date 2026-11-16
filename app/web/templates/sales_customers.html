@@ -4,7 +4,7 @@
 {% macro flashbox(f) %}{% if f %}<div class="{{ 'okmsg' if f.kind == 'ok' else 'alert bad' }}" role="status" style="margin-top:24px">{{ f.text }}</div>{% endif %}{% endmacro %}
 {% macro mdko(md) %}{% if md %}{{ md[:2]|int }}월 {{ md[3:5]|int }}일{% endif %}{% endmacro %}
 {% block body %}
-<p class="eyebrow">영업·제안 · {{ SCOPES[ctx.scope] }} · {{ now|when }} 기준</p>
+<p class="eyebrow">영업 · {{ SCOPES[ctx.scope] }} · {{ now|when }} 기준</p>
 <h1 class="display">고객</h1>
 <p class="lede">체결한 고객의 계약, 기념일, 다음 할 일입니다. 앞으로 30일 안의 일을 먼저 보여 드립니다.</p>
 {{ flashbox(flash) }}

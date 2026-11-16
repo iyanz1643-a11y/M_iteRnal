@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% import "_edu.html" as e %}
 {% block body %}{% set t = prog.total %}
-<p class="eyebrow">팀 관리 · {{ SCOPES[ctx.scope] }} · {{ as_of }} 기준</p>
+<p class="eyebrow">팀 · {{ SCOPES[ctx.scope] }} · {{ as_of }} 기준</p>
 <h1 class="display">교육 진척도</h1>
 <p class="lede">{% if t.targets %}필수 과정 대상 {{ t.targets }}건 가운데 {{ t.done }}건을 마쳤습니다. 재직자 {{ t.people }}명 가운데 {{ t.people_all_done }}명이 필수 과정을 모두 마쳤습니다.{% else %}범위 안에 필수 과정 대상자가 없습니다.{% endif %}</p>
 {{ e.flashbox(flash) }}

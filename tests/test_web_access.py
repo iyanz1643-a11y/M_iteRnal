@@ -52,7 +52,7 @@ def test_menu_file_is_consistent():
     cfg = menu.load()
     items = [it for g in cfg["groups"] for it in g["items"]]
     assert len({it["id"] for it in items}) == len(items) == len({it["path"] for it in items})
-    assert all(g in [x["id"] for x in cfg["groups"]] for g in cfg["mobile_tabs"])
+    assert all(g in [x["id"] for x in cfg["groups"]] for tabs in cfg["mobile_tabs"].values() for g in tabs)
     # 데이터, 심사함은 메인 관리자만
     for it in items:
         if it["group"] in ("data", "review"):

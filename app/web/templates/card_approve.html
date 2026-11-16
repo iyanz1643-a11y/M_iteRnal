@@ -3,7 +3,7 @@
 {% macro acts(r) %}<div class="req-acts"><a class="pill quiet" href="?preview={{ r.slug }}">신청본 보기</a>{% if r.mine %}<span class="chip" title="본인 명함은 메인 관리자가 처리합니다">본인 명함 · 메인 관리자 처리</span>{% else %}<a class="pill" href="?do=approve&amp;slug={{ r.slug }}#confirm">승인</a><a class="pill quiet" href="?do=reject&amp;slug={{ r.slug }}#confirm">반려</a>{% endif %}</div>{% endmacro %}
 
 {% block body %}
-<p class="eyebrow">영업·제안 · {{ '전체' if is_main else '내 범위' }}</p>
+<p class="eyebrow">영업 · {{ '전체' if is_main else '내 범위' }}</p>
 <h1 class="display">명함 승인</h1>
 <p class="lede">설계사가 신청한 모바일 명함 링크를 보고 승인하거나 반려합니다. {{ '설계사와 이어지지 않은 요청도 이 화면에서 잇고 처리합니다.' if is_main else '범위 안 설계사의 요청만 보입니다. 본인의 명함은 메인 관리자가 처리합니다.' }}</p>
 

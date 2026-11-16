@@ -6,7 +6,7 @@
 {% macro active_chip(r) %}{% if r.first_active %}<span class="chip good">{{ ymko(r.first_active) }} 가동</span>{% elif r.no_data %}<span class="chip">자료 없음</span>{% else %}<span class="chip warn">아직</span>{% endif %}{% endmacro %}
 {% block body %}
 {% set n = rows|length %}{% set all3 = rows|selectattr('steps', 'equalto', 3)|list|length %}
-<p class="eyebrow">팀 관리 · {{ SCOPES[ctx.scope] }} · 오늘 {{ today|md }}</p>
+<p class="eyebrow">팀 · {{ SCOPES[ctx.scope] }} · 오늘 {{ today|md }}</p>
 <h1 class="display">신인 정착</h1>
 <p class="lede">위촉한 지 {{ days }}일 안의 설계사 {{ n }}명입니다. 필수 교육, 첫 계약, 첫 가동을 차례로 봅니다. 금액은 보이지 않습니다.</p>
 

@@ -4,7 +4,7 @@
 {% macro flashbox(f) %}{% if f %}<div class="{{ 'okmsg' if f.kind == 'ok' else 'alert bad' }}" role="status" style="margin-top:24px">{{ f.text }}</div>{% endif %}{% endmacro %}
 {% macro hidden(action) %}<input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="action" value="{{ action }}">{% endmacro %}
 {% block body %}
-<p class="eyebrow">영업·제안 · {{ SCOPES[ctx.scope] }} · {{ now|when }} 기준</p>
+<p class="eyebrow">영업 · {{ SCOPES[ctx.scope] }} · {{ now|when }} 기준</p>
 <h1 class="display">DB 배정과 성과</h1>
 <p class="lede">미배정 DB 를 지역에 맞춰 나누고, 활동 없이 {{ STALE }}일이 지난 DB 를 회수합니다. 체결률은 팀, 지점, 본부 단위로 봅니다.</p>
 {{ flashbox(flash) }}

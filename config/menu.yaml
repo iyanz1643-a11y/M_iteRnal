@@ -7,7 +7,12 @@ roles:
   manager: 관리자
   agent: 설계사
 
-mobile_tabs: [home, my, promo, sales]      # 설계사 휴대폰 하단 탭. 나머지는 더보기로 모은다.
+# 역할별 아래 탭. 1000픽셀 이하 화면에서 쓴다. 네 칸 뒤에 늘 더보기가 붙고, 탭에 없는 묶음은 더보기에 모은다.
+# 그 역할에게 보이지 않는 묶음은 건너뛴다. 1001픽셀 이상에서는 왼쪽 사이드바에 모든 묶음을 이 파일의 순서대로 둔다.
+mobile_tabs:
+  agent: [home, my, promo, sales]
+  manager: [home, team, promo, perf]
+  main: [home, perf, promo, data]
 
 groups:
   - id: home
@@ -72,8 +77,29 @@ groups:
       - {id: perf-org-compare, name: 조직 비교, path: /perf/org-compare, roles: {main: all, manager: org}, phase: 2, status: built,
          desc: "지점별·팀별 실적과 가동률"}
 
+  - id: sales
+    name: 영업
+    icon: "✆"
+    items:
+      - {id: sales-leads, name: 내 DB, path: /sales/leads, roles: {manager: self, agent: self}, phase: 3, status: built,
+         desc: "배정받은 DB와 통화·상담·제안 기록"}
+      - {id: sales-assign, name: DB 배정과 성과, path: /sales/assign, roles: {main: all, manager: org}, phase: 3, status: built,
+         desc: "지역 매칭 배정, 방치 DB 회수, 팀·지점·본부 단위 체결률"}
+      - {id: sales-customers, name: 고객, path: /sales/customers, roles: {manager: self, agent: self}, phase: 3, status: built,
+         desc: "체결 고객의 계약, 기념일, 다음 할 일"}
+      - {id: sales-guide, name: 가이드 자료, path: /sales/guide, roles: {main: all, manager: org, agent: self}, phase: 3, status: built,
+         desc: "보장분석 가이드, TA 스크립트, 니즈환기 자료"}
+      - {id: sales-report, name: 제안 리포트, path: /sales/report, roles: {manager: self, agent: self}, phase: 3, status: planned,
+         desc: "보장분석 보고서 제작지침에 따른 맞춤 제안 리포트"}
+      - {id: sales-cardnews, name: 카드뉴스, path: /sales/cardnews, roles: {main: all}, phase: 3, status: planned,
+         desc: "리포트를 카드뉴스로 만들어 심사 뒤 게시한다"}
+      - {id: sales-card, name: 모바일 명함, path: /sales/card, roles: {manager: self, agent: self}, phase: 3, status: built,
+         desc: "내 명함의 상태와 링크, 마지막 확인 시각. 반려 사유는 보이지 않는다. 명함에 올릴 수 있는 본인 배지와 항목마다 공개 정하기, 새 연도 자격 안내. 배지와 명함은 퇴사 전까지 유지된다. 공유는 3단계. D-39, D-55, D-77"}
+      - {id: sales-card-approve, name: 명함 승인, path: /sales/card-approve, roles: {main: all, manager: org}, requires: card_approver, phase: 2, status: built,
+         desc: "명함 신청본을 앱에서 미리 보고 승인하거나 반려한다. 권한 승인 요청을 메인 관리자가 승인한 관리자만 범위 안 설계사의 요청을 처리하고, 관리자 본인의 명함은 메인 관리자가 처리한다. 메인 관리자는 설계사와 이어지지 않은 요청도 잇고 처리한다. 메인 관리자 전용 묶음에 새 연도 자격 안내와 해촉자 명함 내리기가 있다. D-44"}
+
   - id: team
-    name: 팀 관리
+    name: 팀
     icon: "☷"
     items:
       - {id: team-members, name: 팀원 현황, path: /team/members, roles: {main: all, manager: org}, phase: 2, status: built,
@@ -110,27 +136,6 @@ groups:
          desc: "관리자 임원제도와 설계사 임원제도"}
       - {id: program-excellence, name: 영업우수, path: /program/excellence, roles: {main: all, manager: org}, phase: 3, status: built,
          desc: "영업우수설계사 선발과 수상 이력"}
-
-  - id: sales
-    name: 영업·제안
-    icon: "✆"
-    items:
-      - {id: sales-leads, name: 내 DB, path: /sales/leads, roles: {manager: self, agent: self}, phase: 3, status: built,
-         desc: "배정받은 DB와 통화·상담·제안 기록"}
-      - {id: sales-assign, name: DB 배정과 성과, path: /sales/assign, roles: {main: all, manager: org}, phase: 3, status: built,
-         desc: "지역 매칭 배정, 방치 DB 회수, 팀·지점·본부 단위 체결률"}
-      - {id: sales-customers, name: 고객, path: /sales/customers, roles: {manager: self, agent: self}, phase: 3, status: built,
-         desc: "체결 고객의 계약, 기념일, 다음 할 일"}
-      - {id: sales-guide, name: 가이드 자료, path: /sales/guide, roles: {main: all, manager: org, agent: self}, phase: 3, status: built,
-         desc: "보장분석 가이드, TA 스크립트, 니즈환기 자료"}
-      - {id: sales-report, name: 제안 리포트, path: /sales/report, roles: {manager: self, agent: self}, phase: 3, status: planned,
-         desc: "보장분석 보고서 제작지침에 따른 맞춤 제안 리포트"}
-      - {id: sales-cardnews, name: 카드뉴스, path: /sales/cardnews, roles: {main: all}, phase: 3, status: planned,
-         desc: "리포트를 카드뉴스로 만들어 심사 뒤 게시한다"}
-      - {id: sales-card, name: 모바일 명함, path: /sales/card, roles: {manager: self, agent: self}, phase: 3, status: built,
-         desc: "내 명함의 상태와 링크, 마지막 확인 시각. 반려 사유는 보이지 않는다. 명함에 올릴 수 있는 본인 배지와 항목마다 공개 정하기, 새 연도 자격 안내. 배지와 명함은 퇴사 전까지 유지된다. 공유는 3단계. D-39, D-55, D-77"}
-      - {id: sales-card-approve, name: 명함 승인, path: /sales/card-approve, roles: {main: all, manager: org}, requires: card_approver, phase: 2, status: built,
-         desc: "명함 신청본을 앱에서 미리 보고 승인하거나 반려한다. 권한 승인 요청을 메인 관리자가 승인한 관리자만 범위 안 설계사의 요청을 처리하고, 관리자 본인의 명함은 메인 관리자가 처리한다. 메인 관리자는 설계사와 이어지지 않은 요청도 잇고 처리한다. 메인 관리자 전용 묶음에 새 연도 자격 안내와 해촉자 명함 내리기가 있다. D-44"}
 
   - id: data
     name: 데이터

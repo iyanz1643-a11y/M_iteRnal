@@ -27,6 +27,10 @@ def load() -> dict:
             seen_id.add(it["id"])
             seen_path.add(it["path"])
             it["group"] = g["id"]
+    tabs = cfg["mobile_tabs"]                           # 역할별 아래 탭. 네 칸 뒤에 더보기가 붙는다
+    gids = {g["id"] for g in cfg["groups"]}
+    assert isinstance(tabs, dict) and set(tabs) <= set(cfg["roles"]), "mobile_tabs 는 역할별로 적는다"
+    assert all(len(v) <= 4 and set(v) <= gids for v in tabs.values()), "mobile_tabs 는 있는 묶음 네 칸까지다"
     return cfg
 
 

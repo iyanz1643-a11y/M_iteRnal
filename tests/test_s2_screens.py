@@ -196,24 +196,66 @@ def _role_logins(env):
     return {"main": "admin", "manager": manager, "agent": agent}
 
 
-# 영업·제안은 S4 에 내 DB 와 DB 배정과 성과를 만들어 묶음 안 첫 built 화면이 바뀌었다. 설계사와 관리자는 내 DB, 메인 관리자는 배정이다
-@pytest.mark.parametrize("role,sales", [("agent", "/sales/leads"), ("manager", "/sales/leads"), ("main", "/sales/assign")])
-def test_tabbar_goes_to_first_built_screen(env, role, sales):
+# 아래 탭은 역할별이다. 총괄 결정과 대표님 승인으로 정한 구성이고 config/menu.yaml 의 mobile_tabs 가 원본이다.
+# 설계사: 홈, 내 진척, 프로모션, 영업. 관리자: 홈, 팀, 프로모션, 실적. 메인 관리자: 홈, 실적, 프로모션, 데이터. 네 칸 뒤에 더보기가 붙는다.
+# 탭은 묶음 안 만들어진 첫 화면으로 간다. 영업은 S4 에 내 DB 와 DB 배정과 성과를 만들어, 설계사와 관리자는 내 DB, 메인 관리자는 배정이다
+TABS = {
+    "agent": [("home", "홈", "/"), ("my", "내 진척", "/my/summary"), ("promo", "프로모션", "/promo/list"), ("sales", "영업", "/sales/leads")],
+    "manager": [("home", "홈", "/"), ("team", "팀", "/team/members"), ("promo", "프로모션", "/promo/list"), ("perf", "실적", "/perf/period")],
+    "main": [("home", "홈", "/"), ("perf", "실적", "/perf/period"), ("promo", "프로모션", "/promo/list"), ("data", "데이터", "/data/contracts")],
+}
+SALES_ENTRY = {"agent": "/sales/leads", "manager": "/sales/leads", "main": "/sales/assign"}
+
+
+def _ctx_of(env, role):
+    uid = env["con"].execute("SELECT user_id FROM user_account WHERE login_id=?", (_role_logins(env)[role],)).fetchone()[0]
+    return auth.context(env["con"], uid)
+
+
+@pytest.mark.parametrize("role", ["agent", "manager", "main"])
+def test_tabbar_goes_to_first_built_screen(env, role):
     from app.web import menu
+    want = TABS[role]
+    assert menu.load()["mobile_tabs"][role] == [g for g, _, _ in want]                # 원본 파일이 정한 구성과 같다
     c = login(env, _role_logins(env)[role])
     html = c.get("/").text
     tabbar = re.search(r'<nav class="tabbar"[^>]*>(.*?)</nav>', html, re.S).group(1)
     hrefs = re.findall(r'href="([^"]+)"', tabbar)
-    assert sales in hrefs, (role, hrefs)
-    uid = env["con"].execute("SELECT user_id FROM user_account WHERE login_id=?", (_role_logins(env)[role],)).fetchone()[0]
-    sales_group = next(g for g in menu.for_ctx(auth.context(env["con"], uid)) if g["id"] == "sales")
-    assert menu.entry(sales_group) == sales and "/sales/card" not in hrefs and "/sales/card-approve" not in hrefs, (role, hrefs)
-    for h in hrefs:                                                            # 아래 탭은 모두 만들어진 화면이고 그 사람에게 열린다
+    assert hrefs == [h for _, _, h in want], (role, hrefs)                           # 네 칸이 이 순서로, 다른 링크 없이
+    labels = re.findall(r'<a [^>]*href="[^"]+"[^>]*>.*?<span>([^<]+)</span></a>', tabbar, re.S)
+    assert labels == [n for _, n, _ in want], (role, labels)
+    more = re.findall(r'<button[^>]*data-sheet[^>]*>.*?<span>([^<]+)</span></button>', tabbar, re.S)
+    assert more == ["더보기"], (role, more)                                          # 마지막은 늘 더보기 하나
+    assert tabbar.rstrip().endswith("</button>"), role
+    groups = {g["id"]: g for g in menu.for_ctx(_ctx_of(env, role))}
+    for gid, _, h in want:                                                           # 각 칸은 그 묶음의 만들어진 첫 화면이다
+        assert gid in groups and menu.entry(groups[gid]) == h, (role, gid, h)
+    for h in hrefs:                                                                  # 아래 탭은 모두 만들어진 화면이고 그 사람에게 열린다
         it = menu.find(h)
         assert it and it["status"] == "built", (role, h)
         assert c.get(h).status_code == 200, (role, h)
+    sales = SALES_ENTRY[role]                                                        # 영업이 탭에 없어도 사이드바에서 들어간다
+    assert menu.entry(groups["sales"]) == sales, role
     top = re.findall(r'href="([^"]+)"', re.search(r'<nav class="nav-groups"[^>]*>(.*?)</nav>', html, re.S).group(1))
     assert sales in top, (role, top)
+
+
+@pytest.mark.parametrize("role", ["agent", "manager", "main"])
+def test_more_sheet_reaches_every_group_not_in_tabs(env, role):
+    """더보기는 탭에 없는 묶음의 항목을 빠짐없이 담고, 사이드바는 그 사람에게 보이는 항목만 담는다."""
+    from app.web import menu
+    c = login(env, _role_logins(env)[role])
+    html = c.get("/").text
+    sheet = re.search(r'<div class="sheet" id="sheet"[^>]*>(.*)</div>\s*<script>', html, re.S).group(1)
+    in_sheet = set(re.findall(r'href="([^"]+)"', sheet))
+    side = set(re.findall(r'href="([^"]+)"', re.search(r'<nav class="nav-groups"[^>]*>(.*?)</nav>', html, re.S).group(1)))
+    tab_ids = {g for g, _, _ in TABS[role]}
+    visible = menu.for_ctx(_ctx_of(env, role))
+    paths = {it["path"] for g in visible for it in g["items"]}
+    missing = [it["path"] for g in visible if g["id"] not in tab_ids for it in g["items"] if it["path"] not in in_sheet]
+    assert not missing, (role, missing)
+    assert not ({it["path"] for g in menu.load()["groups"] for it in g["items"]} - paths) & (in_sheet | side), role
+    assert paths <= side | {"/"}, (role, paths - side)
 
 
 def test_group_entry_falls_back_to_first_item_when_nothing_built():

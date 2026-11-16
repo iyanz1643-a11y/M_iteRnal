@@ -2,20 +2,48 @@
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{% block title %}{{ item.name if item else '홈' }}{% endblock %} · GA 업무 앱</title>
 {% include "_head.html" %}</head>
-<body>
+<body class="app">
+{#- 화면 틀. iOS 앱 형식이다. docs/12_디자인.md
+    - 1001픽셀 이상: 왼쪽 사이드바(nav.nav-groups)에 모든 묶음과 항목. 아래 탭과 더보기는 없다.
+    - 1000픽셀 이하: 아래 탭 막대(nav.tabbar)에 역할별 네 칸과 더보기. 더보기(#sheet)는 탭에 없는 묶음을 설정 앱 모양으로 나열한다.
+    - 위 막대는 처음에는 투명하고, 큰 제목이 막대 밑으로 지나가면 흐린 바탕과 가운데 작은 제목이 나타난다.
+    메뉴는 모두 menu.for_ctx 가 그 사람에게 보이는 것만 준 groups 에서 그린다. 권한은 guard 가 막는다. -#}
+{% set nb = notif_badge(ctx) if notif_badge is defined else 0 %}
+{% set cur = (groups|selectattr('id', 'equalto', item.group)|list|first) if item else none %}
+{% set tabs = [] %}{% for gid in mobile_tabs %}{% for g in groups if g.id == gid and tabs|length < 4 %}{% set _ = tabs.append(g) %}{% endfor %}{% endfor %}
+{% set tab_ids = tabs|map(attribute='id')|list %}
+{% set common = (groups|selectattr('id', 'equalto', 'common')|list|first) %}
+{% set where %}{{ ctx.role_ko }}{% if ctx.heads %} · {% for h in ctx.heads %}{{ h.name }} {{ HEAD_KO.get(h.role, '조직장') }}{% if not loop.last %}, {% endif %}{% endfor %}{% elif ctx.home_org %} · {{ ctx.home_org.name }}{% endif %}{% endset %}
+{% macro me_cell(cls) %}<a class="{{ cls }}{{ ' on' if path == '/me' }}" href="/me"><span class="avatar" aria-hidden="true">{{ ctx.name[:1] }}</span>
+  <span class="me-text"><span class="me-name">{{ ctx.name }}</span><span class="me-sub">{{ where }}</span></span>{{ ui.icon('chev') }}</a>{% endmacro %}
+{% macro common_rows(cls) %}{% if common %}{% for it in common['items'] if it.id != 'me' %}<a class="{{ cls }}{{ ' on' if it.path == path }}" href="{{ it.path }}">{{ ui.icon(it.id) }}<span class="row-t">{{ it.name }}</span>
+  {%- if it.id == 'notifications' and nb %}<span class="count" aria-label="안 읽은 알림 {{ nb }}건">{{ nb if nb < 100 else '99+' }}</span>{% endif %}{{ ui.icon('chev') }}</a>{% endfor %}{% endif %}{% endmacro %}
+
+<nav class="nav-groups" aria-label="주 메뉴">
+  <a class="side-brand" href="/">GA 업무 앱</a>
+  {{ me_cell('side-me') }}
+  <div class="side-sec">
+    {% for g in groups if g.id == 'home' %}{% for it in g['items'] %}<a class="{{ 'on' if it.path == path }}" href="{{ it.path }}">{{ ui.icon('home') }}<span class="row-t">{{ it.name }}</span></a>{% endfor %}{% endfor %}
+    {{ common_rows('') }}
+  </div>
+  {% for g in groups if g.id not in ('home', 'common') %}
+  <div class="side-sec"><div class="side-h">{{ ui.icon(g.id) }}{{ g.name }}</div>
+    {% for it in g['items'] %}<a class="{{ 'on' if it.path == path }}" href="{{ it.path }}"><span class="row-t">{{ it.name }}</span></a>{% endfor %}
+  </div>{% endfor %}
+  <form class="out" method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="side-out" type="submit">나가기</button></form>
+</nav>
+
 <header class="nav">
-  <a class="brand" href="/">GA 업무 앱</a>
-  <nav class="nav-groups" aria-label="주 메뉴">
-    {% for g in groups if g.id != 'common' %}<a class="{{ 'on' if item and item.group == g.id }}" href="{{ group_entry(g) }}">{{ g.name }}</a>{% endfor %}
-  </nav>
+  <div class="nav-left">
+  {%- if cur and cur.id in tab_ids %}{% if path != group_entry(cur) %}<a class="back" href="{{ group_entry(cur) }}">{{ ui.icon('back') }}<span>{{ cur.name }}</span></a>{% endif %}
+  {%- elif cur %}<button class="back" type="button" data-sheet data-sec="more-{{ cur.id }}">{{ ui.icon('back') }}<span>{{ '더보기' if cur.id == 'common' else cur.name }}</span></button>{% endif -%}
+  </div>
+  <div class="nav-title" aria-hidden="true">{{ self.title() }}</div>
   <div class="nav-right">
-    {% set nb = notif_badge(ctx) if notif_badge is defined else 0 %}
     <a class="bell {{ 'on' if path == '/notifications' }}" href="/notifications" aria-label="알림함{{ ', 안 읽은 알림 %d건'|format(nb) if nb }}">{{ ui.icon('bell') }}{% if nb %}<span class="badge" data-unread="{{ nb }}">{{ nb if nb < 100 else '99+' }}</span>{% endif %}</a>
     <a class="me" href="/me">{{ ui.icon('person') }}<span>{{ ctx.name }} · {{ ctx.role_ko }}</span></a>
-    <button class="all" type="button" data-sheet aria-label="전체 메뉴">{{ ui.icon('common') }}</button>
   </div>
 </header>
-{% set cur = (groups|selectattr('id', 'equalto', item.group)|list|first) if item else none %}
 {% if cur and cur['items']|length > 1 %}
 <nav class="subnav" aria-label="{{ cur.name }} 메뉴">{% for it in cur['items'] %}<a class="{{ 'on' if it.path == path }}" href="{{ it.path }}">{{ it.name }}</a>{% endfor %}</nav>
 {% endif %}
@@ -24,20 +52,42 @@
 {% block body %}{% endblock %}
 </main>
 <nav class="tabbar" aria-label="아래 탭">
-  {% for gid in mobile_tabs %}{% for g in groups if g.id == gid %}
-  <a class="{{ 'on' if item and item.group == g.id }}" href="{{ group_entry(g) }}">{{ ui.icon(g.id) }}{{ g.name }}</a>
-  {% endfor %}{% endfor %}
-  <button type="button" data-sheet>{{ ui.icon('common') }}더보기</button>
+  {% for g in tabs %}<a class="{{ 'on' if item and item.group == g.id }}" href="{{ group_entry(g) }}">{{ ui.icon(g.id) }}<span>{{ g.name }}</span></a>{% endfor %}
+  <button class="more{{ ' on' if cur and cur.id not in tab_ids }}" type="button" data-sheet aria-controls="sheet">{{ ui.icon('more') }}<span>더보기</span></button>
 </nav>
-<div class="sheet" id="sheet" role="dialog" aria-label="전체 메뉴">
-  <div class="sheet-head"><div><div class="eyebrow">{{ ctx.role_ko }}{% if ctx.heads %} · {% for h in ctx.heads %}{{ h.name }} {{ HEAD_KO.get(h.role, '조직장') }}{% if not loop.last %}, {% endif %}{% endfor %}{% elif ctx.home_org %} · {{ ctx.home_org.name }}{% endif %}</div>
-    <div class="mid" style="margin:0">{{ ctx.name }}</div></div>
-    <button class="ghost" type="button" data-sheet aria-label="닫기">닫기</button></div>
-  <div class="sheet-grid">
-  {% for g in groups %}<section class="card"><h3>{{ ui.icon(g.id) }}{{ g.name }}</h3>
-    {% for it in g['items'] %}<a class="row {{ 'on' if it.path == path }}" href="{{ it.path }}">{{ it.name }}</a>{% endfor %}
-    {% if g.id == 'common' %}<form class="out" method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="row" type="submit">나가기</button></form>{% endif %}</section>{% endfor %}
+<div class="sheet" id="sheet" role="dialog" aria-label="더보기" aria-hidden="true">
+  <div class="sheet-in">
+  <h1 class="display">더보기</h1>
+  <div class="list">{{ me_cell('row me-row') }}</div>
+  {% if common %}<div class="list" id="more-common">{{ common_rows('row') }}</div>{% endif %}
+  {% for g in groups if g.id not in tab_ids and g.id not in ('home', 'common') %}
+  <section id="more-{{ g.id }}"><h2 class="list-h">{{ g.name }}</h2>
+    <div class="list">{% for it in g['items'] %}<a class="row {{ 'on' if it.path == path }}" href="{{ it.path }}"><span class="row-t">{{ it.name }}</span>{{ ui.icon('chev') }}</a>{% endfor %}</div></section>{% endfor %}
+  <div class="list"><form class="out" method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="row danger-t" type="submit">나가기</button></form></div>
   </div>
 </div>
-<script>document.querySelectorAll('[data-sheet]').forEach(function(b){b.addEventListener('click',function(){document.getElementById('sheet').classList.toggle('open');window.scrollTo(0,0)})})</script>
+<script>
+(function () {
+  var sheet = document.getElementById('sheet'), body = document.body;
+  function show(open, sec) {
+    sheet.classList.toggle('open', open); body.classList.toggle('sheet-open', open); sheet.setAttribute('aria-hidden', open ? 'false' : 'true');
+    if (!open) return;
+    var t = sec && document.getElementById(sec);
+    sheet.scrollTop = t ? t.offsetTop - 12 : 0;
+  }
+  document.querySelectorAll('[data-sheet]').forEach(function (b) {
+    b.addEventListener('click', function () { show(b.dataset.sec ? true : !sheet.classList.contains('open'), b.dataset.sec); });
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') show(false); });
+  /* 묶음 안 알약 줄은 지금 화면이 보이게 옆으로 넘겨 둔다 */
+  var on = document.querySelector('.subnav a.on');
+  if (on) on.parentNode.scrollLeft = on.offsetLeft - on.parentNode.offsetLeft - 16;
+  /* 큰 제목이 위 막대 밑으로 지나가면 막대에 바탕과 작은 제목을 띄운다 */
+  var nav = document.querySelector('.nav'), h = document.querySelector('main h1');
+  if (!h || !('IntersectionObserver' in window)) { nav.classList.add('stuck'); return; }
+  new IntersectionObserver(function (es) {
+    var e = es[0]; nav.classList.toggle('stuck', !e.isIntersecting && e.boundingClientRect.top < 0);
+  }, {rootMargin: '-52px 0px 0px 0px'}).observe(h);
+})();
+</script>
 </body></html>

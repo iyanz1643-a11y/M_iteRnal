@@ -161,7 +161,7 @@ def page(request, ctx, name, status_code=200, **kw):
     """
     cfg = menu.load()
     resp = templates.TemplateResponse(request, name, status_code=status_code, context={
-        "ctx": ctx, "groups": menu.for_ctx(ctx), "mobile_tabs": cfg["mobile_tabs"], "item": ctx.get("item"),
+        "ctx": ctx, "groups": menu.for_ctx(ctx), "mobile_tabs": cfg["mobile_tabs"].get(ctx["role"], []), "item": ctx.get("item"),
         "path": request.url.path, "SCOPES": menu.SCOPES, "PHASES": menu.PHASES, "STATUS": menu.STATUS,
         "LEVEL_KO": auth.LEVEL_KO, "HEAD_KO": auth.HEAD_KO, "pm": pm, **kw})
     resp.headers["Cache-Control"] = NO_STORE

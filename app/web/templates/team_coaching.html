@@ -3,7 +3,7 @@
    색은 상태: 다음 면담이 지나면 빨강, 임박이면 주황, 기록 없음은 회색 #}
 {% macro state_chip(m) %}{% if m.state == 'over' %}<span class="chip bad">{{ -m.left }}일 지남</span>{% elif m.state == 'soon' %}<span class="chip warn">{{ '오늘' if m.left == 0 else m.left ~ '일 뒤' }}</span>{% elif m.state == 'later' %}<span class="chip">{{ m.last.next_on|md }}</span>{% else %}<span class="chip">정하지 않음</span>{% endif %}{% endmacro %}
 {% block body %}
-<p class="eyebrow">팀 관리 · {{ SCOPES[ctx.scope] }} · 오늘 {{ day|md }}</p>
+<p class="eyebrow">팀 · {{ SCOPES[ctx.scope] }} · 오늘 {{ day|md }}</p>
 <h1 class="display">면담 기록</h1>
 <p class="lede">팀원별 면담 날짜와 약속 사항을 남기고 다음 면담을 챙깁니다. 다음 면담이 {{ DUE_DAYS }}일 안이면 알림함에 뜹니다.</p>
 {% if flash %}<div class="{{ 'okmsg' if flash.kind == 'ok' else 'alert bad' }}" role="status" style="margin-top:24px">{{ flash.text }}</div>{% endif %}

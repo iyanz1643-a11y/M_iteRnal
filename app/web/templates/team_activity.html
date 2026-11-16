@@ -2,7 +2,7 @@
 {# 활동 깔때기. 한 달의 통화, 상담, 제안, 청약, 체결 건수와 전환율. 범위 안 사람만. 금액은 없다(D-17).
    청약은 설계사가 남긴 활동이라 업적 집계의 청약 건수와 다를 수 있다 #}
 {% block body %}
-<p class="eyebrow">팀 관리 · {{ SCOPES[ctx.scope] }} · {{ now|when }} 기준</p>
+<p class="eyebrow">팀 · {{ SCOPES[ctx.scope] }} · {{ now|when }} 기준</p>
 <h1 class="display">활동 깔때기</h1>
 <p class="lede">{{ month[:4] }}년 {{ month[5:]|int }}월에 남긴 통화, 상담, 제안, 청약과 체결입니다. 각 단계가 앞 단계의 몇 퍼센트인지 봅니다.</p>
 <nav class="seg perf-seg" aria-label="달">{% for mm in months %}<a class="{{ 'on' if mm == month }}" href="{{ path }}?m={{ mm }}">{{ mm[5:]|int }}월</a>{% endfor %}</nav>

@@ -1,22 +1,29 @@
+{#- 가는 선 아이콘. 24 칸 위에 직접 그렸다. 선 굵기와 색은 app.css 의 svg.ic 가 정한다 -#}
 {% set ICONS = {
- 'home': '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/>',
- 'my': '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.5"/>',
- 'promo': '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',
- 'perf': '<path d="M5 20V10"/><path d="M12 20V4"/><path d="M19 20v-7"/>',
- 'team': '<circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.5"/><path d="M16.5 14.2c2.6.5 4.5 2.8 4.5 5.8"/>',
- 'edu': '<path d="M4 5h6a2 2 0 0 1 2 2v13a2 2 0 0 0-2-2H4z"/><path d="M20 5h-6a2 2 0 0 0-2 2v13a2 2 0 0 1 2-2h6z"/>',
- 'program': '<path d="M5 21V4"/><path d="M5 4h12l-2.5 4 2.5 4H5"/>',
- 'sales': '<path d="M4 5h16v11H10l-5 4v-4H4z"/>',
- 'data': '<path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 20h16"/>',
- 'settle': '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6"/><path d="M9 12h6"/>',
+ 'home': '<path d="M3.5 10.6 12 3.8l8.5 6.8"/><path d="M5.8 9v10.2c0 .4.3.8.8.8h3.7v-5.6h3.4V20h3.7c.5 0 .8-.4.8-.8V9"/>',
+ 'my': '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5V12h8.5"/>',
+ 'promo': '<path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/>',
+ 'perf': '<path d="M4 20h16"/><path d="M7 16.5V12"/><path d="M12 16.5V6"/><path d="M17 16.5V9"/>',
+ 'team': '<circle cx="9" cy="8" r="3.2"/><path d="M3 19.5c0-3.3 2.7-5.8 6-5.8s6 2.5 6 5.8"/><circle cx="17" cy="9" r="2.5"/><path d="M16.6 13.9c2.5.4 4.4 2.6 4.4 5.6"/>',
+ 'edu': '<path d="M4 5.5h5.5A2.5 2.5 0 0 1 12 8v12a2 2 0 0 0-2-2H4z"/><path d="M20 5.5h-5.5A2.5 2.5 0 0 0 12 8v12a2 2 0 0 1 2-2h6z"/>',
+ 'program': '<path d="M5.5 21V4"/><path d="M5.5 4.5h12l-2.6 4 2.6 4h-12"/>',
+ 'sales': '<rect x="3.5" y="7" width="17" height="12.5" rx="2.5"/><path d="M9 7V5.6c0-.9.7-1.6 1.6-1.6h2.8c.9 0 1.6.7 1.6 1.6V7"/><path d="M3.5 12.5h17"/>',
+ 'data': '<path d="M12 15V4"/><path d="M7.8 8.2 12 4l4.2 4.2"/><path d="M4 14v4.5c0 .8.7 1.5 1.5 1.5h13c.8 0 1.5-.7 1.5-1.5V14"/>',
+ 'settle': '<path d="M6 3.5h12v17l-3-1.8-3 1.8-3-1.8-3 1.8z"/><path d="M9 8.5h6"/><path d="M9 12.5h6"/>',
  'org': '<path d="M4 7h9"/><path d="M19 7h1"/><path d="M4 17h1"/><path d="M11 17h9"/><circle cx="16" cy="7" r="2.5"/><circle cx="8" cy="17" r="2.5"/>',
- 'review': '<path d="M12 3l8 3v6c0 4.5-3.2 7.8-8 9-4.8-1.2-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
+ 'review': '<path d="M12 3.2l7.5 2.8v6c0 4.4-3 7.6-7.5 8.8-4.5-1.2-7.5-4.4-7.5-8.8V6z"/><path d="M9 12l2.2 2.2L15.2 10"/>',
  'common': '<path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/>',
- 'bell': '<path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21a2 2 0 0 0 4 0"/>',
+ 'more': '<circle cx="12" cy="12" r="8.8"/><circle cx="7.8" cy="12" r=".6"/><circle cx="12" cy="12" r=".6"/><circle cx="16.2" cy="12" r=".6"/>',
+ 'bell': '<path d="M6 16.5v-5.2a6 6 0 0 1 12 0v5.2l1.8 1.8H4.2z"/><path d="M10 20.6a2.1 2.1 0 0 0 4 0"/>',
+ 'notifications': '<path d="M6 16.5v-5.2a6 6 0 0 1 12 0v5.2l1.8 1.8H4.2z"/><path d="M10 20.6a2.1 2.1 0 0 0 4 0"/>',
+ 'calendar': '<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17"/><path d="M8 3v4"/><path d="M16 3v4"/>',
+ 'board': '<path d="M14 3.5H7c-.8 0-1.5.7-1.5 1.5v14c0 .8.7 1.5 1.5 1.5h10c.8 0 1.5-.7 1.5-1.5V8z"/><path d="M14 3.5V8h4.5"/><path d="M9 12.5h6"/><path d="M9 16h6"/>',
+ 'chev': '<path d="M9.5 5.5 16 12l-6.5 6.5"/>',
+ 'back': '<path d="M15 4 7 12l8 8"/>',
  'close': '<path d="M6 6l12 12"/><path d="M18 6L6 18"/>',
  'person': '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/>'
 } %}
-{% macro icon(name) %}<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">{{ ICONS.get(name, ICONS['common'])|safe }}</svg>{% endmacro %}
+{% macro icon(name) %}<svg class="ic ic-{{ name }}" viewBox="0 0 24 24" aria-hidden="true">{{ ICONS.get(name, ICONS['common'])|safe }}</svg>{% endmacro %}
 
 {% macro ring(pct, label, size=148, stroke=14, color='var(--blue)') %}
 {% set p = [[pct, 0]|max, 100]|min %}{% set r = (size - stroke) / 2 %}{% set c = 6.2832 * r %}{% set h = size / 2 %}
