@@ -1,0 +1,128 @@
+# 명함 배지 종류. app/connect/card_badges.py 가 이 파일 하나를 읽어 판정한다.
+# 대표님 결정 2026-11-16: 명함은 확장성이 중요하다. 본사와 협회 제도, 지점과 본부 시상을 모두 담을 수 있게 넓혀 둔다.
+# 새 종류는 badges 에 한 줄을 더하면 판정 대상이 된다. 코드는 고치지 않는다.
+# 배지의 추가와 변경은 광고 심의와 관계가 없다.
+#
+# 유효기간: 자격이 생긴 배지는 퇴사 전까지 유지한다. 연도가 지났다고 내리지 않는다. 퇴사하면 내리기 후보가 된다.
+#
+# badges 의 칸
+#   key         설정 안의 이름. 겹치지 않는다
+#   name        배지 이름. 비우면 원천의 이름(프로그램 이름, 부문 이름, 과정 이름)을 쓴다
+#   origin      원천의 한국어 이름. 인증, 수상, 조직 부문 수상, 교육 수료, 지점·본부 시상 등
+#   source      읽는 함수의 등록 이름. certification / org_award / education. 등록부는 card_badges.SOURCES
+#   match       원천의 줄을 고르는 조건. code, category 는 하나나 목록, name_contains 는 글. 모두 맞아야 한다
+#   kind        배지 열쇠의 앞머리. 비우면 key. 열쇠는 kind:이름이나 근거:연도나 수상월 이다
+#   card_field  명함 칸. certs(자격 칩) / etc(그 밖의 자격·수상 칸)
+#   year_label  연도를 붙이는가. 참이면 연도마다 다른 배지다. 예: MDRT 2026
+#   label       명함에 보이는 글의 틀. {name} {year} {y} {m} {rank} {code} 를 쓴다. 비우면 칸과 연도 표기로 정한다
+#   site_cert   명함 사이트 CERTS 의 이름. 이 자격의 검증 배지가 있으면 그 자격의 본인 입력 표기를 막는 데 쓴다
+#
+# 위에서부터 차례로 보고, 원천의 줄 하나는 처음 맞는 종류 하나에만 든다.
+
+validity: until_departure
+
+# 명함 사이트 public/make/index.html 의 목록. CERTS 는 자격 칩, ANNUAL 은 연도를 넣어야 그려지는 칩이다
+site:
+  certs: [우수인증설계사, 블루리본, MDRT, COT, TOT, CFP, AFPK, 개인보험심사역, 손해사정사]
+  annual: [우수인증설계사, 블루리본, MDRT, COT, TOT]
+
+badges:
+  - key: excellent_fc
+    name: 우수인증설계사
+    origin: 인증
+    source: certification
+    match: {code: [EXCELLENT_FC_LIFE, EXCELLENT_FC_NONLIFE]}
+    kind: cert
+    card_field: certs
+    year_label: true
+    site_cert: 우수인증설계사
+
+  - key: mdrt
+    name: MDRT
+    origin: 인증
+    source: certification
+    match: {code: MDRT}
+    kind: cert
+    card_field: certs
+    year_label: true
+    site_cert: MDRT
+
+  - key: cot
+    name: COT
+    origin: 인증
+    source: certification
+    match: {code: COT}
+    kind: cert
+    card_field: certs
+    year_label: true
+    site_cert: COT
+
+  - key: tot
+    name: TOT
+    origin: 인증
+    source: certification
+    match: {code: TOT}
+    kind: cert
+    card_field: certs
+    year_label: true
+    site_cert: TOT
+
+  # 이름에 블루리본이 든 원수사 인증을 블루리본 칩으로 본다. D-56 가정이다
+  - key: blue_ribbon
+    name: 블루리본
+    origin: 인증
+    source: certification
+    match: {category: insurer_cert, name_contains: 블루리본}
+    kind: cert
+    card_field: certs
+    year_label: true
+    site_cert: 블루리본
+
+  # 영업우수설계사, 명예의전당 같은 수상 프로그램
+  - key: award_program
+    origin: 수상
+    source: certification
+    match: {category: award}
+    kind: award
+    card_field: etc
+    year_label: true
+    label: "{year} {name}"
+
+  # 블루리본이 아닌 원수사 인증
+  - key: insurer_cert
+    origin: 인증
+    source: certification
+    match: {category: insurer_cert}
+    kind: award
+    card_field: etc
+    year_label: true
+    label: "{year} {name}"
+
+  # 지점과 본부가 정한 시상. 인증 프로그램 표에 이 종류로 올리면 판정한다
+  - key: branch_award
+    origin: 지점·본부 시상
+    source: certification
+    match: {category: [branch_award, hq_award]}
+    kind: award
+    card_field: etc
+    year_label: true
+    label: "{year} {name}"
+
+  # 조직 부문 수상 확정. 부문 이름과 순위만 쓴다. D-45
+  - key: org_award
+    origin: 조직 부문 수상
+    source: org_award
+    kind: org_award
+    card_field: etc
+    year_label: true
+    label: "{y}년 {m}월 {name} {rank}위"
+
+  # 교육 수료는 원천만 등록해 두었다. 배지로 올릴 과정 코드를 정하면 아래처럼 더한다
+  # - key: edu_example
+  #   origin: 교육 수료
+  #   source: education
+  #   match: {code: 과정코드}
+  #   kind: edu
+  #   card_field: etc
+  #   year_label: true
+  #   label: "{year} {name} 수료"

@@ -1757,7 +1757,7 @@ def test_card_codes_reconcile_by_serial_and_hash(codes_env):
     assert len(site.code_posts()) == 2                                               # 대조는 보내지 않는다. 발급 두 묶음뿐이다
 
 
-# ------------------------------------------------------------------ 명함 연동 3차: 배지 자격과 만료
+# ------------------------------------------------------------------ 명함 연동 3차: 배지 자격과 본인 공개. D-55, D-76 에서 D-79
 BADGE_DAY = __import__("datetime").date(2026, 12, 10)
 AWARD_MARK = "상금표시QX"                         # 조직 부문 시상 내용. 배지 결과에 남으면 안 된다
 AWARD_VALUE = 7654321                             # 조직 부문 실적 값. 배지 결과에 남으면 안 된다
@@ -1814,7 +1814,7 @@ def _badges(env, ids=None):
     return {(b.agent_id, b.key): b for b in judge_badges(env["con"], ids, today=BADGE_DAY)}
 
 
-def test_card_badges_judge_eligibility_and_validity(badge_env):
+def test_card_badges_judge_from_config_until_departure(badge_env):
     from app.connect import card_badges as cb
     env = badge_env
     a1, dep, div = env["a1"], env["a_dep"], env["div"]
@@ -1826,19 +1826,24 @@ def test_card_badges_judge_eligibility_and_validity(badge_env):
         (env["a_none"], "cert:우수인증설계사:2025"),
     }                                                                 # 해촉자, 임원제도, 달성하지 못한 계산은 없다
     b = got[(a1, "cert:우수인증설계사:2025")]
-    assert (b.label, b.card_field, b.year, b.basis) == ("우수인증설계사 2025", "certs", 2025, "award")
-    assert (b.valid_from, b.valid_until, b.days_left, b.status, b.eligible) == ("2026-01-20", "2026-12-31", 21, "expiring", True)
-    assert b.source_ref == "EXCELLENT_FC_LIFE,EXCELLENT_FC_NONLIFE"
-    assert got[(a1, "cert:우수인증설계사:2026")].status == "valid"
+    assert (b.label, b.card_field, b.year, b.basis, b.origin, b.site_cert) == ("우수인증설계사 2025", "certs", 2025, "award", "인증", "우수인증설계사")
+    assert (b.valid_from, b.valid_until, b.days_left, b.status, b.eligible) == ("2026-01-20", None, None, "valid", True)
+    assert b.source_ref == "EXCELLENT_FC_LIFE,EXCELLENT_FC_NONLIFE" and b.to_dict()["validity_ko"] == "퇴사 전까지"
+    # 연도가 지나도 퇴사 전까지 유지한다. 옛 연도 배지와 새 연도 배지가 함께 있다
     old = got[(a1, "award:SALES_EXCELLENT:2024")]
-    assert (old.label, old.card_field, old.status, old.eligible) == ("2024 영업우수설계사", "etc", "expired", False)
+    assert (old.label, old.card_field, old.status, old.eligible, old.origin) == ("2024 영업우수설계사", "etc", "valid", True, "수상")
+    later = __import__("datetime").date(2035, 1, 1)
+    from app.connect.card_badges import judge_badges
+    assert {(x.key, x.status) for x in judge_badges(env["con"], [a1], today=later)} == {(k[1], v.status) for k, v in got.items() if k[0] == a1}
     calc = got[(a1, "cert:MDRT:2026")]
     assert (calc.basis, calc.status, calc.eligible, calc.valid_from) == ("calc", "expected", False, None)
     org = got[(a1, f"org_award:{div}:202601")]
-    assert (org.label, org.valid_from, org.valid_until, org.status) == ("2026년 1월 인정업적 부문 1위", "2026-01-28", "2027-01-31", "valid")
-    assert got[(dep, f"org_award:{div}:202512")].valid_until == "2026-12-31"
-    assert cb.org_award_until("202602") == __import__("datetime").date(2027, 2, 28)
-    assert set(cb.ANNUAL) <= set(cb.CERTS) and set(cb.CERT_BADGES.values()) <= set(cb.ANNUAL)
+    assert (org.label, org.valid_from, org.valid_until, org.status, org.origin) == ("2026년 1월 인정업적 부문 1위", "2026-01-28", None, "valid", "조직 부문 수상")
+    # 설정은 문제 없이 읽히고 명함 사이트 목록과 맞는다
+    assert cb.config_problems() == []
+    assert set(cb.ANNUAL) <= set(cb.CERTS)
+    assert {s["site_cert"] for s in cb.load_config()["badges"] if s["site_cert"]} <= set(cb.CERTS)
+    assert not hasattr(cb, "ANNUAL_VALID_YEARS") and not hasattr(cb, "ORG_AWARD_VALID_MONTHS")
     # 범위 밖 설계사는 보지 않는다
     assert {k[0] for k in _badges(env, [dep])} == {dep}
     assert _badges(env, []) == {}
@@ -1855,32 +1860,195 @@ def test_card_badges_confirmed_award_beats_calc(badge_env):
     assert (b.basis, b.status, b.valid_from) == ("award", "valid", "2026-12-05")
 
 
-def test_card_badges_expiring_list_and_reissue_notice(badge_env):
-    from app.connect.card_badges import expiring_badges
+def test_card_badges_new_kind_in_config_is_judged_without_code(badge_env, tmp_path, monkeypatch):
+    """설정에 종류를 더하면 코드를 고치지 않고 판정 대상이 된다. D-76. 잘못된 줄은 빼고 문제로 알린다."""
+    from app.connect import card_badges as cb
+    env = badge_env
+    con, a1, dep = env["con"], env["a1"], env["a_dep"]
+    star = con.execute("INSERT INTO certification_program(code, name, category) VALUES('BR_STAR', '지점 이달의 별', 'branch_star')").lastrowid
+    con.execute("INSERT INTO agent_certification_award(agent_id, program_id, year, awarded_at) VALUES(?,?,2026,'2026-11-30')", (a1, star))
+    course = con.execute("INSERT INTO edu_course(code, name, kind, created_by, created_at) VALUES('EDU_X', '보장분석 심화', 'product', ?, ?)",
+                         (MAIN, db.now())).lastrowid
+    con.execute("""INSERT INTO edu_completion(agent_id, course_id, completed_on, cycle_key, source, recorded_by, recorded_at)
+                   VALUES(?,?,'2026-10-02','once','manual',?,?)""", (dep, course, MAIN, db.now()))
+    con.commit()
+    before = _badges(env, [a1, dep])
+    assert not any(k[1].startswith(("star:", "edu:")) for k in before)
+    text = cb.CONFIG_FILE.read_text(encoding="utf-8") + """
+  - key: branch_star
+    origin: 지점·본부 시상
+    source: certification
+    match: {category: branch_star}
+    kind: star
+    card_field: etc
+    year_label: true
+    label: "{year} {name}"
+  - key: edu_x
+    origin: 교육 수료
+    source: education
+    match: {code: EDU_X}
+    kind: edu
+    card_field: etc
+    year_label: false
+    label: "{name} 수료"
+  - key: broken
+    source: nowhere
+    card_field: etc
+"""
+    path = tmp_path / "card_badges.yaml"
+    path.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(cb, "CONFIG_FILE", path)
+    assert cb.config_problems() == ["broken: 등록되지 않은 원천 'nowhere' 입니다"]
+    got = _badges(env, [a1, dep])
+    assert set(got) - set(before) == {(a1, "star:BR_STAR:2026"), (dep, "edu:EDU_X")}
+    s = got[(a1, "star:BR_STAR:2026")]
+    assert (s.label, s.card_field, s.origin, s.status, s.valid_from) == ("2026 지점 이달의 별", "etc", "지점·본부 시상", "valid", "2026-11-30")
+    e = got[(dep, "edu:EDU_X")]
+    assert (e.label, e.basis, e.origin, e.status) == ("보장분석 심화 수료", "edu", "교육 수료", "valid")
+    assert cb.program_key("BR_STAR", "지점 이달의 별", "branch_star", 2026) == "star:BR_STAR:2026"
+    # 새 종류도 공개 항목이 된다
+    assert "star:BR_STAR:2026" in {i.item_key for i in _items(env, a1)}
+
+
+def test_card_badges_no_expiry_and_new_year_notice(badge_env):
+    """만료가 없어 만료 예정 목록은 비어 있다. 새 연도 자격이 생기면 안내하고 옛 배지는 그대로 둘 수 있다고 알린다."""
+    from app.connect.card_badges import expiring_badges, new_year_notices, reissue_notice
+    env = badge_env
+    con, a1, dep = env["con"], env["a1"], env["a_dep"]
+    ids = [a1, dep, env["a_none"], env["a_gone"]]
+    assert expiring_badges(con, ids, today=BADGE_DAY) == []
+    assert expiring_badges(con, ids, today=BADGE_DAY, include_expired=True, linked_only=False, days=9999) == []
+    rows = new_year_notices(con, ids, today=BADGE_DAY)
+    assert [(n.agent_id, n.badge.key, n.newer_label, n.slug) for n in rows] == [(a1, "cert:우수인증설계사:2025", "우수인증설계사 2026", "card-a")]
+    note = rows[0].notice
+    assert "우수인증설계사 2026 자격이 생겼습니다" in note and "연도를 2026 로 바꿔" in note and "퇴사 전까지 그대로" in note
+    assert new_year_notices(con, ids, today=BADGE_DAY, days=5) == []                # 12월 1일 확정이라 닷새 안이 아니다
+    assert new_year_notices(con, [dep], today=BADGE_DAY) == []
+    b = _badges(env, [dep])[(dep, "cert:블루리본:2025")]
+    assert reissue_notice(b) == ""
+    text = json.dumps([n.to_dict() for n in rows], ensure_ascii=False)
+    assert AWARD_MARK not in text and str(AWARD_VALUE) not in text and FAKE_NAMES[0] not in text
+
+
+A1_LOGIN = "a1-login"
+
+
+def _a1_account(env):
+    env["con"].execute("INSERT INTO user_account(login_id, password_hash, agent_id, display_name, is_main_admin, created_at) VALUES(?,?,?,?,?,?)",
+                       (A1_LOGIN, "x", env["a1"], "시험 계정", 0, db.now()))
+    env["con"].commit()
+
+
+def _items(env, agent_id):
+    from app.connect.card_badges import publish_items
+    return publish_items(env["con"], agent_id, today=BADGE_DAY)
+
+
+def _set(env, agent_id, key, on, by):
+    from app.connect.card_badges import set_publish
+    return set_publish(env["con"], agent_id, key, on, by, today=BADGE_DAY)
+
+
+def test_card_publish_only_self_and_private_by_default(badge_env):
+    """공개는 본인만 바꾼다. 메인 관리자와 조직장도 남의 것을 바꾸지 못한다. 기본은 비공개다. D-77"""
+    from app.connect import card_badges as cb
     env = badge_env
     con, a1, dep, div = env["con"], env["a1"], env["a_dep"], env["div"]
-    ids = [a1, dep, env["a_none"], env["a_gone"]]
-    rows = expiring_badges(con, ids, today=BADGE_DAY)
-    assert [(n.agent_id, n.badge.key, n.slug) for n in rows] == [
-        (a1, "cert:우수인증설계사:2025", "card-a"), (dep, "cert:블루리본:2025", "card-d"),
-        (dep, "cert:우수인증설계사:2025", "card-d"), (dep, f"org_award:{div}:202512", "card-d")]   # 명함이 없는 설계사는 빠진다
-    first = rows[0]
-    assert first.newer_label == "우수인증설계사 2026"
-    assert "2026-12-31 에 끝납니다" in first.notice and "지울 수 없습니다" in first.notice
-    assert "연도를 2026 로 바꿔" in first.notice and "다시 신청해 주세요" in first.notice
-    assert "블루리본 배지를 빼고" in rows[1].notice and rows[1].newer_label is None
-    assert "그 밖의 자격·수상 칸에서 2025년 12월 인정업적 부문 2위 를 지우고" in rows[3].notice
-    # 끝난 배지, 명함 없는 설계사, 범위
-    more = expiring_badges(con, ids, today=BADGE_DAY, include_expired=True, linked_only=False)
-    keys = {(n.agent_id, n.badge.key) for n in more}
-    assert (a1, "award:SALES_EXCELLENT:2024") in keys and (env["a_none"], "cert:우수인증설계사:2025") in keys
-    gone = next(n for n in more if n.badge.key == "award:SALES_EXCELLENT:2024")
-    assert "에 끝났습니다" in gone.notice
-    assert all(n.badge.basis != "calc" for n in more)
-    assert {n.agent_id for n in expiring_badges(con, [dep], today=BADGE_DAY)} == {dep}
-    assert expiring_badges(con, ids, today=BADGE_DAY, days=5) == []
-    text = json.dumps([n.to_dict() for n in more], ensure_ascii=False)
-    assert AWARD_MARK not in text and str(AWARD_VALUE) not in text and FAKE_NAMES[0] not in text
+    _a1_account(env)
+    items = {i.item_key: i for i in _items(env, dep)}
+    assert set(items) == {"cert:우수인증설계사:2025", "cert:블루리본:2025", f"org_award:{div}:202512"}
+    assert not any(i.published for i in items.values())                             # 기본은 비공개
+    assert "cert:MDRT:2026" not in {i.item_key for i in _items(env, a1)}            # 확정 전은 공개 항목이 아니다
+    key = f"org_award:{div}:202512"
+    for by in (MAIN, MGR, A1_LOGIN, "nobody"):
+        out = _set(env, dep, key, True, by)
+        assert (out.status, out.reason) == ("denied", cb.OWN_ONLY), by
+    assert _set(env, a1, "cert:우수인증설계사:2025", True, DEP).status == "denied"  # 남의 항목
+    assert cb.published_keys(con, [a1, dep], today=BADGE_DAY) == {}
+    out = _set(env, dep, key, True, DEP)
+    assert out.status == OK and out.value.published and out.value.label == "2025년 12월 인정업적 부문 2위"
+    assert _set(env, dep, key, True, DEP).status == "unchanged"
+    assert _set(env, a1, "cert:MDRT:2026", True, A1_LOGIN).status == "denied"      # 확정 전
+    assert _set(env, a1, "cert:없는것:2026", True, A1_LOGIN).status == "denied"
+    assert _set(env, a1, "award:SALES_EXCELLENT:2024", True, A1_LOGIN).status == OK
+    assert cb.published_keys(con, [a1, dep], today=BADGE_DAY) == {a1: {"award:SALES_EXCELLENT:2024"}, dep: {key}}
+    assert cb.published_keys(con, [dep], today=BADGE_DAY) == {dep: {key}}           # 넘긴 설계사만
+    assert [(i.agent_id, i.item_key) for i in cb.published_items(con, [a1, dep], today=BADGE_DAY)] == \
+        [(a1, "award:SALES_EXCELLENT:2024"), (dep, key)]
+    assert {i.item_key: i.published for i in _items(env, dep)}[key] is True
+    # 명예의전당 줄을 열쇠로 바꾸는 함수는 배지 열쇠와 같다
+    assert cb.org_award_key(div, "202512") == key
+    assert cb.program_key("SALES_EXCELLENT", "영업우수설계사", "award", 2024) == "award:SALES_EXCELLENT:2024"
+    assert cb.program_key("EXCELLENT_FC_NONLIFE", "우수인증설계사(손해보험)", "association_cert", 2025) == "cert:우수인증설계사:2025"
+    assert cb.program_key("EXEC_FC_DIRECTOR", "설계사 임원제도: 명예이사", "executive_fc", 2025) is None
+    # 끄기도 본인만
+    assert _set(env, dep, key, False, MAIN).status == "denied"
+    assert _set(env, dep, key, False, DEP).status == OK
+    assert cb.published_keys(con, [dep], today=BADGE_DAY) == {}
+
+
+def test_card_publish_change_is_audited_without_names(badge_env):
+    env = badge_env
+    con, dep, div = env["con"], env["a_dep"], env["div"]
+    key = f"org_award:{div}:202512"
+    _set(env, dep, key, True, DEP)
+    _set(env, dep, key, True, DEP)                                                    # 바뀌지 않으면 남기지 않는다
+    _set(env, dep, key, False, DEP)
+    _set(env, dep, key, True, MAIN)                                                   # 거부는 바꾸지 않았으니 남기지 않는다
+    rows = [dict(r) for r in con.execute("SELECT actor, target, before_json, after_json FROM audit_log WHERE action='card_publish' ORDER BY id")]
+    assert [(r["actor"], r["target"], json.loads(r["before_json"]), json.loads(r["after_json"])) for r in rows] == [
+        (DEP, f"agent:{dep}", {"item_key": key, "published": False}, {"item_key": key, "published": True}),
+        (DEP, f"agent:{dep}", {"item_key": key, "published": True}, {"item_key": key, "published": False})]
+    row = con.execute("SELECT published, changed_by FROM card_publish WHERE agent_id=? AND item_key=?", (dep, key)).fetchone()
+    assert (row[0], row[1]) == (0, DEP)
+    dump = "\n".join(line for line in _dump(env["path"]) if "card_publish" in line)
+    assert dump and AWARD_MARK not in dump and str(AWARD_VALUE) not in dump and FAKE_NAMES[0] not in dump and FAKE_NAMES[1] not in dump
+
+
+def test_card_departed_unpublished_and_removal_candidate(badge_env):
+    """퇴사하면 공개 항목이 모두 비공개가 되고 명함은 내리기 후보다. 배지 판정과 검증 자격도 빈다."""
+    from app.connect import card_badges as cb
+    from app.connect.card_remove import removal_candidates
+    env = badge_env
+    con, a1 = env["con"], env["a1"]
+    _a1_account(env)
+    for key in ("cert:우수인증설계사:2025", "award:SALES_EXCELLENT:2024"):
+        assert _set(env, a1, key, True, A1_LOGIN).status == OK
+    assert cb.verified_cert_keys(con, a1, today=BADGE_DAY) == ["우수인증설계사"]
+    assert a1 not in {c.agent_id for c in removal_candidates(con, actor=MAIN, is_main=True, link_table=env["links"], today=BADGE_DAY).value}
+    con.execute("UPDATE agent SET status='terminated', termination_date='2026-12-01' WHERE agent_id=?", (a1,))
+    con.commit()
+    # 표를 거두기 전에도 공개로 보이지 않는다
+    assert cb.published_keys(con, [a1], today=BADGE_DAY) == {} and cb.published_items(con, [a1], today=BADGE_DAY) == []
+    assert _items(env, a1) == [] and cb.verified_cert_keys(con, a1, today=BADGE_DAY) == []
+    assert _set(env, a1, "cert:우수인증설계사:2026", True, A1_LOGIN).status == "denied"
+    assert cb.refresh_badges(con, today=BADGE_DAY)["unpublished"] == 2
+    assert con.execute("SELECT COUNT(*) FROM card_publish WHERE agent_id=? AND published=1", (a1,)).fetchone()[0] == 0
+    assert con.execute("SELECT COUNT(*) FROM card_publish WHERE agent_id=?", (a1,)).fetchone()[0] == 2       # 줄은 지우지 않는다
+    last = con.execute("SELECT actor, after_json FROM audit_log WHERE action='card_publish' ORDER BY id DESC").fetchone()
+    assert last[0] == "system" and json.loads(last[1])["reason"] == "departed"
+    assert cb.unpublish_departed(con, today=BADGE_DAY) == {"agents": 0, "items": 0}  # 다시 돌려도 같다
+    assert a1 in {c.agent_id for c in removal_candidates(con, actor=MAIN, is_main=True, link_table=env["links"], today=BADGE_DAY).value}
+    # 해촉일만 지났어도 공개로 보이지 않는다
+    dep = env["a_dep"]
+    assert _set(env, dep, "cert:블루리본:2025", True, DEP).status == OK
+    con.execute("UPDATE agent SET termination_date='2026-12-09' WHERE agent_id=?", (dep,))
+    con.commit()
+    assert cb.published_keys(con, [dep], today=BADGE_DAY) == {}
+    assert cb.unpublish_departed(con, today=BADGE_DAY) == {"agents": 1, "items": 1}
+
+
+def test_verified_cert_keys_for_card_site(badge_env):
+    """검증 배지가 있는 자격을 명함 사이트 CERTS 이름과 차례로 돌려준다. 확정 전은 넣지 않는다. D-79"""
+    from app.connect.card_badges import verified_cert_keys
+    env = badge_env
+    con, a1, dep = env["con"], env["a1"], env["a_dep"]
+    assert verified_cert_keys(con, a1, today=BADGE_DAY) == ["우수인증설계사"]
+    assert verified_cert_keys(con, dep, today=BADGE_DAY) == ["우수인증설계사", "블루리본"]
+    con.execute("INSERT INTO agent_certification_award(agent_id, program_id, year, awarded_at) VALUES(?,?,2026,'2026-12-05')", (a1, env["prog"]["MDRT"]))
+    con.commit()
+    assert verified_cert_keys(con, a1, today=BADGE_DAY) == ["우수인증설계사", "MDRT"]
+    assert verified_cert_keys(con, env["a_gone"], today=BADGE_DAY) == [] and verified_cert_keys(con, None) == []
 
 
 def test_card_badges_refresh_keeps_rows_and_no_names(badge_env):
@@ -1888,8 +2056,9 @@ def test_card_badges_refresh_keeps_rows_and_no_names(badge_env):
     env = badge_env
     con, a1 = env["con"], env["a1"]
     first = refresh_badges(con, today=BADGE_DAY)
-    assert first == {"judged": 9, "new": 9, "gone": 0}
-    assert refresh_badges(con, today=BADGE_DAY) == {"judged": 9, "new": 0, "gone": 0}
+    assert first == {"judged": 9, "new": 9, "gone": 0, "unpublished": 0}
+    assert refresh_badges(con, today=BADGE_DAY) == {"judged": 9, "new": 0, "gone": 0, "unpublished": 0}
+    assert {r["valid_until"] for r in saved_badges(con, [a1])} == {None}
     con.execute("DELETE FROM agent_certification_award WHERE agent_id=? AND year=2024", (a1,))
     con.commit()
     assert refresh_badges(con, today=BADGE_DAY)["gone"] == 1
@@ -1906,11 +2075,13 @@ def test_card_badges_table_in_old_db(tmp_path):
     from app.connect.card_badges import refresh_badges
     con = db.init_db(tmp_path / "o.db")
     con.execute("DROP TABLE card_badge")
+    con.execute("DROP TABLE card_publish")
     con.commit()
-    assert refresh_badges(con, today=BADGE_DAY) == {"judged": 0, "new": 0, "gone": 0}
+    assert refresh_badges(con, today=BADGE_DAY) == {"judged": 0, "new": 0, "gone": 0, "unpublished": 0}
     assert con.execute("SELECT COUNT(*) FROM card_badge").fetchone()[0] == 0
     con.close()
-    assert sqlite3.connect(str(tmp_path / "o.db")).execute("SELECT name FROM sqlite_master WHERE name='card_badge'").fetchone()
+    for name in ("card_badge", "card_publish"):
+        assert sqlite3.connect(str(tmp_path / "o.db")).execute("SELECT name FROM sqlite_master WHERE name=?", (name,)).fetchone()
 
 
 # ------------------------------------------------------------------ 명함 연동 3차: 해촉자 내리기

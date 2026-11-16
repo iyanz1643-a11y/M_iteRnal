@@ -1264,7 +1264,7 @@ CREATE INDEX IF NOT EXISTS idx_recon_diff_action_key ON recon_diff_action(period
 -- 명함 배지 판정 (S3 명함 연동 3차). app/connect/card_badges.py 가 쓴다. 다시 만들 수 있는 계산 결과다.
 -- 근거는 인증 확정 기록 agent_certification_award, 인증 계산 agent_certification_status, 조직 부문 수상 확정 org_award_result 다.
 -- 근거가 없어진 줄은 지우지 않고 gone_at 을 채운다. 사람 이름, 실적 값, 시상 내용, 금액은 넣지 않는다.
--- 유효기간 규칙은 가정이다. 연도 배지는 달성 연도 다음 해 12월 31일까지, 조직 부문 수상은 수상월 뒤 12개월의 말일까지다.
+-- 배지는 퇴사 전까지 유지한다. D-55. 그래서 valid_until 은 비어 있고 status 는 valid 나 expected 다. 배지 종류는 config/card_badges.yaml 이다.
 -- [card_badge:begin]
 CREATE TABLE IF NOT EXISTS card_badge (
     id               INTEGER PRIMARY KEY,
@@ -1288,6 +1288,23 @@ CREATE TABLE IF NOT EXISTS card_badge (
 );
 CREATE INDEX IF NOT EXISTS idx_card_badge_until ON card_badge(valid_until);
 -- [card_badge:end]
+
+-- ---------------------------------------------------------------------------
+-- 명함 배지와 명예의전당 항목의 본인 공개 설정. D-77. app/connect/card_badges.py 가 쓴다.
+-- 항목은 자격이 생긴 배지 하나이고 열쇠는 card_badge.badge_key 와 같은 꼴이다. 인증, 수상, 조직 부문 수상 같은 기록이 모두 여기에 든다.
+-- 줄이 없으면 비공개다. 본인만 바꾼다. 메인 관리자도 남의 것을 바꾸지 못한다. 바꾼 일은 audit_log 의 card_publish 에 남는다.
+-- 퇴사하면 모두 비공개로 돌린다. 줄은 지우지 않는다. 사람 이름, 실적 값, 시상 내용, 금액은 넣지 않는다.
+-- [card_publish:begin]
+CREATE TABLE IF NOT EXISTS card_publish (
+    agent_id    INTEGER NOT NULL REFERENCES agent(agent_id),
+    item_key    TEXT NOT NULL,                        -- cert:MDRT:2026 / award:SALES_EXCELLENT:2025 / org_award:12:202610
+    published   INTEGER NOT NULL DEFAULT 0,           -- 1 공개 / 0 비공개
+    changed_by  TEXT NOT NULL,                        -- 바꾼 계정의 login_id. 퇴사로 돌린 것은 system
+    changed_at  TEXT NOT NULL,
+    PRIMARY KEY (agent_id, item_key)
+);
+CREATE INDEX IF NOT EXISTS idx_card_publish_on ON card_publish(published, agent_id);
+-- [card_publish:end]
 
 -- ---------------------------------------------------------------------------
 -- 조직별 설정 (파트 H, /org/settings). 항목의 목록과 기본값, 꼴은 app/org/settings.py 의 ITEMS 가 원본이다.

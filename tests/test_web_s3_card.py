@@ -35,7 +35,7 @@ PW = "card3-pass-1234"
 TOKEN = re.compile(r'name="csrf_token" value="([^"]+)"')
 BASE = "https://card-site.test"
 PATH = "/sales/card-approve"
-TODAY = date(2031, 12, 10)                       # 배지 판정의 오늘. MDRT 2030 은 2031-12-31 까지라 만료 임박이다
+TODAY = date(2031, 12, 10)                       # 배지 판정의 오늘. D-55 로 배지는 퇴사 전까지 유지되어 만료가 없다
 GONE_SLUG = "card-gone"
 PHONE = "-".join(("010", "1" * 4, "2" * 4))       # 컨텍스트 점검이 원문을 찾지 않도록 조각을 이어 만든다
 REASON_OK = "위촉이 끝나 내립니다"
@@ -140,7 +140,7 @@ def env(tmp_path, monkeypatch):
     links.link(inside, "card-in", by="admin")
     links.link(outside, "card-out", by="admin")
     links.link(gone, GONE_SLUG, by="admin")
-    # 배지: MDRT 2030(만료 임박), MDRT 2031(유효), 우수인증 2029(만료), 영업우수 2031 계산 달성(예정)
+    # 배지: MDRT 2030, MDRT 2031, 우수인증 2029 는 모두 유효(D-55 퇴사 전까지), 영업우수 2031 계산 달성(예정)
     for code, year in (("MDRT", 2030), ("MDRT", 2031), ("EXCELLENT_FC_LIFE", 2029)):
         con.execute("INSERT INTO agent_certification_award(agent_id, program_id, year, awarded_at) VALUES(?,?,?,?)",
                     (inside, _program(con, code), year, f"{year}-12-01"))
@@ -182,13 +182,12 @@ def test_my_card_badges_only_own_with_four_states_and_notice(env):
     html = login(env, env["code_in"]).get("/sales/card").text
     sec = html[html.index('id="badges"'):]
     states = dict(re.findall(r'<span class="strong">([^<]+)</span> <span class="chip [a-z]*">([^<]+)</span>', sec))
-    assert states["MDRT 2030"] == "만료 임박"
+    assert states["MDRT 2030"] == "유효"                                  # D-55 퇴사 전까지 유지. 연도가 지나도 만료가 없다
     assert states["MDRT 2031"] == "유효"
-    assert states["우수인증설계사 2029"] == "만료"
+    assert states["우수인증설계사 2029"] == "유효"
     assert states["2031 영업우수설계사"] == "예정"
     assert card_route.EXPECTED_NOTE in sec and "명함에 올릴 수 없습니다" in sec
-    assert "MDRT 2030 배지의 유효기간이 2031-12-31 에 끝납니다" in sec and "연도를 2031 로 바꿔" in sec    # reissue_notice
-    assert "우수인증설계사 2029 배지의 유효기간이 2030-12-31 에 끝났습니다" in sec
+    assert "유효기간이" not in sec and "만료 임박</span>" not in sec          # 만료 안내가 없다
     assert "자격·수상에서 MDRT 를 고르고 연도에 2031 를 넣습니다" in sec
     assert "2031년 12월 10일 기준" in sec
     # 남의 배지는 보이지 않는다. 관리자도 본인 것만이다
@@ -210,8 +209,7 @@ def test_expiring_and_removal_candidates_only_for_main(env):
     tools = admin[admin.index('id="main-tools"'):]
     expiring = tools[:tools.index('id="removal"')]
     removal = tools[tools.index('id="removal"'):]
-    assert env["names"][env["inside"]] in expiring and "MDRT 2030" in expiring and "2031년 12월 31일까지 · 21일 남음" in expiring
-    assert "MDRT 2031" not in expiring                                       # 유효한 배지는 만료 예정이 아니다
+    assert "MDRT 2030" not in expiring and "MDRT 2031" not in expiring      # D-55 로 만료가 없어 만료 예정 목록은 비어 있다
     assert env["names"][env["gone"]] in removal and GONE_SLUG in removal and "해촉" in removal
     assert env["names"][env["inside"]] not in removal
     # 관리자는 같은 화면을 열어도 묶음이 없고, 확인 단계도 열리지 않는다
