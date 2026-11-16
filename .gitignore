@@ -7,3 +7,6 @@ data/state/
 data/board/
 data/backup/
 .env
+
+# 실제 자료와 앱이 만드는 파일. data 폴더 전체를 저장소에서 뺀다(CLAUDE.md 2번)
+data/
