@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends "base.html" %}{% import "_person_perf.html" as ppm with context %}
 {% block body %}
 {% set active = rows|selectattr('net_count')|list|length %}{% set top = (rows|map(attribute='converted_premium')|map('default', 0, true)|max) or 1 %}
 <p class="eyebrow">{{ ctx.ym[:4] }}년 {{ ctx.ym[4:]|int }}월 · {{ SCOPES[ctx.scope] }}</p>
@@ -18,5 +18,6 @@
 <td class="num" data-col="premium"><span class="minibar hide-sm"><i style="width:{{ ((r.converted_premium or 0) / top * 100)|round(1) }}%"></i></span>{{ r.converted_premium|won }}</td>
 <td class="hide-sm">{{ st }}</td></tr>{% endfor %}
 </table></div>
-<p class="cap">{% if last_load %}{{ last_load|when }} 적재 기준입니다.{% else %}적재한 계약 자료가 없습니다.{% endif %} 퇴사 표시가 있는 사람은 퇴사 전 실적만 셉니다. 랭킹, 조직 부문 시상, 프로모션 달성 대상에서는 빠집니다. 프로모션 달성, 교육, 정착 단계는 해당 파트를 만들 때 붙입니다.</p>
+<p class="cap"><span class="chip pp-ledger">계약 원장</span> {% if last_load %}{{ last_load|when }} 적재 기준입니다.{% else %}적재한 계약 자료가 없습니다.{% endif %} 퇴사 표시가 있는 사람은 퇴사 전 실적만 셉니다. 랭킹, 조직 부문 시상, 프로모션 달성 대상에서는 빠집니다. 프로모션 달성, 교육, 정착 단계는 해당 파트를 만들 때 붙입니다.</p>
+{{ ppm.team(pp_team, ctx.scope == 'all', pp_unmapped) }}
 {% endblock %}

@@ -53,7 +53,7 @@ PLAN_SUFFIX = (".xlsx", ".xlsm", ".json", ".txt")
 FORMATS = {"real": "실제 양식", "sample": "샘플 양식"}
 FORMAT_SOURCE = {"real": "eternal_contract@", "sample": "internal_org_contract@"}
 # 품질 문제 글에 이름과 금액을 넣지 않게 만든 적재기. 이 적재기의 배치는 글을 그대로 보여 준다
-SAFE_SOURCES = ("eternal_contract@", "eternal_employee@", "edu_roster@")
+SAFE_SOURCES = ("eternal_contract@", "eternal_employee@", "edu_roster@", "eternal_person_perf@")
 # 그 밖의 적재기에서도 글에 이름과 금액이 들지 않는 검사
 SAFE_CODES = {"missing_column", "required_blank", "unknown_category", "unmapped_product", "unmapped_insurer", "bad_status",
               "missing_contract_date", "duplicate_key", "org_mismatch", "category_mismatch", "sign_aligned", "dropped_column", "bad_ratio"}
@@ -67,11 +67,13 @@ CODE_KO = {
     "unknown_sector": "업권 미확인", "category_sector_mismatch": "분류표와 업권 다름", "unknown_payment_mode": "납입주기 미확인",
     "blank_agent": "사번 빈칸", "unmapped_collector": "수금사원 미확인", "stale_row": "원장보다 이전 값", "bad_ratio": "유지율 비율 오류",
     "volume_jump": "줄 수 급변", "header": "머리글", "duplicate_in_file": "파일 안 중복", "duplicate_existing": "이미 있는 수료",
+    "header_note": "머리글 확인", "insurer_sum_mismatch": "보험사별 건수 합 다름", "summary_row": "합계 행", "summary_mismatch": "합계 행 대조 다름",
 }
 HIDDEN_TEXT = "이 검사의 원래 글에는 이름이나 금액이 있어 가렸습니다."
 SEV_KO = {"block": "차단", "warn": "경고"}
-TYPE_KO = {"org_contract": "계약현황", "statement": "정산서", "persistency": "유지율", "employee": "사원현황", "edu_roster": "수료자 명부"}
-TYPE_LINK = {"statement": "/data/statement", "employee": "/data/staff", "edu_roster": "/edu/completions"}
+TYPE_KO = {"org_contract": "계약현황", "statement": "정산서", "persistency": "유지율", "employee": "사원현황", "edu_roster": "수료자 명부",
+           "person_perf": "인별실적"}
+TYPE_LINK = {"statement": "/data/statement", "employee": "/data/staff", "edu_roster": "/edu/completions", "person_perf": "/data/person-perf"}
 BATCH_STATUS_KO = {"active": "적재함", "failed": "막힘", "superseded": "대체됨", "received": "받음", "loaded": "적재함"}
 CONTRACT_STATUS_KO = {"applied": "청약", "inforce": "정상", "withdrawn": "철회", "declined": "반송", "lapsed": "실효",
                       "cancelled": "해지", "matured": "만기"}

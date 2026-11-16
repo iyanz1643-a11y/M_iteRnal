@@ -2,6 +2,7 @@
 
 본인 한 사람(ctx['agent_id'])으로만 읽는다. 계산은 엔진이 한다.
 - 실적 요약: results.period_summary, results.breakdown. 기간별 업적과 같은 숫자다.
+  인별실적 파일 기준 기간 실적은 따로 둔다(app/web/person_perf_view.mine). 원천이 달라 위 숫자와 더하지 않는다.
 - 시상 진척: 조직 부문 순위(org_award.standing), 구간시상(incentive_result 의 본인 줄), 프로모션 달성(promotion.progress).
   금액은 본인 것만 싣고 모두 예상이라고 적는다. 확정은 보험사 정산과 월 마감을 따른다.
 """
@@ -13,6 +14,7 @@ from fastapi.responses import HTMLResponse
 from app.engine import org_award as oa
 from app.engine import promotion as pm
 from app.engine import results as rs
+from app.web import person_perf_view as ppv
 from app.web.deps import _cards, _q, get_con, guard, page
 from app.web.routes.perf import SECTORS, filters, fresh, label_months, pick, pick_ym
 
@@ -30,7 +32,8 @@ def my_summary(request: Request, pt: str = "month", ym: str | None = None, ctx: 
     secs = rs.breakdown(con, me, pt, ym, by="sector")
     cats["shown"] = [c for c in cats["rows"] if c["new_count"] or c["withdrawn_count"] or c["applied_count"] or c["converted_premium"]]
     return page(request, ctx, "my_summary.html", s=s, cats=cats, secs=secs, has_agent=bool(me), yms=yms, ym=ym, pt=pt,
-                PERIODS=rs.PERIOD_KO, SECTORS=SECTORS, fresh=fresh(con, ym), f=filters(pt, "", ym))
+                PERIODS=rs.PERIOD_KO, SECTORS=SECTORS, fresh=fresh(con, ym), f=filters(pt, "", ym),
+                ppv=ppv, pp_mine=ppv.mine(con, ctx.get("agent_id")))
 
 
 def _divisions(con, ctx, ym) -> list:

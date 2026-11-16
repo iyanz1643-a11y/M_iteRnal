@@ -16,7 +16,7 @@ from typing import Any
 from app import db
 
 # 종류. 키는 명령줄과 data/raw 폴더 이름에 쓴다
-KINDS = {"contract": "계약현황", "plan": "시상안", "employee": "사원현황", "edu_roster": "수료자 명부"}
+KINDS = {"contract": "계약현황", "plan": "시상안", "employee": "사원현황", "edu_roster": "수료자 명부", "person_perf": "인별실적"}
 
 # 들어온 길. import_batch.received_via 에 그대로 적는다
 VIA_UPLOAD = "upload"

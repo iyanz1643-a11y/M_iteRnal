@@ -1,0 +1,76 @@
+{# 인별실적 파일 기준 기간 실적. 팀원 현황과 실적 요약이 쓴다. 도우미는 app/web/person_perf_view.py 다.
+   계약 원장의 업적 집계와 원천이 달라 따로 둔다. 두 숫자를 더하거나 견주지 않는다. 기간과 파일 적재 시각을 늘 붙인다. #}
+
+{% macro source_line(p, other) %}
+<p class="cap pp-src"><span class="chip blue">{{ ppv.SOURCE_KO }}</span> {{ p.label }} · {{ p.loaded_at|when if p.loaded_at else '적재 시각 모름' }} 적재 기준입니다. {{ other }}</p>
+{% endmacro %}
+
+{% macro empty(main) %}
+<div class="card"><div class="k">아직 들어온 인별실적 파일이 없습니다</div>
+  <div class="cap">{% if main %}<a href="/data/person-perf">데이터 묶음의 인별실적</a>에서 파일을 올리면 여기에 보입니다.{% else %}메인 관리자가 인별실적 파일을 올리면 여기에 보입니다.{% endif %}</div></div>
+{% endmacro %}
+
+{% macro names(rows, empty_text) %}
+{% if rows %}<details class="pp-names"{% if rows|length <= 8 %} open{% endif %}><summary>명단 {{ rows|length }}명</summary>
+<table class="pp-list"><tr><th>성명</th><th class="hide-sm">소속</th><th class="num">건수</th></tr>
+{% for r in rows %}<tr data-code="{{ r.code }}"><td class="strong">{{ r.name }}<div class="sm-sub"><span>{{ r.org or '-' }}</span></div></td><td class="hide-sm">{{ r.org or '-' }}</td><td class="num">{{ r.count if r.count is not none else '-' }}</td></tr>{% endfor %}
+</table></details>
+{% else %}<div class="cap">{{ empty_text }}</div>{% endif %}
+{% endmacro %}
+
+{# 팀원 현황. t 는 person_perf_view.team 의 결과다. main 이면 설계사 마스터에 없는 사번 수도 적는다 #}
+{% macro team(t, main=false, unmapped=0) %}
+<h2 class="sec" id="person-perf">인별실적 파일 기준 {{ t.period.months if t else 3 }}개월 실적</h2>
+{% if not t %}{{ empty(main) }}
+{% else %}{% set p = t.period %}
+{{ source_line(p, '위 표는 계약 원장으로 센 이번 달 실적이고 이 묶음은 파일의 사람별 집계라, 원천과 기간이 달라 숫자가 다를 수 있습니다. 두 숫자를 더하지 않습니다.') }}
+{% set total = t.in_file or 1 %}
+<div class="card"><div class="k">구분 분포 · 파일에 있는 {{ t.in_file }}명</div>
+  <div class="pp-dist" role="img" aria-label="{% for k in ppv.TIERS %}{{ ppv.TIER_KO[k] }} {{ t.dist[k] }}명 {% endfor %}">{% for k in ppv.TIERS if t.dist[k] %}<i class="t-{{ k }}" style="width:{{ (t.dist[k] / total * 100)|round(1) }}%"></i>{% endfor %}</div>
+  <div class="pp-legend">{% for k in ppv.TIERS %}<span><i class="t-{{ k }}"></i>{{ ppv.TIER_KO[k] }} <b data-tier="{{ k }}">{{ t.dist[k] }}</b>명 · {{ (t.dist[k] / total * 100)|round|int }}%</span>{% endfor %}</div>
+  <div class="cap">구분은 파일의 묶음 값으로 정합니다. 정예는 정예(50만이상) 건수, 10만 이상은 유실적(10만이상) 건수, 일부는 Total 건수가 있는 사람입니다.{% if main and unmapped %} 설계사 마스터에 없는 사번 {{ unmapped }}명은 범위에 이어지지 않아 이 화면에서 빠졌습니다.{% endif %}</div></div>
+
+<div class="grid g2" style="margin-top:16px">
+  <div class="card pp-none"><div class="k"><span class="chip warn">건수 0</span></div><div class="mid">{{ t.none|length }}<span class="unit">명</span></div>
+    <div class="cap">파일에 줄이 있고 기간 Total 건수가 0 인 사람입니다.</div>{{ names(t.none, '건수 0 인 사람이 없습니다.') }}</div>
+  <div class="card pp-absent"><div class="k"><span class="chip">파일에 없음</span></div><div class="mid">{{ t.absent|length }}<span class="unit">명</span></div>
+    <div class="cap">범위 안 재직 설계사인데 이 기간 파일에 줄이 없는 사람입니다. 건수를 알 수 없어 비워 둡니다.</div>{{ names(t.absent, '파일에 없는 재직자가 없습니다.') }}</div>
+</div><!-- pp-lists-end -->
+
+{% if t.rows %}
+<details class="wt pp-people" style="margin-top:16px"><summary>사람별 건수와 월납보험료 {{ t.rows|length }}명</summary>
+<div class="tablecard pp-table"><table>
+<tr><th>성명</th><th class="hide-sm hide-md">사번</th><th class="hide-sm">소속</th><th class="hide-sm">구분</th><th class="num">건수</th><th class="num">월납보험료</th></tr>
+{% for r in t.rows %}{% set chip %}<span class="chip {{ ppv.TIER_CHIP[r.tier] }}">{{ ppv.TIER_KO[r.tier] }}</span>{% endset %}
+<tr data-code="{{ r.code }}"><td class="strong">{{ r.name }}{% if r.left %} <span class="chip bad">퇴사</span>{% endif %}<div class="sm-sub"><span>{{ r.org or '-' }}</span><span>{{ chip }}</span></div></td>
+<td class="hide-sm hide-md">{{ r.code }}</td><td class="hide-sm">{{ r.org or '-' }}</td><td class="hide-sm">{{ chip }}</td>
+<td class="num" data-col="pp-count">{{ r.count|n }}</td><td class="num" data-col="pp-premium">{{ r.premium|won }}</td></tr>{% endfor %}
+</table></div></details>
+<p class="cap">월납보험료는 파일의 기간 합계 실적입니다. 수수료나 시상 금액이 아닙니다. 소속은 앱 조직도의 이번 달 소속입니다.</p>
+{% endif %}
+{% endif %}
+{% endmacro %}
+
+{# 실적 요약. m 은 person_perf_view.mine 의 결과다 #}
+{% macro mine(m) %}
+<h2 class="sec" id="person-perf">인별실적 파일 기준 {{ m.period.months if m else 3 }}개월 실적</h2>
+{% if not m %}{{ empty(false) }}
+{% else %}{% set p = m.period %}
+{{ source_line(p, '위 숫자는 계약 원장으로 센 실적이고 이 묶음은 파일의 사람별 집계라, 원천과 기간이 달라 숫자가 다를 수 있습니다.') }}
+{% if not m.row %}<div class="card"><div class="k">이 기간 파일에 본인 줄이 없습니다</div><div class="cap">사번이 파일과 맞지 않으면 메인 관리자에게 확인을 요청하세요.</div></div>
+{% else %}{% set r = m.row %}
+<div class="card pp-mine"><div class="k">월납보험료 <span class="chip {{ ppv.TIER_CHIP[r.tier] }}">{{ ppv.TIER_KO[r.tier] }}</span></div>
+  <div class="mid" data-col="pp-premium">{{ r.premium|won }}<span class="unit">원</span></div>
+  <div class="cap">{{ p.label }} 합계 · 건당 {{ r.per_policy|won }}원</div></div>
+<div class="grid g3 keep" style="margin-top:16px">
+  <div class="card"><div class="k">건수</div><div class="mid" data-col="pp-count">{{ r.count|n }}<span class="unit">건</span></div></div>
+  <div class="card"><div class="k">일시납</div><div class="mid">{{ r.single|n }}<span class="unit">건</span></div></div>
+  <div class="card"><div class="k">자동차·일반</div><div class="mid">{{ (r.auto or 0) + (r.general or 0) }}<span class="unit">건</span></div></div>
+</div>
+{% if r.insurers %}<div class="card tablecard" style="margin-top:16px"><table>
+<tr><th>보험사</th><th class="num">건수</th><th class="num">월납보험료</th></tr>
+{% for x in r.insurers %}<tr><td class="strong">{{ x.name }}</td><td class="num">{{ x.count|n }}</td><td class="num">{{ x.premium|won }}</td></tr>{% endfor %}
+</table></div>{% endif %}
+{% endif %}
+{% endif %}
+{% endmacro %}

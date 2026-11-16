@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% import "_perf.html" as pf %}
+{% extends "base.html" %}{% import "_perf.html" as pf %}{% import "_person_perf.html" as ppm with context %}
 {% block body %}
 {% set t = s.total %}
 <p class="eyebrow">{{ s.period.label }} · 본인</p>
@@ -8,7 +8,7 @@
 {% else %}
 <div class="card my-hero" style="margin-top:20px"><div class="k">인정보험료 <span class="chip good">확정</span></div>
   <div class="big" data-col="premium">{{ t.converted_premium|won }}<span class="unit">원</span></div>
-  <div class="cap">{% if fresh.last_load %}{{ fresh.last_load|when }} 적재 기준{% else %}적재한 계약 자료가 없습니다{% endif %} · 성립한 계약만 셉니다</div></div>
+  <div class="cap"><span class="chip pp-ledger">계약 원장</span> {% if fresh.last_load %}{{ fresh.last_load|when }} 적재 기준{% else %}적재한 계약 자료가 없습니다{% endif %} · 성립한 계약만 셉니다</div></div>
 <div class="grid g3 keep" style="margin-top:16px">
   <div class="card"><div class="k">성립</div><div class="mid">{{ t.new_count|n }}<span class="unit">건</span></div></div>
   <div class="card"><div class="k">순건수</div><div class="mid" data-col="net">{{ t.net_count|n }}<span class="unit">건</span></div></div>
@@ -31,6 +31,7 @@
 <h2 class="sec">달마다</h2>
 <div class="card"><div class="k" style="margin-bottom:18px">확정 인정보험료</div>{{ pf.bars(s.months, 'label', 'sub', 'converted_premium') }}</div>
 {% endif %}
+{{ ppm.mine(pp_mine) }}
 {% if yms|length > 1 %}<h2 class="sec">다른 달 보기</h2>{{ pf.pick_form(path, f, yms, ym) }}{% endif %}
 <p class="cap" style="margin-top:20px">철회는 철회한 달에 뺍니다. 같은 기준으로 홈, 기간별 업적, 랭킹이 셉니다. <a href="/perf/ranking">내 순위 보기</a> · <a href="/my/awards">시상 진척</a></p>
 {% endif %}

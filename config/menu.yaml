@@ -22,7 +22,7 @@ groups:
     icon: "◔"
     items:
       - {id: my-summary, name: 실적 요약, path: /my/summary, roles: {manager: self, agent: self}, phase: 2, status: built,
-         desc: "월·분기·반기·연 실적과 구분별 집계. 청약은 예정, 성립은 확정으로 나눈다"}
+         desc: "월·분기·반기·연 실적과 구분별 집계. 청약은 예정, 성립은 확정으로 나눈다. 인별실적 파일 기준 기간 실적은 따로 보인다"}
       - {id: my-awards, name: 시상 진척, path: /my/awards, roles: {manager: self, agent: self}, phase: 2, status: built,
          desc: "조직 부문 순위와 구간시상 달성 현황"}
       - {id: my-persistency, name: 내 유지율, path: /my/persistency, roles: {manager: self, agent: self}, phase: 2, status: built,
@@ -77,7 +77,7 @@ groups:
     icon: "☷"
     items:
       - {id: team-members, name: 팀원 현황, path: /team/members, roles: {main: all, manager: org}, phase: 2, status: built,
-         desc: "팀원별 실적, 프로모션 달성, 교육, 정착 단계. 금액은 가린다"}
+         desc: "팀원별 실적, 프로모션 달성, 교육, 정착 단계. 수수료와 시상 금액은 가린다. 인별실적 파일 기준 기간 실적, 구분 분포, 무실적 명단은 따로 보인다"}
       - {id: team-education, name: 교육 진척도, path: /team/education, roles: {main: all, manager: org}, phase: 2, status: built,
          desc: "과정별 수료율, 미수료자, 수료 확인 처리"}
       - {id: team-onboarding, name: 신인 정착, path: /team/onboarding, roles: {main: all, manager: org}, phase: 2, status: built,
@@ -140,6 +140,8 @@ groups:
          desc: "본부 계약현황을 올려 계약 원장에 반영한다"}
       - {id: data-staff, name: 사원현황, path: /data/staff, roles: {main: all}, phase: 1, status: built,
          desc: "조직, 설계사, 조직장, 인사 이동, 퇴사를 미리보기한 뒤 반영한다. 계약현황의 조직 경로로 조직도 만든다"}
+      - {id: data-person-perf, name: 인별실적, path: /data/person-perf, roles: {main: all}, phase: 2, status: built,
+         desc: "사람별 기간 실적 파일을 미리보기에서 건수, 사번 매칭, 막힌 줄을 본 뒤 적재한다. 계약 원장과 섞지 않는다. 이름과 금액은 미리보기에 없다"}
       - {id: data-plan, name: 시상안, path: /data/plan, roles: {main: all}, phase: 1, status: built,
          desc: "보험사별 시상안을 원장에 쌓고 해석하고 승인한다"}
       - {id: data-plan-qa, name: 시상안 묻고 답하기, path: /data/plan-qa, roles: {main: all}, phase: 3, status: built,

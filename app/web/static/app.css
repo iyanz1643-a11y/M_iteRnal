@@ -553,3 +553,19 @@ a.card.prog.on{outline:2px solid var(--blue);outline-offset:-2px}
 .backsolve{margin-top:12px;padding:12px 14px;border-radius:14px;background:var(--tint)}
 .backsolve .cap{margin:4px 0 0}
 .basis-note{margin-top:16px}
+
+/* ---------- 인별실적 파일 기준 기간 실적 (팀원 현황, 실적 요약). 계약 원장 실적과 따로 둔다 */
+#person-perf{scroll-margin-top:72px}
+.pp-src{margin:-6px 0 14px;word-break:keep-all;overflow-wrap:anywhere}
+.pp-dist{display:flex;height:14px;border-radius:999px;overflow:hidden;background:var(--track);margin-top:14px}
+.pp-dist i{display:block;height:100%}
+.pp-legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:12px;font-size:15px;color:var(--quiet)}
+.pp-legend span{display:inline-flex;align-items:center;white-space:nowrap}
+.pp-legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
+.pp-legend b{color:var(--ink);font-variant-numeric:tabular-nums;margin:0 1px 0 4px}
+.t-elite_50{background:var(--fill-green)}.t-active_10{background:var(--blue)}.t-some{background:var(--faint)}.t-none{background:var(--fill-orange)}
+.pp-names{margin-top:12px}
+.pp-names summary{cursor:pointer;color:var(--blue);font-size:14px;font-weight:600;min-height:48px;display:flex;align-items:center}
+.pp-list{width:100%}
+.pp-people .pp-table{padding:0 0 8px}
+.pp-mine .mid{white-space:nowrap}

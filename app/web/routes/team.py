@@ -1,5 +1,8 @@
 """팀 관리 묶음: 팀원 현황, 신인 정착.
 
+팀원 현황에는 계약 원장 기준 이번 달 실적 표와 따로, 인별실적 파일 기준 기간 실적(구분 분포, 무실적 명단, 사람별 건수와 월납보험료)을 둔다.
+도우미는 app/web/person_perf_view.py 이고 같은 범위 목록으로만 읽는다. 월납보험료는 실적이라 관리자에게도 보인다. 수수료와 시상 금액은 없다(D-17).
+
 신인 정착 /team/onboarding 은 새 계산을 만들지 않고 엔진 함수 둘을 조합한다.
 
 | 체크 | 원본 | 판단 |
@@ -22,6 +25,7 @@ from app.engine import education as edu
 from app.engine import performance
 from app.org.sync import org_texts
 from app.web import org_values
+from app.web import person_perf_view as ppv
 from app.web.deps import _in, _last_load, _perf, _q, edu_today, get_con, guard, page
 
 router = APIRouter()
@@ -31,7 +35,9 @@ ONBOARD_DAYS = 90
 @router.get("/team/members", response_class=HTMLResponse)
 def team_members(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
     ids = ctx["agent_ids"] if ctx["scope"] == "org" else [r["agent_id"] for r in con.execute("SELECT agent_id FROM agent")]
-    return page(request, ctx, "team_members.html", rows=_perf(con, ctx["ym"], ids), last_load=_last_load(con))
+    pp_team = ppv.team(con, ids, ctx["ym"])                 # 인별실적 파일 기준. 같은 범위 목록으로만 읽고 원장 실적과 섞지 않는다
+    return page(request, ctx, "team_members.html", rows=_perf(con, ctx["ym"], ids), last_load=_last_load(con), ppv=ppv, pp_team=pp_team,
+                pp_unmapped=ppv.unmapped(con, pp_team["period"] if pp_team else None) if ctx["scope"] == "all" else 0)
 
 
 # ---------------------------------------------------------------- 신인 정착
