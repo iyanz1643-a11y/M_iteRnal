@@ -45,6 +45,7 @@ ACTION_KO = {
     "promotion_inst13": "프로모션 13회차 판정 확정",
     "promotion_screen": "프로모션 화면 칸 고침",
     "promotion_reward_choice": "프로모션 보상 선택 기록",
+    "promotion_copy": "프로모션 다음 달 복사",
     "org_award_create": "조직 부문 시상 만듦",
     "org_award_update": "조직 부문 시상 고침",
     "org_award_active": "조직 부문 시상 다시 엶",
@@ -244,6 +245,9 @@ def target_ko(action: str, target, names: _Names) -> str:
                 return out + (f" · {fields}" if fields else "")
             if action == "promotion_revoke":                                  # 'pid:confirm_id'. 사유는 메인 관리자 화면에만 있고 기록에는 길이만 있다
                 return out + (f" · 확정 {fields}번" if fields.isdigit() else "")
+            if action == "promotion_copy":                                    # '새 번호:원본 번호'. 복사로 만든 초안과 그 원본
+                src = names.promo(_num(fields))
+                return out + (f" · 원본: {src}" if src else (f" · 원본 {fields}번" if fields.isdigit() else ""))
             if action == "promotion_original":                                # 'pid:tier1,rate2'
                 keys = [m.groups() for m in map(_ORIGINAL_KEY.fullmatch, fields.split(",")) if m]
                 if keys:

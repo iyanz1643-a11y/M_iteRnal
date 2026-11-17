@@ -52,6 +52,10 @@ S3 확정 기능. 아래 규칙은 열린 결정이 아니면 스스로 정한 �
   사람별 값은 progress() 를 그대로 합친다. 금액 합계는 amounts 에 따로 둔다.
   창별 단계 phases 는 창마다 기준일로 본 상태(done, open, future)와 그 창의 최저 기준을 채운 인원, 연속이 살아 있는 인원을 낸다.
   시작 전 창은 인원을 내지 않는다(None). 합산 조건을 채운 인원은 n_sum 이다. 최종 달성 n_achieved 의 뜻은 그대로다.
+  창마다 대상자의 실적 합계 value_sum(가중 인정이 있으면 합산용 값 plain_sum 도), 합산 조건에 대는 값의 대상자 합계 sum_value 를 함께 낸다.
+  값은 프로모션 지표(metric)로 잰다. 지표가 인정보험료면 인정보험료의 합이다. 퇴사자는 value 에만 들고 이 합계들에는 들지 않는다.
+  확정한 프로모션은 다시 세지 않고 확정 때 남긴 값(confirmed_progress)으로 센다. 결과의 confirmed 가 참이다. 무르면 다시 계산한 값이다.
+  한 사람이 센 계약 목록은 counted_contracts() 다. 확정한 프로모션이면 확정 때 센 계약을 낸다.
 - 추가안 alt_chains (11월 17일 2차 변경): 결합 either 에 달성 길을 더한다. 목록의 항목은
   {key, label, windows: {창 순번: 최저 기준}, requires_missed: [창 순번], boost, tier_no} 다.
   대상은 requires_missed 의 창을 채우지 못한 사람이다. 채웠는지는 그 창의 창별 구간표와 조건 1의 값(가중 인정값)으로 본다.
@@ -1238,6 +1242,8 @@ def retention(con, p, agent_ids, ref: date) -> dict:
 # ---------------------------------------------------------------- 조직별 진척
 ORG_NOTE = ("조직 줄은 그 조직과 아래 전부에 소속인 범위 안 설계사의 합입니다. 퇴사자의 퇴사 전 실적은 실적 합계에 넣고 "
             "대상, 달성, 순위에서는 뺍니다. 달성 인원 순위는 바로 아래 조직끼리 견줍니다.")
+ORG_NOTE_CONFIRMED = ("조직 줄은 그 조직과 아래 전부에 소속인 범위 안 설계사의 합입니다. 확정한 프로모션이라 확정할 때의 대상과 값으로 셉니다. "
+                      "확정한 뒤 계약이 바뀌어도 다시 계산하지 않습니다. 달성 인원 순위는 바로 아래 조직끼리 견줍니다.")
 NEAR_KEY = "promo.near_pct"                                   # app/org/settings.py 의 항목. 화면은 app/web/org_values.NEAR_KEY
 
 
@@ -1289,9 +1295,11 @@ def _org_phases(shape, states, targets, res) -> dict:
     """조직 줄에 덧붙이는 창별 단계와 조건별 인원 {phases, n_chain, n_sum, sum_target}. 모양은 org_progress() 설명에 있다.
     shape 는 창과 구간표를 읽는 프로모션(딸린 시책이면 부모), states 는 창마다 window_state() 의 상태, targets 는 그 줄의 대상자다.
     창을 채웠는지는 progress() 가 낸 그 창의 구간(windows[i].tier)으로 본다. 창 실적은 조건 1에 쓰는 값이라 가중 인정이 들어 있다.
-    합산은 progress() 의 value 를 공통 구간표의 가장 낮은 기준에 댄다. 사람별 판정을 다시 하지 않고 세기만 한다."""
+    합산은 progress() 의 value 를 공통 구간표의 가장 낮은 기준에 댄다. 사람별 판정을 다시 하지 않고 세기만 한다.
+    value_sum 은 대상자의 그 창 실적(windows[i].value) 합계, plain_sum 은 합산에 쓰는 값(windows[i].plain) 합계다. 시작 전 창은 None 이다."""
     tiered = shape["kind"] != "rate"
     each = tiered and shape["combine_rule"] in EACH_RULES
+    boosted = bool(_r(shape)["boost"])
     phases, alive, kept = [], set(targets), set(targets)
     for i, (w, st) in enumerate(zip(shape["windows"], states)):
         table = tiers_for(shape, w) if each else []
@@ -1303,8 +1311,13 @@ def _org_phases(shape, states, targets, res) -> dict:
             if st == "ended":
                 kept &= met
             n_met, n_chain = len(met), len(alive)
+        value_sum = plain_sum = None
+        if st != "upcoming":
+            value_sum = sum(res[a]["windows"][i]["value"] for a in targets)
+            plain_sum = sum(res[a]["windows"][i]["plain"] for a in targets) if boosted else None
         phases.append({"seq": w["seq"], "label": w["label"], "date_from": w["date_from"], "date_to": w["date_to"],
-                       "state": PHASE_STATE[st], "target": floor, "n_met": n_met, "n_chain": n_chain})
+                       "state": PHASE_STATE[st], "target": floor, "n_met": n_met, "n_chain": n_chain,
+                       "value_sum": value_sum, "plain_sum": plain_sum})
     has_floor = any(ph["target"] is not None for ph in phases)
     sum_target = min(t["min_value"] for t in shape["tiers"]) if tiered and shape["combine_rule"] in SUM_RULES and shape["tiers"] else None
     alts = _org_alts(shape, states, targets, res)
@@ -1313,9 +1326,27 @@ def _org_phases(shape, states, targets, res) -> dict:
             "alt": alts[0] if alts else None, "alts": alts}
 
 
+def _org_phases_frozen(shape, states, targets, res, have) -> dict:
+    """확정 값으로 내는 조직 줄에서 창별 판정을 다시 할 수 없을 때의 창별 단계. 모양은 _org_phases() 와 같다.
+    딸린 시책(부모의 확정 때 규칙이 남아 있지 않다)과 규칙이나 센 계약을 남기지 않은 예전 확정이 여기에 든다.
+    인원(n_met, n_chain, n_sum, 추가안의 인원과 합계)은 모두 None 이다. 창의 기준(target, sum_target)은 지금 규칙에서 읽은 것이다.
+    value_sum, plain_sum 은 확정 때 센 계약이 남아 있으면(have) 그 합계이고 없으면 None 이다."""
+    out = _org_phases(shape, states, [], {})
+    vals = [res[a]["window_values"] for a in targets] if have else []
+    boosted = bool(_r(shape)["boost"])
+    for i, ph in enumerate(out["phases"]):
+        ph.update(n_met=None, n_chain=None, value_sum=sum(v[i]["value"] for v in vals) if have else None,
+                  plain_sum=sum(v[i]["plain"] for v in vals) if have and boosted else None)
+    for c in out["alts"]:
+        c.update(n_eligible=None, n_achieved=None, phases=[{**ph, "n_met": None, "value_sum": None} for ph in c["phases"]])
+    out.update(n_chain=None, n_sum=None, alt=out["alts"][0] if out["alts"] else None)
+    return out
+
+
 def _org_alts(shape, states, targets, res) -> list:
-    """조직 줄의 추가안 인원. 추가안마다 {key, label, n_eligible, phases: [{seq, label, state, min_value, n_met}], n_achieved}.
-    n_eligible 은 대상이 정해진 사람(paths.alts 의 eligible), n_met 은 그 가운데 그 창의 추가안 기준을 채운 사람이다. 시작 전 창은 None 이다."""
+    """조직 줄의 추가안 인원. 추가안마다 {key, label, n_eligible, phases: [{seq, label, state, min_value, n_met, value_sum}], n_achieved}.
+    n_eligible 은 대상이 정해진 사람(paths.alts 의 eligible), n_met 은 그 가운데 그 창의 추가안 기준을 채운 사람이다. 시작 전 창은 None 이다.
+    value_sum 은 추가안 대상자의 그 창 실적 합계다. 추가안 기준에 대는 값(paths.alts 의 windows[].value)이고 시작 전 창은 None 이다."""
     st = {w["seq"]: s for w, s in zip(shape["windows"], states)}
     labels = {w["seq"]: w["label"] for w in shape["windows"]}
     out = []
@@ -1323,35 +1354,44 @@ def _org_alts(shape, states, targets, res) -> list:
         mine = [res[a]["paths"]["alts"][k] for a in targets]
         elig = [m for m in mine if m["eligible"]]
         phases = [{"seq": seq, "label": labels.get(seq), "state": PHASE_STATE[st.get(seq, "ended")], "min_value": m,
-                   "n_met": None if st.get(seq) == "upcoming" else sum(1 for x in elig if x["windows"][j]["met"])}
+                   "n_met": None if st.get(seq) == "upcoming" else sum(1 for x in elig if x["windows"][j]["met"]),
+                   "value_sum": None if st.get(seq) == "upcoming" else sum(x["windows"][j]["value"] for x in elig)}
                   for j, (seq, m) in enumerate(sorted(c["windows"].items()))]
         out.append({"key": c["key"], "label": c["label"], "n_eligible": len(elig), "phases": phases,
                     "n_achieved": sum(1 for m in mine if m["achieved"])})
     return out
 
 
-def _org_row(p, shape, unit, members, people, res, pcts, direct=False, states=None) -> tuple:
+def _org_row(p, shape, unit, members, people, res, pcts, direct=False, states=None, frozen=None) -> tuple:
     """조직 줄 하나와 그 줄의 예상 시상액 합계. shape 는 창을 읽는 프로모션이다. 딸린 시책이면 부모다.
-    states 는 창마다 기준일로 본 상태다. 시작 전 창의 windows[].n_achieved 는 0 이다. 기준일 뒤 날짜의 계약이 원장에 있어도 세지 않는다."""
+    states 는 창마다 기준일로 본 상태다. 시작 전 창의 windows[].n_achieved 는 0 이다. 기준일 뒤 날짜의 계약이 원장에 있어도 세지 않는다.
+    frozen 은 확정 값으로 낼 때의 자세함이다(full, values, none). 이때 res 는 confirmed_progress() 이고 대상은 확정 결과가 있는 사람이다."""
     states = states or ["active"] * len(shape["windows"])
-    targets = [a for a in members if people[a]["active"] and res[a].get("target", True)]
-    left = [a for a in members if not people[a]["active"] and res[a].get("target", True)]
+    if frozen:
+        targets, left = [a for a in members if a in res], []
+    else:
+        targets = [a for a in members if people[a]["active"] and res[a].get("target", True)]
+        left = [a for a in members if not people[a]["active"] and res[a].get("target", True)]
     achieved = [a for a in targets if is_achieved(p, res[a])]
+    lost = [a for a in targets if not is_achieved(p, res[a]) and res[a]["status"] == "missed"]
     active = [a for a in targets if res[a]["value"] > 0]
     n = len(targets)
     wins = None
-    if len(shape["windows"]) > 1 and shape["combine_rule"] in EACH_RULES:
+    if len(shape["windows"]) > 1 and shape["combine_rule"] in EACH_RULES and frozen in (None, "full"):
         wins = [{"seq": w["seq"], "label": w["label"],
                  "n_achieved": 0 if states[i] == "upcoming" else sum(1 for a in targets if res[a]["windows"][i]["tier"])}
                 for i, w in enumerate(shape["windows"])]
     amounts = [res[a]["amount"] for a in targets if res[a]["amount"] is not None]
     row = {"org_id": unit["org_id"], "path_key": unit["path_key"], "name": unit["name"], "level": unit["level"], "direct": direct, "rank": None,
            "n_target": n, "n_active": len(active), "n_achieved": len(achieved),
+           "n_missed": n - len(achieved), "n_lost": len(lost), "n_open": n - len(achieved) - len(lost),
            "n_near": sum(1 for a in targets if near(res[a], float(pcts.get(a, 30)) / 100.0)), "n_inactive": n - len(active),
            "achieve_rate": len(achieved) / n if n else None, "windows": wins,
            "value": sum(res[a]["value"] for a in targets + left), "value_left": sum(res[a]["value"] for a in left), "n_left": len(left),
-           "unnamed": sum(res[a].get("unnamed", 0) for a in targets + left), "agent_ids": targets, "left_ids": left}
-    row.update(_org_phases(shape, states, targets, res))
+           "unnamed": None if frozen else sum(res[a].get("unnamed", 0) for a in targets + left), "agent_ids": targets, "left_ids": left}
+    row.update(_org_phases_frozen(shape, states, targets, res, frozen == "values") if frozen in ("values", "none") else _org_phases(shape, states, targets, res))
+    # 합산 조건에 대는 값의 대상자 합계. 합산 조건이 없으면 value 와 같다. 합산 조건이 있으면 value 에서 퇴사자 몫(value_left)을 뺀 값이다
+    row["sum_value"] = sum(res[a]["value"] for a in targets) if row["sum_target"] is not None else row["value"]
     return row, (sum(amounts) if amounts else None)
 
 
@@ -1359,34 +1399,65 @@ def org_progress(con, p, org_key, agent_ids, ref: date, *, ym: str | None = None
     """프로모션 하나의 조직별 진척. org_key 조직(path_key)의 바로 아래 조직마다 한 줄을 낸다.
 
     agent_ids 는 범위 안 설계사 목록이고 그 밖의 사람은 세지 않는다. 사람별 값은 progress() 를 그대로 합친다.
+    확정한 프로모션이면 다시 세지 않고 확정 때 남긴 값(confirmed_progress)을 합친다. 아래 '확정한 프로모션' 에 적었다.
     ym 은 소속을 볼 달이다. 비면 기준일을 프로모션 기간 안으로 당긴 달이다. 팀원 달성 현황과 맞추려면 화면의 자료 기준 달을 넘긴다.
     near_pct 는 구간 근접 퍼센트다. 숫자면 모두에게, dict 면 사람마다, None 이면 소속 조직의 설정(promo.near_pct)이다.
     keep_empty 가 거짓이면 범위 안 사람이 없는 아래 조직은 내지 않는다.
     퇴사자(D-42)는 실적 합계(value)에 넣고 대상, 가동, 달성, 근접, 미가동, 순위에서는 뺀다. 딸린 시책은 대상 직급인 사람만 대상이다.
 
-    돌려주는 것: {promo_id, name, org, ym, ref, basis, estimate_note, note, metric, unit, windows, rows, total, amounts, gate, near_pcts}
-    - rows: [{org_id, path_key, name, level, direct, rank, n_target, n_active, n_achieved, n_near, n_inactive, achieve_rate,
-              windows, value, value_left, n_left, unnamed, agent_ids, left_ids}]
+    돌려주는 것: {promo_id, name, org, ym, ref, basis, estimate_note, note, metric, unit, windows, rows, total, amounts, gate, near_pcts,
+                  confirmed, confirm, detail}
+    - rows: [{org_id, path_key, name, level, direct, rank, n_target, n_active, n_achieved, n_missed, n_lost, n_open, n_near, n_inactive,
+              achieve_rate, windows, value, value_left, n_left, unnamed, agent_ids, left_ids}]
       direct 가 참인 줄은 org_key 조직에 바로 소속인 사람이고 순위가 없다. rank 는 아래 조직끼리 달성 인원 큰 순이고 0명이면 None 이다.
       windows 는 창이 여럿이고 창마다 달성하는 결합일 때 [{seq, label, n_achieved}], 아니면 None 이다. 시작 전 창은 0 이다
       n_achieved 는 최종 달성 인원이다. progress() 의 구간에 닿은 사람이고 is_achieved() 와 같다
     - rows 와 total 에 덧붙인 것. 창별 단계와 조건별 인원이고 대상자(agent_ids)만 센다
-      phases: 창마다 [{seq, label, date_from, date_to, state, target, n_met, n_chain}]. 창이 하나여도 한 줄이 나온다
+      phases: 창마다 [{seq, label, date_from, date_to, state, target, n_met, n_chain, value_sum, plain_sum}]. 창이 하나여도 한 줄이 나온다
         state 는 기준일로 본 done(끝남), open(진행 중), future(시작 전)다. 기준일이 창의 마지막 날이면 open 이다
         target 은 그 창의 최저 기준이다. 창마다 달성하는 결합(all, both, either)이 아니거나 정률이면 None 이다
         n_met 은 그 창의 최저 기준을 채운 인원이다. 그 창 실적만 보고 가중 인정이 조건 1에 걸리면 인정값으로 본다
         n_chain 은 첫 창부터 이 창까지 모두 채운 인원이다. n_met, n_chain 은 future 이거나 target 이 없으면 None 이다
+        value_sum 은 대상자의 그 창 실적 합계다. 프로모션 지표로 재고 n_met 에 대는 값과 같다(progress() 의 windows[i].value).
+        가중 인정이 조건 1에 걸리면 인정값이다. target 이 없는 결합과 정률에도 나온다. future 는 None 이다
+        plain_sum 은 가중 인정이 있을 때만 내는 합산용 값의 합계다(windows[i].plain). 가중 인정이 조건 1에만 걸리면(each) 원래 값이고,
+        모든 조건에 걸리면(all) 합산에도 배수가 들어 value_sum 과 같다. 가중 인정이 없거나 future 면 None 이다
       n_chain: 끝난 창을 모두 채워 연속 조건이 살아 있는 인원. 진행 중 창은 보지 않는다. 끝난 창이 없으면 대상 전원이다.
         창마다 달성하는 결합이 아니면 None 이다
       n_sum: 합산 조건을 채운 인원. 합계가 공통 구간표의 가장 낮은 기준 이상이다. 결합이 both, either, sum 일 때만이고 그 밖에는 None 이다
       sum_target: 합산의 가장 낮은 기준. 없으면 None 이다. 딸린 시책은 phases, n_chain, n_sum, sum_target 모두 부모의 창과 기준으로 센다
-      alt: 추가안 {key, label, n_eligible, phases: [{seq, label, state, min_value, n_met}], n_achieved}. 추가안이 없으면 None 이다.
+      sum_value: 합산 조건에 대는 값(progress() 의 value)의 대상자 합계다. n_sum 을 세는 값과 같다.
+        합산 조건이 있으면(sum_target 이 있다) 퇴사자를 넣지 않아 value - value_left 다. 이때 끝난 창과 진행 중 창의 plain_sum
+        (가중 인정이 없으면 value_sum)을 더한 값과 같고, 기준일 뒤 날짜의 계약이 원장에 있으면 그만큼 크다.
+        합산 조건이 없으면(sum_target 이 None) value 와 같게 둔다. 이때는 퇴사자 몫이 들어 있다
+      alt: 추가안 {key, label, n_eligible, phases: [{seq, label, state, min_value, n_met, value_sum}], n_achieved}. 추가안이 없으면 None 이다.
         n_eligible 은 추가안 대상으로 정해진 인원, n_met 은 그 가운데 그 창의 추가안 기준을 채운 인원이고 시작 전 창은 None 이다.
+        value_sum 은 추가안 대상자(n_eligible 의 사람)의 그 창 실적 합계다. 추가안 기준에 대는 값이라 추가안의 boost 가 참이면 인정값,
+        거짓이면 합산용 값이다. 시작 전 창은 None 이고 대상이 아직 정해지지 않았으면 0 이다.
         n_achieved 는 추가안으로 달성한 인원이고 줄의 n_achieved 에 이미 들어 있다. 합산도 채운 사람은 n_sum 에도 든다.
         phases 의 n_met 과 n_chain 은 추가안과 상관없이 원안 기준이다. alts 는 추가안 전부의 목록이고 alt 는 그 첫 항목이다
+      n_missed: 미달성 인원. 대상에서 최종 달성을 뺀 수다(n_target - n_achieved). 진행 중인 사람도 든다. 화면의 명단 열쇠 missed 와 같은 조건이다.
+        n_lost 는 그 가운데 놓친 것이 정해진 사람(progress() 의 status 가 missed. 끝난 창을 놓쳐 무효이거나 기간이 끝났다),
+        n_open 은 나머지(진행 중)다. n_missed = n_lost + n_open 이고 화면의 최종 상태 miss, open 과 같은 가름이다
     - total: rows 를 더한 줄. rank, agent_ids, left_ids 는 없다
     - amounts: {by_org: {path_key: 예상 시상액 합계 또는 None}, total, in_kind, note}. 메인 관리자에게만 넘긴다 (D-17)
     - gate: 딸린 시책의 조직 달성 인원 문턱(org_gate). 없으면 None
+    - confirmed: 확정한 프로모션인가. 참이면 아래 '확정한 프로모션' 대로 센 값이다. confirm 은 {confirm_id, ref_date, confirmed_by, confirmed_at}
+      이고 확정 전에는 None 이다. detail 은 확정 값의 자세함(full, values, none)이고 확정 전에는 None 이다
+
+    확정한 프로모션 (살아 있는 확정이 있다. 무르면 다시 계산한 값으로 돌아간다)
+    - 사람별 값을 다시 세지 않고 confirmed_progress() 를 합친다. 계약이 그 뒤에 철회되거나 바뀌어도 숫자가 그대로다.
+      final_results() 와 같은 사람의 같은 숫자다. n_achieved 는 그 줄들에서 구간이 있는 사람(정률은 실적이 있는 사람) 수와 같다
+    - 대상(agent_ids)은 범위 안 소속자 가운데 확정 결과가 있는 사람이다. 확정할 때의 재직자이고 그 뒤에 퇴사한 사람도 든다.
+      확정할 때 이미 퇴사한 사람의 실적은 확정 값에 없다. 그래서 value 에 퇴사자 몫이 없고 value_left, n_left 는 0, left_ids 는 빈 목록이다
+    - 창은 모두 끝난 것(done)으로 본다. 기준일(ref)은 쓰지 않는다. n_open 은 0 이고 n_near 도 0 이다. 확정 값에는 다음 구간이 없다
+    - unnamed 는 None 이다. 확정 때 남기지 않는다. estimate_note 와 amounts.note 는 확정 안내(CONFIRMED_NOTE)이고 basis 는 확정 때의 기준 설명이다
+    - metric, unit, 창, 구간표는 확정 때의 규칙(rule_json)에서 읽는다. 확정 뒤에 조건을 고쳐도 확정 때의 조건으로 센 값이다
+    - detail 이 full 이면 phases, n_chain, n_sum, alt, alts, windows, sum_value 를 확정 때 센 계약과 규칙으로 낸다
+    - detail 이 values 면(딸린 시책. 부모의 확정 때 규칙을 남기지 않는다) phases 의 value_sum, plain_sum 과 sum_value 만 확정 때 센 계약으로 내고
+      n_met, n_chain, n_sum, 추가안의 n_eligible, n_met, value_sum, n_achieved 는 None, windows 는 None 이다. target 과 sum_target 은 부모의 지금 규칙이다
+    - detail 이 none 이면(센 계약을 남기지 않은 예전 확정) value_sum, plain_sum 도 None 이다
+    - gate 는 확정 값이 아니다. 부모의 달성 인원을 지금 계약으로 다시 센 값이다. 확정 때의 문턱 인원은 남기지 않는다
     """
     org = _org_by_path(con, org_key) if org_key else None
     if not org:
@@ -1395,7 +1466,14 @@ def org_progress(con, p, org_key, agent_ids, ref: date, *, ym: str | None = None
     homes = _homes(con, agent_ids, ym)
     under = orgs.descendants(con, org["org_id"])
     people = {a: h for a, h in homes.items() if h["org_id"] in under}
-    res = progress(con, p, sorted(people), ref)
+    head = confirmation(con, p["promo_id"])
+    frozen = None
+    if head:                                                       # 확정이 살아 있으면 다시 세지 않고 확정 때 남긴 값으로 센다
+        res = confirmed_progress(con, p, sorted(people), head)
+        p = _with_rule(p, head.get("rule_json"))                   # 확정할 때의 규칙. 달성 판정과 창, 구간표를 여기서 읽는다
+        frozen = _confirmed_detail(con, p, head) or "none"
+    else:
+        res = progress(con, p, sorted(people), ref)
     shape = _parent(con, p) or p
     if isinstance(near_pct, dict):
         pcts = {a: near_pct.get(a, 30) for a in people}
@@ -1404,10 +1482,10 @@ def org_progress(con, p, org_key, agent_ids, ref: date, *, ym: str | None = None
     else:
         pcts = _near_pcts(con, {a: h["org_id"] for a, h in people.items()})
     rows, by_org = [], {}
-    states = [window_state(w, ref)["state"] for w in shape["windows"]]
+    states = ["ended"] * len(shape["windows"]) if frozen else [window_state(w, ref)["state"] for w in shape["windows"]]
     direct = sorted(a for a, h in people.items() if h["org_id"] == org["org_id"])
     if direct:
-        row, amt = _org_row(p, shape, org, direct, people, res, pcts, direct=True, states=states)
+        row, amt = _org_row(p, shape, org, direct, people, res, pcts, direct=True, states=states, frozen=frozen)
         rows.append(row)
         by_org[org["path_key"]] = amt
     kids = [dict(x) for x in con.execute("SELECT org_id, name, level, path_key FROM org_unit WHERE parent_id=? ORDER BY path_key, org_id", (org["org_id"],))]
@@ -1416,7 +1494,7 @@ def org_progress(con, p, org_key, agent_ids, ref: date, *, ym: str | None = None
         mem = sorted(a for a, h in people.items() if h["org_id"] in sub)
         if not mem and not keep_empty:
             continue
-        row, amt = _org_row(p, shape, k, mem, people, res, pcts, states=states)
+        row, amt = _org_row(p, shape, k, mem, people, res, pcts, states=states, frozen=frozen)
         rows.append(row)
         by_org[k["path_key"]] = amt
     ranked = [x for x in rows if not x["direct"]]
@@ -1426,29 +1504,37 @@ def org_progress(con, p, org_key, agent_ids, ref: date, *, ym: str | None = None
         first.setdefault(v, i)
     for x in ranked:
         x["rank"] = first.get(x["n_achieved"])
-    keys = ("n_target", "n_active", "n_achieved", "n_near", "n_inactive", "value", "value_left", "n_left", "unnamed")
+    keys = ("n_target", "n_active", "n_achieved", "n_missed", "n_lost", "n_open", "n_near", "n_inactive", "value", "value_left", "n_left", "sum_value")
     total = {k: sum(x[k] for x in rows) for k in keys}
+    total["unnamed"] = None if frozen else sum(x["unnamed"] for x in rows)
     total["achieve_rate"] = total["n_achieved"] / total["n_target"] if total["n_target"] else None
     total["windows"] = None
     if rows and rows[0]["windows"] is not None:
         total["windows"] = [{**w, "n_achieved": sum(x["windows"][i]["n_achieved"] for x in rows)} for i, w in enumerate(rows[0]["windows"])]
     blank = _org_phases(shape, states, [], {})                     # 줄이 없어도 창과 상태는 낸다. None 인 칸은 더해도 None 이다
-    add = lambda vals, base: None if base is None else sum(vals)
-    total["phases"] = [{**ph, "n_met": add((x["phases"][i]["n_met"] for x in rows), ph["n_met"]),
-                        "n_chain": add((x["phases"][i]["n_chain"] for x in rows), ph["n_chain"])} for i, ph in enumerate(blank["phases"])]
+
+    def add(vals, base):
+        vals = list(vals)
+        return None if base is None or any(v is None for v in vals) else sum(vals)
+    total["phases"] = [{**ph, **{k: add((x["phases"][i][k] for x in rows), ph[k]) for k in ("n_met", "n_chain", "value_sum", "plain_sum")}}
+                       for i, ph in enumerate(blank["phases"])]
     total["n_chain"] = add((x["n_chain"] for x in rows), blank["n_chain"])
     total["n_sum"] = add((x["n_sum"] for x in rows), blank["n_sum"])
     total["sum_target"] = blank["sum_target"]
-    total["alts"] = [{**c, "n_eligible": sum(x["alts"][k]["n_eligible"] for x in rows), "n_achieved": sum(x["alts"][k]["n_achieved"] for x in rows),
-                      "phases": [{**ph, "n_met": add((x["alts"][k]["phases"][j]["n_met"] for x in rows), ph["n_met"])}
+    total["alts"] = [{**c, "n_eligible": add((x["alts"][k]["n_eligible"] for x in rows), 0), "n_achieved": add((x["alts"][k]["n_achieved"] for x in rows), 0),
+                      "phases": [{**ph, **{key: add((x["alts"][k]["phases"][j][key] for x in rows), ph[key]) for key in ("n_met", "value_sum")}}
                                  for j, ph in enumerate(c["phases"])]} for k, c in enumerate(blank["alts"])]
     total["alt"] = total["alts"][0] if total["alts"] else None
     amts = [v for v in by_org.values() if v is not None]
-    return {"promo_id": p["promo_id"], "name": p["name"], "org": org, "ym": ym, "ref": ref.isoformat(), "basis": basis_note(shape),
-            "estimate_note": ESTIMATE_NOTE, "note": ORG_NOTE, "metric": p["metric"], "unit": p["unit"],
+    note = CONFIRMED_NOTE if head else ESTIMATE_NOTE
+    return {"promo_id": p["promo_id"], "name": p["name"], "org": org, "ym": ym, "ref": ref.isoformat(),
+            "basis": (head["basis_note"] if head else None) or basis_note(shape),
+            "confirmed": bool(head), "detail": frozen,
+            "confirm": {k: head[k] for k in ("confirm_id", "ref_date", "confirmed_by", "confirmed_at")} if head else None,
+            "estimate_note": note, "note": ORG_NOTE_CONFIRMED if head else ORG_NOTE, "metric": p["metric"], "unit": METRIC_UNIT[p["metric"]],
             "windows": [{"seq": w["seq"], "label": w["label"], "date_from": w["date_from"], "date_to": w["date_to"]} for w in shape["windows"]],
             "rows": rows, "total": total, "near_pcts": sorted({int(v) for v in pcts.values()}),
-            "amounts": {"by_org": by_org, "total": sum(amts) if amts else None, "in_kind": in_kind(p), "note": ESTIMATE_NOTE},
+            "amounts": {"by_org": by_org, "total": sum(amts) if amts else None, "in_kind": in_kind(p), "note": note},
             "gate": org_gate(con, p, ref) if _r(p)["gate_min_achievers"] else None}
 
 
@@ -1928,6 +2014,169 @@ def _with_rule(p, rule_json) -> dict:
     return {**p, "kind": rule["kind"], "combine_rule": rule["combine_rule"], "metric": rule["metric"], "windows": rule["windows"],
             "tiers": rule["tiers"], "window_tiers": {int(k): v for k, v in rule["window_tiers"].items()}, "rates": rule["rates"],
             "rules": rule.get("rules") or _r(p)}
+
+
+def _chunks(ids, n=500):
+    ids = list(ids)
+    for i in range(0, len(ids), n):
+        yield ids[i:i + n]
+
+
+def _confirmed_detail(con, rule_p, head) -> str | None:
+    """확정 값을 어디까지 낼 수 있는가. rule_p 는 _with_rule() 로 확정 때의 규칙을 끼운 프로모션이다.
+    full 은 확정 때의 규칙과 센 계약이 모두 남아 창별 판정까지 다시 낼 수 있다.
+    values 는 센 계약의 값만 쓸 수 있다. 딸린 시책(센 계약은 부모의 것인데 부모의 확정 때 규칙은 남기지 않는다)과 규칙을 남기지 않은 예전 확정이다.
+    None 은 센 계약도 남기지 않은 예전 확정이다. 사람별 실적, 구간, 금액, 달성 여부만 있다."""
+    has_rule = bool(head.get("rule_json"))                       # 규칙과 센 계약은 같은 때부터 함께 남긴다. 센 계약이 0건인 확정도 있다
+    try:
+        have = has_rule or bool(con.execute("SELECT 1 FROM promotion_result_contract WHERE confirm_id=? LIMIT 1", (head["confirm_id"],)).fetchone())
+    except sqlite3.OperationalError:
+        have = False
+    if not have:
+        return None
+    return "full" if has_rule and not _r(rule_p)["parent_promo_id"] else "values"
+
+
+def _confirmed_contracts(con, confirm_id, agent_ids) -> dict:
+    """확정 때 센 계약 {agent_id: [{contract_id, window_seq, value, value_each}]}. 남긴 순서대로다. 표가 없는 오래된 DB 면 비어 있다.
+    value_each 가 빈 예전 줄은 value 와 같게 읽는다."""
+    out = {}
+    try:
+        for part in _chunks(sorted(set(agent_ids))):
+            q = ",".join("?" * len(part))
+            for r in con.execute(f"SELECT * FROM promotion_result_contract WHERE confirm_id=? AND agent_id IN ({q}) ORDER BY id", (confirm_id, *part)):
+                each = r["value_each"] if "value_each" in r.keys() and r["value_each"] is not None else r["value"]
+                out.setdefault(r["agent_id"], []).append({"contract_id": r["contract_id"], "window_seq": r["window_seq"],
+                                                          "value": r["value"] or 0, "value_each": each or 0})
+    except sqlite3.OperationalError:
+        return {}
+    return out
+
+
+def confirmed_progress(con, p, agent_ids, head=None) -> dict | None:
+    """확정한 프로모션의 사람별 확정 값을 progress() 꼴로 낸다. 살아 있는 확정이 없으면(확정 전이거나 무른 뒤) None 이다.
+    agent_ids 는 범위 안 설계사 목록이다. 그 가운데 확정 결과(promotion_result)가 있는 사람만 나온다. 확정할 때의 재직자이고
+    딸린 시책이면 대상 직급인 사람이다. 그 뒤에 퇴사한 사람도 나오고, 확정할 때 이미 퇴사한 사람과 그 뒤에 들어온 사람은 없다.
+    다시 세지 않는다. 계약 원장을 읽지 않고 확정 때 남긴 값(promotion_result, promotion_result_contract, rule_json)만 쓴다.
+    org_progress() 가 확정한 프로모션에서 이 값을 합치고, final_results() 의 줄과 사람마다 value, tier_no, reward, amount, outcome 이 같다.
+
+    돌려주는 것: {agent_id: {value, tier, next, reward, amount, status, broken, capped, basis, date_basis, windows, confirmed, detail,
+                             outcome, original_amount, rank, window_values, unnamed, target, ...}}
+    - value, reward, amount, original_amount, rank, outcome 은 promotion_result 의 값 그대로다. tier 는 확정 때 규칙의 그 구간이다.
+      status 는 달성이면 achieved, 아니면 missed 다. 진행 중은 없다. next 는 None 이다. 확정 값에는 다음 구간이 없다
+    - detail 이 full 이면 확정 때 센 계약을 확정 때의 규칙으로 다시 판정해 windows, paths, broken, capped, pct, bridge 를 progress() 와 같은 꼴로 싣는다.
+      창은 모두 끝난 것(ended)으로 본다. 그 밖(values, None)에는 windows 가 빈 목록이고 broken, capped 는 None 이다 (_confirmed_detail)
+    - window_values: 창마다 [{seq, label, value, plain}]. 확정 때 센 계약의 합계다. value 는 창 조건에, plain 은 합산에 쓰는 값이다.
+      딸린 시책이면 부모의 지금 창에 맞춘다. 센 계약을 남기지 않은 예전 확정(detail None)이면 None 이다
+    - unnamed 는 None 이다. 이름이 없어 세지 않은 계약 수는 확정 때 남기지 않는다
+    """
+    head = head or confirmation(con, p["promo_id"])
+    if not head:
+        return None
+    cid = head["confirm_id"]
+    base = {}
+    for part in _chunks(sorted(set(agent_ids or ()))):
+        q = ",".join("?" * len(part))
+        base.update({x["agent_id"]: x for x in con.execute(f"SELECT * FROM promotion_result WHERE confirm_id=? AND agent_id IN ({q})", (cid, *part))})
+    rule_p = _with_rule(p, head.get("rule_json"))
+    detail = _confirmed_detail(con, rule_p, head)
+    shape = _parent(con, rule_p) or rule_p
+    contracts = _confirmed_contracts(con, cid, base) if detail else {}
+    ix = {w["seq"]: i for i, w in enumerate(shape["windows"])}
+    n = len(shape["windows"])
+    basis = head["basis_note"] or basis_note(rule_p)
+    states = [{"state": "ended", "days_left": 0}] * n
+    out = {}
+    for a, x in base.items():
+        each, plain = [0.0] * n, [0.0] * n
+        for c in contracts.get(a, ()):
+            if c["window_seq"] in ix:
+                each[ix[c["window_seq"]]] += c["value_each"]
+                plain[ix[c["window_seq"]]] += c["value"]
+        r = _judge(rule_p, each, states, basis, plain) if detail == "full" else {"windows": [], "broken": None, "capped": None}
+        tier = None
+        if x["tier_no"] is not None:
+            tier = next((t for t in rule_p["tiers"] if t["tier_no"] == x["tier_no"]), None) or {"tier_no": x["tier_no"]}
+        r.update(value=x["value"], tier=tier, next=None, reward=x["reward"], amount=x["amount"],
+                 status="achieved" if x["outcome"] == "achieved" else "missed", basis=basis, date_basis=head["date_basis"],
+                 confirmed=True, detail=detail, outcome=x["outcome"], original_amount=x["original_amount"],
+                 rank=x["rank_no"] if "rank_no" in x.keys() else None, unnamed=None, target=True,
+                 window_values=[{"seq": w["seq"], "label": w["label"], "value": each[i], "plain": plain[i]}
+                                for i, w in enumerate(shape["windows"])] if detail else None)
+        out[a] = r
+    return out
+
+
+CONTRACT_NOTE = "센 계약은 이 프로모션의 달성 현황이 합친 계약입니다. 고객 이름과 증권번호는 싣지 않습니다."
+CONTRACT_NOTE_CONFIRMED = ("확정할 때 센 계약입니다. 센 값과 창은 확정 때 남긴 것이고 날짜, 보험사, 상품, 보험료, 상태는 지금 원장의 것입니다. "
+                           "확정한 뒤 철회되거나 바뀐 계약도 확정 때의 값으로 남아 있습니다.")
+
+
+def _contract_info(con, contract_ids, basis) -> dict:
+    """계약 원장에서 읽는 표시용 칸 {contract_id: {...}}. 고객 이름과 증권번호는 읽지 않는다. d 는 그 기준일 칸으로 본 날짜다."""
+    out = {}
+    dexpr = _date_expr(basis)
+    for part in _chunks(sorted(set(contract_ids))):
+        q = ",".join("?" * len(part))
+        for x in con.execute(f"""SELECT c.contract_id, c.status, c.contract_date, {dexpr} d, c.premium_monthly, c.converted_premium, c.policy_count,
+                                        ins.name insurer, {NAME_SQL} product
+                                 FROM contract c {classify.JOINS} LEFT JOIN insurer ins ON ins.insurer_id=c.insurer_id
+                                 WHERE c.contract_id IN ({q})""", part):
+            out[x["contract_id"]] = x
+    return out
+
+
+def counted_contracts(con, p, agent_id, ref: date | None = None) -> dict:
+    """한 사람의 계약 가운데 이 프로모션이 센 것. 개인 화면의 계약 목록이 쓴다. agent_id 는 부르는 쪽이 범위 안인지 확인한 사람이다.
+    p 는 보고 있는 프로모션이다. 딸린 시책이면 부모의 계약을 내므로 부모를 따로 넘기지 않는다.
+
+    확정 전에는 progress() 가 합치는 계약 그대로다(_counted). rows 의 value 합계가 progress() 의 value 와 같고,
+    창마다 value_each 의 합이 windows[i].value, value 의 합이 windows[i].plain 이다. 기준일 뒤 날짜의 계약도 progress() 가 세므로 싣고 after_ref 로 표시한다.
+    확정한 프로모션이면 다시 세지 않고 확정 때 센 계약(promotion_result_contract)을 낸다. value 합계가 확정 값(final_results 의 value)과 같다.
+    확정한 뒤 철회된 계약도 그대로 남고 status 에 지금 상태가 보인다. 무르면 다시 원장에서 센다.
+
+    돌려주는 것: {promo_id, agent_id, confirmed, source, ref, metric, unit, value, n, unnamed, note, rows}
+    - source: ledger(지금 원장에서 셌다), confirm(확정 때 센 계약), None(센 계약을 남기지 않은 예전 확정이라 낼 수 없다. rows 는 비어 있다)
+    - ref: 확정 전에는 기준일, 확정 뒤에는 확정의 계산 기준일이다
+    - value: rows 의 value 합계. n: 계약 수. unnamed: 상품 이름이 비어 세지 않은 계약 수이고 확정 값에는 없어 None 이다
+    - rows: [{contract_id, window_seq, window_label, date, contract_date, insurer, product, premium, converted, count, value, value_each,
+              boosted, status, after_ref}] 기준일, 계약 번호 순
+      date 는 프로모션의 기준일 칸으로 본 날짜, contract_date 는 계약일자다. premium 은 보험료(premium_monthly), converted 는 인정보험료,
+      count 는 건수다. value 는 프로모션 지표로 센 값(합산에 쓰는 값, 건당 한도 적용 뒤), value_each 는 창 조건에 쓰는 값이다.
+      가중 인정이 없으면 둘이 같다. boosted 는 가중 인정 구간에 든 계약인가다. status 는 원장의 지금 상태 코드다.
+      창 하나에 한 줄이라 창이 겹치는 프로모션에서는 같은 계약이 두 줄일 수 있다. 원장에서 읽지 못한 계약은 표시용 칸이 None 이다
+    """
+    ref = ref or date.today()
+    head = confirmation(con, p["promo_id"])
+    rule_p = _with_rule(p, head.get("rule_json")) if head else p
+    src = _parent(con, rule_p) or rule_p                           # 계약을 센 프로모션. 딸린 시책이면 부모다
+    out = {"promo_id": p["promo_id"], "agent_id": agent_id, "confirmed": bool(head), "source": "ledger", "ref": ref.isoformat(),
+           "metric": src["metric"], "unit": METRIC_UNIT[src["metric"]], "value": 0, "n": 0, "unnamed": None, "note": CONTRACT_NOTE, "rows": []}
+    if head:
+        out.update(source="confirm" if _confirmed_detail(con, rule_p, head) else None, ref=head["ref_date"], note=CONTRACT_NOTE_CONFIRMED)
+        got = _confirmed_contracts(con, head["confirm_id"], [agent_id]).get(agent_id, []) if out["source"] else []
+        basis = src["date_basis"] if src is not rule_p else head["date_basis"]
+    else:
+        rows, unnamed = _counted(con, src, [agent_id])
+        got, basis = rows, src["date_basis"]
+        out["unnamed"] = unnamed.get(agent_id, 0)
+    info = _contract_info(con, [x["contract_id"] for x in got], basis)
+    labels = {w["seq"]: w["label"] for w in src["windows"]}
+    boost = _r(src)["boost"]
+    for x in got:
+        c = info.get(x["contract_id"])
+        day = x["date"] if "date" in x else ((c["d"] or "")[:10] if c else "")
+        out["rows"].append({"contract_id": x["contract_id"], "window_seq": x["window_seq"], "window_label": labels.get(x["window_seq"]),
+                            "date": day or None, "contract_date": c["contract_date"] if c else None, "insurer": c["insurer"] if c else None,
+                            "product": c["product"] if c else None, "premium": c["premium_monthly"] if c else None,
+                            "converted": c["converted_premium"] if c else None, "count": c["policy_count"] if c else None,
+                            "value": x["value"], "value_each": x["value_each"],
+                            "boosted": x["value_each"] != x["value"] or bool(boost and _boost_key(boost, day) is not None),
+                            "status": c["status"] if c else None, "after_ref": bool(not head and day and day > out["ref"])})
+    out["rows"].sort(key=lambda x: (x["date"] or "", x["contract_id"], x["window_seq"]))
+    out["value"] = sum(x["value"] for x in out["rows"])
+    out["n"] = len({x["contract_id"] for x in out["rows"]})
+    return out
 
 
 def confirm_results(con, promotion_id, by, ref: date | None = None) -> dict:

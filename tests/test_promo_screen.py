@@ -13,6 +13,12 @@
 | 브릿지 | 내 달성 현황의 상태, 남은 날, 다음 단계까지 남은 값이 엔진 결과와 같다 |
 | 복사 | 브릿지 다음 달 복사는 메인 관리자만, CSRF 를 거쳐 초안을 만들고 옮기지 않은 값을 안내한다 |
 | 판 이력 | DB생명 여행시상의 두 판과 바뀐 점, 카드의 변경 표시, 가중 인정 문구, 조건 1-2 안내 |
+| 실적 금액 | 조직별 표의 칸마다 엔진이 낸 실적 합계가 실린다. 합산 칸의 머리는 지표 이름이고 흥국화재 BOOM-UP 은 인정보험료다 |
+| 세 단계 | 현황, 본부 화면의 사람 전원, 개인 화면. 본부 표의 합이 현황 줄과 같고 개인 화면의 달별 값이 본부 표와 같다 |
+| 개인 화면 | 범위 밖 사람은 403, 관리자에게는 예상 시상이 없고, 센 계약은 엔진이 센 계약과 같다 |
+| 지표 고르기 | 구간과 조건 입력에서 보험료, 인정보험료, 건수를 고르고 게시 뒤에도 바꾼다 |
+| 검증 뒤 고침 | 추가안 여러 개의 열쇠와 가중 여부와 구간 번호가 폼을 거쳐 그대로다. 퇴사자의 실적은 조직 합계에만 든다. 확정한 프로모션의 사람별 보기는 확정 값이다 |
+| 화면 다듬기 | 기간 글이 겹치지 않고, 무효가 된 사람에게 남은 금액이 없고, 딸린 시책의 표가 부모와 같은 모양이고, 틀린 날짜의 오류가 한국어다 |
 
 자료는 run_demo 의 샘플을 임시 폴더에 새로 만든다. data/demo.db 는 건드리지 않는다.
 실패 메시지에는 사람 이름과 금액을 넣지 않는다.
@@ -338,7 +344,11 @@ def test_org_table_columns_follow_engine_phases(env):
             assert cell == "시작 전"
         else:
             assert cell.startswith(f"{ph['n_met']}명") and (("진행 중" in cell) == (ph["state"] == "open"))
-    assert "합산 100만 달성자" in r.text and "연속으로 채우면 3개월 합계 70만원(10만, 20만, 40만), 합산으로는 100만원" in r.text
+    assert "연속으로 채우면 3개월 합계 70만원(10만, 20만, 40만), 합산으로는 100만원" in r.text
+    # 합산 칸의 머리는 지표 이름으로 만들고, 칸에는 합산 실적과 '100만 달성 n명' 을 둔다
+    sum_col = next(x for x in cols if x["key"] == "sum")
+    assert sum_col["label"] == "합산 보험료" and sum_col["sub"] == "기준 100만" and sum_col["pre"] == "100만 달성"
+    assert 'data-col="sum">합산 보험료<span class="th-sub">기준 100만</span>' in r.text and '<span class="cell-pre">100만 달성</span>' in r.text
     con.close()
 
 
@@ -428,4 +438,444 @@ def test_copy_bridge_main_only_with_csrf(env):
     # 같은 달로 다시 복사하면 엔진이 막고 화면은 오류를 보인다
     again = main.post("/promo/tiers", data=data)
     assert again.status_code == 303 and "err=" in again.headers["location"]
+    con.close()
+
+
+# ================================================================ 실적 금액, 본부 화면, 개인 화면 (대표님 지시, 11월 17일)
+BOOM = "흥국화재 BOOM-UP"
+
+
+def _bonbu(name):
+    return f"{ETERNAL} > center:{name}"
+
+
+def _amts(html, key):
+    """표의 칸에 실린 금액(data-amt). 줄 순서대로."""
+    return [int(x) for x in re.findall(rf'data-cell="{key}" data-amt="(-?\d+)"', html)]
+
+
+def test_amount_text_shortens_without_rounding_up():
+    from app.web.routes.promo import amount_text
+    won, cnt = {"metric": "converted_premium"}, {"metric": "policy_count"}
+    assert [amount_text(v, won) for v in (0, 9_999, 10_000, 399_999, 1_250_000, 1_234_560, 12_345_678, 252_000_000)] == \
+        ["0원", "9,999원", "1만원", "39.9만원", "125만원", "123.4만원", "1,234만원", "25,200만원"]
+    assert amount_text(None, won) is None and amount_text(3, cnt) == "3건" and amount_text(-25_000, won) == "-2.5만원"
+
+
+def test_sample_boom_up_counts_converted_premium(env):
+    """샘플의 흥국화재 BOOM-UP 은 인정보험료로 센다. 샘플 계약은 인정보험료가 보험료와 같아 달성자는 바뀌지 않는다."""
+    con = db.connect(env["db"])
+    p = pm._load(con, _promo(con, BOOM))
+    assert p["metric"] == "converted_premium" and p["metric_ko"] == "인정보험료"
+    assert not con.execute("SELECT 1 FROM contract WHERE policy_no LIKE 'PS%' AND converted_premium != premium_monthly").fetchone()
+    con.close()
+
+
+@pytest.mark.parametrize("who", ["admin", "head"])
+def test_org_table_cells_carry_engine_sums(env, who):
+    """칸마다 인원과 함께 엔진의 실적 합계가 실린다. 달 칸은 value_sum, 합산 칸은 sum_value 다. 관리자에게도 실적은 보이고 예상 시상은 없다."""
+    con = db.connect(env["db"])
+    login_id = "admin" if who == "admin" else _bonbu_head(con)
+    c = login(env, login_id)
+    pid = _promo(con, BOOM)
+    r = c.get(f"/promo/progress?view=org&p={pid}")
+    assert r.status_code == 200
+    cols, data = r.context["phases"], r.context["data"]
+    rows = [*data["rows"], data["total"]]
+    assert [x["key"] for x in cols] == ["w1", "w2", "w3", "sum", "final"]
+    sum_col = cols[3]
+    assert sum_col["label"] == "합산 인정보험료" and sum_col["pre"] == "40만 달성"
+    assert 'data-col="sum">합산 인정보험료<span class="th-sub">기준 40만</span>' in r.text
+    assert "실적은 인정보험료 기준입니다. 기준일은 청약일자이고 청약 기준으로" in r.text and 'data-metric-note="1"' in r.text
+    for x in rows:
+        states = [ph["state"] for ph in x["phases"]]
+        assert x["sums"][:3] == [ph["value_sum"] if st != "future" else None for ph, st in zip(x["phases"], states)]
+        assert x["sums"][3] == x["sum_value"] and x["sums"][4] is None and x["n_missed"] == x["n_target"] - x["n_achieved"]
+        assert x["sum_value"] == pytest.approx(sum(v for v in x["sums"][:3] if v is not None))     # 가중 인정이 없어 달의 합이 합산이다
+    open_keys = [c2["key"] for c2, ph in zip(cols, data["total"]["phases"]) if ph["state"] != "future"]
+    assert open_keys
+    for i, key in enumerate(open_keys):
+        assert _amts(r.text, key) == [int(x["sums"][i]) for x in rows], key
+    assert _amts(r.text, "sum") == [int(x["sum_value"]) for x in rows]
+    assert data["total"]["sum_value"] > 0 and f'data-total-missed="{data["total"]["n_missed"]}"' in r.text
+    assert f'data-total-sum="{data["total"]["n_sum"]}"' in r.text and f'data-total-value="{int(data["total"]["value"])}"' in r.text
+    assert ("예상 시상" in r.text) is (who == "admin")
+    # 가중 인정이 있는 DB생명 여행시상은 달 칸에 인정한 값을, '원래' 에 합산용 값을 싣는다
+    d = c.get(f"/promo/progress?view=org&p={_promo(con, 'DB생명 여행시상')}")
+    tot = d.context["data"]["total"]
+    boosted = [(ph["value_sum"], ph["plain_sum"]) for ph in tot["phases"] if ph["plain_sum"] is not None and ph["plain_sum"] != ph["value_sum"]]
+    assert boosted and [v for v in tot["plains"] if v is not None] == [p for _v, p in boosted]
+    assert [int(x) for x in re.findall(r'data-plain="(\d+)"', d.text)][-len(boosted):] == [int(p) for _v, p in boosted]
+    con.close()
+
+
+def test_bonbu_page_lists_everyone_and_matches_overview_row(env):
+    """본부를 누르면 지점별 표 아래에 그 본부 사람 전원이 바로 나온다. 사람 표의 합이 현황 표의 그 본부 줄과 같다. 거르기와 순서를 본다."""
+    con = db.connect(env["db"])
+    c = login(env, "admin")
+    pid = _promo(con, BOOM)
+    top = c.get(f"/promo/progress?view=org&p={pid}")
+    assert top.context["people"] is None and 'id="people"' not in top.text          # 현황에는 사람 표가 없다
+    checked = 0
+    for row in [x for x in top.context["data"]["rows"] if not x["direct"]]:
+        page = c.get(row["href"])
+        assert page.status_code == 200 and 'data-org-rows="1"' in page.text and 'data-people-filter="all"' in page.text
+        people, pv = page.context["people"], page.context["pv"]
+        assert {x["agent_id"] for x in people} == set(row["agent_ids"]) and len(people) == row["n_target"]
+        assert sum(x["total"] for x in people) == pytest.approx(row["sum_value"])
+        for i, ph in enumerate(row["phases"]):
+            if ph["state"] != "future":
+                assert sum(x["months"][i]["value"] for x in people) == pytest.approx(ph["value_sum"]), (row["name"], i)
+            else:
+                assert all(x["months"][i]["value"] is None for x in people)
+        assert sum(1 for x in people if x["met"]) == row["n_achieved"] and pv["counts"] == {
+            "all": row["n_target"], "met": row["n_achieved"], "miss": row["n_missed"]}
+        shown = pv["rows"] + pv["zero"]
+        assert len(shown) == len(people) and [x["total"] for x in pv["rows"]] == sorted((x["total"] for x in pv["rows"]), reverse=True)
+        assert all(not x["total"] for x in pv["zero"]) and all(x["total"] or x["met"] for x in pv["rows"])
+        assert (f'data-people-zero="{len(pv["zero"])}"' in page.text) is bool(pv["zero"])
+        for x in people:
+            assert x["status"] in ("met", "open", "miss")
+            if x["status"] == "miss":                                # 무효가 된 사람에게는 남은 금액을 보이지 않는다
+                assert x["sum_left"] is None
+            else:
+                assert x["sum_left"] == pytest.approx(max(400_000 - x["total"], 0))
+            assert f'data-person="{x["agent_id"]}"' in page.text
+        for f, want in (("met", [x for x in people if x["met"]]), ("miss", [x for x in people if not x["met"]])):
+            got = c.get(f"{row['href']}&f={f}").context["pv"]
+            assert {x["agent_id"] for x in got["rows"] + got["zero"]} == {x["agent_id"] for x in want}, (row["name"], f)
+        checked += 1
+    assert checked == 4
+    con.close()
+
+
+def test_roster_shows_months_and_sorts_by_sum(env):
+    """명단은 사람마다 달별 실적과 합산 실적, 합산 기준까지 남은 값을 싣는다. sort=sum 이면 합산 실적이 큰 순이다."""
+    con = db.connect(env["db"])
+    c = login(env, _bonbu_head(con))
+    pid = _promo(con, BOOM)
+    p = pm._load(con, pid)
+    base = f"/promo/progress?view=org&p={pid}&who=w1&row=all"
+    r = c.get(base)
+    roster = r.context["roster"]
+    people = [x for g in roster["groups"] for x in g["people"]]
+    assert people and roster["sort"] == "cell" and roster["on_seq"] == 1 and roster["sum_target"] == 400_000 and 'data-roster-sort="cell"' in r.text
+    res = pm.progress(con, p, [x["agent_id"] for x in people], date.fromisoformat(r.context["ref"]))
+    for x in people:
+        mine = res[x["agent_id"]]
+        assert x["total"] == mine["value"]
+        assert x["sum_left"] == (None if mine["broken"] or mine["status"] == "missed" else max(400_000 - mine["value"], 0))
+        assert [m["value"] for m in x["months"]] == [w["value"] if w["state"] != "upcoming" else None for w in mine["windows"]]
+        assert x["value"] == mine["windows"][0]["value"]
+    assert "예상 시상" not in r.text and "합산 40만까지" in r.text
+    by_sum = c.get(base + "&sort=sum").context["roster"]
+    assert by_sum["sort"] == "sum"
+    for g in by_sum["groups"]:
+        assert [x["total"] for x in g["people"]] == sorted((x["total"] for x in g["people"]), reverse=True)
+    assert {x["agent_id"] for g in by_sum["groups"] for x in g["people"]} == {x["agent_id"] for x in people}
+    con.close()
+
+
+def test_person_page_scope_amounts_and_contracts(env):
+    """개인 화면. 범위 밖 사람은 403, 관리자에게는 예상 시상이 없고 메인 관리자에게는 있다. 달별 값이 본부 표의 그 사람 값과 같고,
+    센 계약은 엔진이 센 계약과 같다."""
+    con = db.connect(env["db"])
+    head = _bonbu_head(con)                                          # H본부 본부장
+    ctx = _ctx(con, head)
+    admin, c = login(env, "admin"), login(env, head)
+    other = con.execute("""SELECT a.agent_id FROM agent a JOIN agent_org_history h ON h.agent_id=a.agent_id JOIN org_unit o ON o.org_id=h.org_id
+                           WHERE o.path_key LIKE ? AND a.job_type='fc' ORDER BY a.agent_id LIMIT 1""", (_bonbu("금탑본부") + " > %",)).fetchone()[0]
+    assert other not in ctx["agent_ids"]
+    for name in (BOOM, "DB생명 여행시상", "DB생명 이터널 Convention 추가 시책", "삼성화재 드림+"):
+        pid = _promo(con, name)
+        p = pm._load(con, pid)
+        shape = pm._parent(con, p) or p
+        org = quote(_bonbu("H본부"))
+        base = f"/promo/progress?view=org&p={pid}&org={org}"
+        # 범위 밖 사람과 없는 사람은 403 이고 기록에 남는다
+        before = con.execute("SELECT COUNT(*) FROM audit_log WHERE actor=? AND action='access_denied' AND target='/promo/progress person'", (head,)).fetchone()[0]
+        for bad in (other, 99_999_999):
+            assert c.get(f"/promo/progress?view=org&p={pid}&person={bad}").status_code == 403, (name, bad)
+            assert c.get(f"{base}&person={bad}").status_code == 403, (name, bad)
+        after = con.execute("SELECT COUNT(*) FROM audit_log WHERE actor=? AND action='access_denied' AND target='/promo/progress person'", (head,)).fetchone()[0]
+        assert after - before == 4
+        bonbu = c.get(base)
+        people = bonbu.context["people"]
+        assert people, name
+        ref = date.fromisoformat(bonbu.context["ref"])
+        for x in people[:3] + people[-1:]:
+            assert x["href"].endswith(f"&person={x['agent_id']}")
+            mine, top = c.get(x["href"]), admin.get(x["href"])
+            assert mine.status_code == 200 and top.status_code == 200, (name, x["code"])
+            # 달별 값과 합산이 본부 표의 그 사람 값과 같다
+            assert [m["value"] for m in mine.context["months"]] == [m["value"] for m in x["months"]] or not x["months"]
+            assert mine.context["r"]["value"] == x["total"] and f'data-person-total="{int(x["total"])}"' in mine.text
+            assert mine.context["status"] == x["status"]
+            # 관리자에게는 예상 시상이 없다. 메인 관리자에게는 있다
+            assert mine.context["amount"] is None and mine.context["next_reward"] is None and mine.context["show_amount"] is False
+            body = mine.text.split("<main", 1)[-1]
+            assert "예상 시상" not in body and 'data-person-award="1"' not in body
+            assert top.context["show_amount"] is True and 'data-person-award="1"' in top.text and "예상 시상" in top.text
+            r = pm.progress(con, p, [x["agent_id"]], ref)[x["agent_id"]]
+            assert top.context["amount"] == {"amount": r["amount"], "reward": r["reward"]}
+            if r["reward"]:
+                assert r["reward"] in top.text and r["reward"] not in body, (name, x["code"])
+            # 센 계약은 엔진이 센 계약이고 센 값의 합이 합산 실적이다
+            counted = [k for k in pm._counted(con, shape, [x["agent_id"]])[0]]
+            shown = mine.context["contracts"]
+            assert len(shown) == len(counted) and sorted(k["value"] for k in shown) == sorted(k["value"] for k in counted)
+            assert sum(k["value"] for k in shown) == pytest.approx(x["total"])
+            assert f'이 프로모션에 센 계약 {len(shown)}건' in mine.text
+            assert [k["org_id"] for k in mine.context["crumbs"]][-1] == con.execute("SELECT org_id FROM org_unit WHERE path_key=?", (_bonbu("H본부"),)).fetchone()[0]
+    # 철회와 대상이 아닌 상품은 계약 목록에 없다. 금탑본부의 한 사람이 철회 1건과 자동차보험 1건만 갖고 있다
+    pid = _promo(con, BOOM)
+    gone = con.execute("""SELECT c.agent_id FROM contract c JOIN product pr ON pr.product_id=c.product_id
+                          WHERE pr.product_name='흥국화재 건강종합보험' AND c.status='withdrawn' LIMIT 1""").fetchone()[0]
+    page = admin.get(f"/promo/progress?view=org&p={pid}&person={gone}")
+    assert page.status_code == 200 and page.context["contracts"] == [] and page.context["r"]["value"] == 0 and "센 계약이 없습니다" in page.text
+    # 설계사는 조직별 보기의 개인 화면을 열 수 없다. 자기 것은 내 달성 현황에서 본다
+    fc, aid = _eternal_fc(con)
+    assert login(env, fc).get(f"/promo/progress?view=org&p={pid}&person={aid}").status_code == 403
+    con.close()
+
+
+def test_tiers_form_picks_metric_after_publish(env):
+    """구간과 조건 입력에서 지표(보험료, 인정보험료, 건수)를 고른다. 게시한 뒤에도 바꿀 수 있고 화면의 합산 칸 머리가 따라 바뀐다."""
+    path = copy_db(env, "metric")
+    con = db.connect(path)
+    pid = _promo(con, BOOM)
+    main = login(env, "admin", path)
+    form = main.get(f"/promo/tiers?edit={pid}").text
+    select = form.split('<select name="metric">', 1)[1].split("</select>", 1)[0]
+    assert re.findall(r'<option value="(\w+)"', select) == list(pm.METRIC_KO) == ["premium_monthly", "converted_premium", "policy_count"]
+    assert '<option value="converted_premium" selected>인정보험료</option>' in select
+    p = pm._load(con, pid)
+    assert p["status"] == "published"
+    data = {"promo_id": str(pid), "action": "update", "name": p["name"], "kind": p["kind"], "insurer_id": str(p["insurer_id"]), "sector": p["sector"],
+            "metric": "premium_monthly", "date_basis": p["date_basis"], "combine_rule": p["combine_rule"], "categories": p["category_list"],
+            "window_mode": "1", "r_count_basis": "application", "r_ret_min": "95", "top_org_reward": "최다 달성 본부의 총무 참석"}
+    for i, w in enumerate(p["windows"], start=1):
+        data.update({f"w_label_{i}": w["label"], f"w_from_{i}": w["date_from"], f"w_to_{i}": w["date_to"]})
+    for i, t in enumerate([t for t in p["tiers"] if t.get("window_seq") is None], start=1):
+        data.update({f"t_min_{i}": str(int(t["min_value"])), f"t_kind_{i}": t["reward_kind"], f"t_label_{i}": t["reward_label"]})
+    for seq, rows in p["window_tiers"].items():
+        for i, t in enumerate(rows, start=1):
+            data.update({f"wt{seq}_min_{i}": str(int(t["min_value"])), f"wt{seq}_kind_{i}": t["reward_kind"], f"wt{seq}_label_{i}": t["reward_label"]})
+    r = main.post("/promo/tiers", data=data)
+    assert r.status_code == 303 and "/promo/publish?msg=" in r.headers["location"], r.headers.get("location")
+    after = pm._load(con, pid)
+    assert after["metric"] == "premium_monthly" and after["status"] == "published" and after["combine_rule"] == "both"
+    assert {seq: [t["min_value"] for t in rows] for seq, rows in after["window_tiers"].items()} == {1: [50_000], 2: [100_000], 3: [150_000]}
+    page = main.get(f"/promo/progress?view=org&p={pid}")
+    assert 'data-col="sum">합산 보험료<span class="th-sub">기준 40만</span>' in page.text and "실적은 보험료 기준입니다" in page.text
+    con.close()
+
+
+# ================================================================ 검증 뒤 고친 것 (11월 17일)
+def _form_data(client, pid):
+    """고치기 폼을 화면에 보이는 값 그대로 읽는다. 체크하지 않은 칸은 빼고, 고른 값이 없는 고르기 칸은 첫 값이다."""
+    html = client.get(f"/promo/tiers?edit={pid}").text
+    form = html.split('<form class="wide" method="post" action="/promo/tiers"', 1)[1].split("</form>", 1)[0]
+    data = {}
+    for tag in re.findall(r"<input\b[^>]*>", form):
+        attr = dict(re.findall(r'(\w+)="([^"]*)"', tag))
+        if not attr.get("name") or attr["name"] == "csrf_token":
+            continue
+        if attr.get("type") in ("checkbox", "radio"):
+            if re.search(r"\bchecked\b", tag):
+                data.setdefault(attr["name"], []).append(attr.get("value", "on"))
+        else:
+            data.setdefault(attr["name"], []).append(attr.get("value", ""))
+    for name, body in re.findall(r'<select name="([^"]+)"[^>]*>(.*?)</select>', form, re.S):
+        opts = re.findall(r'<option value="([^"]*)"([^>]*)>', body)
+        picked = [v for v, rest in opts if "selected" in rest]
+        data.setdefault(name, []).append(picked[0] if picked else (opts[0][0] if opts else ""))
+    for name, body in re.findall(r'<textarea name="([^"]+)"[^>]*>(.*?)</textarea>', form, re.S):
+        data.setdefault(name, []).append(body.lstrip("\n"))
+    out = {k: (v if len(v) > 1 else v[0]) for k, v in data.items()}
+    out["action"] = "update"
+    return out
+
+
+def test_tiers_form_round_trips_several_alt_chains(env):
+    """추가안이 둘이고 가중 인정 여부와 구간 번호가 기본값이 아니어도, 폼을 그대로 저장하면 바뀐 것이 없다. 폼에서 고친 값은 엔진에 그대로 간다."""
+    path = copy_db(env, "alts")
+    con = db.connect(path)
+    pid = _promo(con, "DB생명 여행시상")
+    import json
+    first = pm._load(con, pid)["rules"]["alt_chains"][0]              # 엔진이 저장한 꼴 그대로 둘째 추가안을 붙인다
+    chains = [{**first, "boost": False}, {**first, "key": "late", "label": "조건 1-3", "windows": {"3": 700_000.0}, "requires_missed": [1, 2], "boost": True}]
+    con.execute("UPDATE promotion SET alt_chains_json=? WHERE promo_id=?", (json.dumps(chains, ensure_ascii=False), pid))
+    con.commit()
+    alts = lambda: pm._alts(pm._load(con, pid))
+    before = alts()
+    assert [c["key"] for c in before] == ["c12", "late"] and before[0]["boost"] is False and before[1]["requires_missed"] == [1, 2]
+    main = login(env, "admin", path)
+    data = _form_data(main, pid)
+    assert data["r_alt_n"] == "3" and data["r_alt_key_1"] == "c12" and data["r_alt_key_2"] == "late" and data["r_alt_boost_1"] == "0"
+    r = main.post("/promo/tiers", data=data)
+    assert r.status_code == 303 and "err=" not in r.headers["location"]
+    from urllib.parse import unquote
+    assert "바뀐 것이 없습니다" in unquote(r.headers["location"])
+    assert alts() == before
+    # 둘째 추가안의 기준과 구간 번호를 고치고 첫째는 그대로 둔다. 바뀐 점 메모는 고친 판에 붙는다
+    data = _form_data(main, pid)
+    data.update({"r_alt_min_2_3": "800000", "r_alt_boost_2": "0", "version_note": "조건 1-3 기준 변경"})
+    r = main.post("/promo/tiers", data=data)
+    assert r.status_code == 303 and "err=" not in r.headers["location"]
+    after = alts()
+    assert after[0] == before[0] and after[1] == {**before[1], "windows": {3: 800_000.0}, "boost": False}
+    # 바뀐 것이 없는 저장에 적은 메모는 남기지 않고 그렇게 안내한다
+    n_notes = con.execute("SELECT COUNT(*) FROM promotion_version_note").fetchone()[0]
+    data = _form_data(main, pid)
+    data["version_note"] = "바뀐 것 없이 적은 메모"
+    where = unquote(main.post("/promo/tiers", data=data).headers["location"])
+    assert "바뀐 것이 없습니다" in where and "바뀐 내용이 없어 메모를 남기지 않았습니다" in where
+    assert con.execute("SELECT COUNT(*) FROM promotion_version_note").fetchone()[0] == n_notes
+    # 기준을 모두 비운 추가안은 지운다
+    data = _form_data(main, pid)
+    data["r_alt_min_2_3"] = ""
+    main.post("/promo/tiers", data=data)
+    assert alts() == before[:1]
+    con.close()
+
+
+def test_leaver_value_stays_in_org_total_and_out_of_team_rows(env):
+    """D-42. 퇴사자의 퇴사 전 실적은 조직별 진척의 실적 합계에 넣고 대상, 달성에서는 뺀다. 사람별 표에는 줄이 없고 아래 안내에 인원과 합계가 있다.
+    관리자에게도 같고, 다른 본부의 관리자에게는 보이지 않는다."""
+    path = copy_db(env, "leaver2")
+    con = db.connect(path)
+    pid = _promo(con, BOOM)
+    p = pm._load(con, pid)
+    head, other_head = _bonbu_head(con, "H본부"), _bonbu_head(con, "금탑본부")
+    ctx = _ctx(con, head)
+    main, c = login(env, "admin", path), login(env, head, path)
+    before_main = main.get(f"/promo/progress?view=org&p={pid}").context["data"]["total"]
+    before_head = c.get(f"/promo/progress?view=org&p={pid}").context["data"]["total"]
+    before_other = login(env, other_head, path).get(f"/promo/progress?view=org&p={pid}").context["data"]["total"]
+    ref = date.fromisoformat(main.get(f"/promo/progress?view=org&p={pid}").context["ref"])
+    res = pm.progress(con, p, sorted(a for a in ctx["agent_ids"]), ref)
+    leaver = next(a for a, r in sorted(res.items()) if r["value"] > 0 and a != ctx["agent_id"])
+    row = con.execute("SELECT internal_code, name FROM agent WHERE agent_id=?", (leaver,)).fetchone()
+    con.execute("UPDATE agent SET status='terminated', termination_date=? WHERE agent_id=?", (ref.isoformat(), leaver))
+    con.commit()
+    for client, before in ((main, before_main), (c, before_head)):
+        page = client.get(f"/promo/progress?view=org&p={pid}")
+        after = page.context["data"]["total"]
+        assert after["value"] == pytest.approx(before["value"]) and after["n_left"] == 1 and after["n_target"] == before["n_target"] - 1
+        assert after["value_left"] == pytest.approx(res[leaver]["value"]) and after["sum_value"] == pytest.approx(before["sum_value"] - res[leaver]["value"])
+        assert "퇴사 1명의 퇴사 전 실적 포함" in page.text
+        team = client.get(f"/promo/progress?p={pid}")
+        assert leaver not in {x["agent_id"] for x in team.context["rows"]} and f'data-agent="{row["internal_code"]}"' not in team.text
+        s = team.context["summary"]
+        assert s["n_left"] == 1 and s["value_left"] == pytest.approx(res[leaver]["value"])
+        assert 'data-left="1"' in team.text and row["name"] not in team.text.split("<main", 1)[-1]
+        if client is c:                                              # 본부장은 사람별 표와 조직별 표의 범위가 같다
+            assert s["n"] == after["n_target"]
+            assert sum(x["r"]["value"] for x in team.context["rows"]) + s["value_left"] == pytest.approx(after["value"])
+        # 퇴사자의 개인 화면과 명단 줄은 없다
+        assert client.get(f"/promo/progress?view=org&p={pid}&person={leaver}").status_code == 403
+        roster = client.get(f"/promo/progress?view=org&p={pid}&who=target&row=all").context["roster"]
+        assert leaver not in {x["agent_id"] for g in roster["groups"] for x in g["people"]}
+    other = login(env, other_head, path).get(f"/promo/progress?view=org&p={pid}").context["data"]["total"]
+    assert (other["value"], other["n_left"], other["n_target"]) == (before_other["value"], 0, before_other["n_target"])
+    con.close()
+
+
+def test_confirmed_promotion_team_view_shows_confirmed_values(env):
+    """확정한 프로모션의 사람별 보기는 다시 계산하지 않고 확정 값을 보인다. 지난 프로모션 화면과 같은 숫자이고 '확정' 표시가 붙는다.
+    관리자에게는 금액 칸이 없다. 조직별 보기에는 확정 안내가 붙는다."""
+    path = copy_db(env, "confirmed2")
+    con = db.connect(path)
+    pid = _promo(con, "삼성화재 드림+ 지난 차수")
+    assert pm.confirmation(con, pid)
+    main = login(env, "admin", path)
+    archive = {x["agent_id"]: x for x in main.get(f"/promo/archive?ym=202609&p={pid}").context["sel"]["rows"]}
+    hit = [a for a, x in archive.items() if x["tier_no"]]
+    assert len(hit) >= 3 and len({archive[a]["tier_no"] for a in hit}) >= 3         # 샘플: 1, 2, 3단계 달성자
+    con.execute("UPDATE contract SET status='withdrawn' WHERE agent_id=? AND contract_date BETWEEN '2026-07-19' AND '2026-09-30'", (hit[0],))
+    con.commit()
+    page = main.get(f"/promo/progress?p={pid}&ym=202609")
+    rows = {x["agent_id"]: x["r"] for x in page.context["rows"]}
+    assert set(rows) == set(archive)
+    for a, x in archive.items():
+        assert rows[a]["value"] == x["value"] and (rows[a]["tier"] or {}).get("tier_no") == x["tier_no"] and rows[a]["amount"] == x["amount"]
+    s = page.context["summary"]
+    assert s["confirmed"] and s["achieved"] == len(hit) and s["n"] == len(archive)
+    assert 'data-confirmed="1"' in page.text and "확정 시상" in page.text and "예상 시상" not in page.text.split("<main", 1)[-1]
+    assert "메인 관리자가 확정한 결과입니다" in page.text
+    org = main.get(f"/promo/progress?view=org&p={pid}&ym=202609")
+    assert org.status_code == 200 and 'data-confirmed-org="1"' in org.text
+    head = login(env, _bonbu_head(con), path).get(f"/promo/progress?p={pid}&ym=202609")
+    assert head.status_code == 200 and head.context["summary"]["confirmed"] and "확정 시상" not in head.text
+    assert {x["agent_id"] for x in head.context["rows"]} <= set(_ctx(con, _bonbu_head(con))["agent_ids"])
+    con.close()
+
+
+def test_period_text_does_not_repeat_the_window_name():
+    from app.web.deps import _period_text
+    q4 = {"date_from": "2026-10-01", "date_to": "2026-12-31", "windows": [
+        {"label": "10월", "date_from": "2026-10-01", "date_to": "2026-10-31"}, {"label": "11월", "date_from": "2026-11-01", "date_to": "2026-11-30"}]}
+    assert _period_text(q4) == "10월 1일~10월 31일 · 11월 1일~11월 30일"
+    mixed = {"date_from": "2026-10-19", "date_to": "2026-11-30", "windows": [
+        {"label": "10월 19일에서 31일", "date_from": "2026-10-19", "date_to": "2026-10-31"}, {"label": "2주차", "date_from": "2026-11-08", "date_to": "2026-11-14"},
+        {"label": "", "date_from": "2026-11-15", "date_to": "2026-11-30"}]}
+    assert _period_text(mixed) == "10월 19일에서 31일 · 2주차 11월 8일~11월 14일 · 11월 15일~11월 30일"
+
+
+def test_void_person_sees_no_remaining_amount(env):
+    """BOOM-UP 에서 10월 기준을 놓쳐 무효가 된 사람에게는 '남았습니다' 가 없다. 본부 표와 개인 화면에도 남은 금액이 없다."""
+    con = db.connect(env["db"])
+    pid = _promo(con, BOOM)
+    p = pm._load(con, pid)
+    ids = [a for (a,) in con.execute("SELECT agent_id FROM agent WHERE internal_code LIKE 'T01%'")]
+    res = pm.progress(con, p, ids, date.today())
+    void = next(a for a in ids if res[a]["broken"] and res[a]["value"] > 0)
+    code = con.execute("SELECT internal_code FROM agent WHERE agent_id=?", (void,)).fetchone()[0]
+    html = login(env, code).get("/promo/progress").text
+    section = html.split(f"{BOOM}</div>", 1)[1].split("</section>", 1)[0]
+    assert "무효" in section and "남았습니다" not in section and "data-left=" not in section and "data-sum-left=" not in section
+    page = login(env, "admin").get(f"/promo/progress?view=org&p={pid}&person={void}")
+    assert page.context["status"] == "miss" and page.context["todo"] == [] and "남았습니다" not in page.text and "남은 길이 없습니다" in page.text
+    assert all(m["left"] is None for m in page.context["months"]) and page.context["sum_row"]["left"] is None
+    con.close()
+
+
+def test_attached_promotion_table_follows_parent_shape(env):
+    """딸린 시책(Convention)의 조직별 표는 부모(DB생명 여행시상)와 같은 칸이다. 합산 칸이 있고 추가안 대상 칸의 이름을 부모의 추가안에서 읽는다."""
+    con = db.connect(env["db"])
+    c = login(env, "admin")
+    conv = c.get(f"/promo/progress?view=org&p={_promo(con, 'DB생명 이터널 Convention 추가 시책')}")
+    parent = c.get(f"/promo/progress?view=org&p={_promo(con, 'DB생명 여행시상')}")
+    strip = lambda cols: [(x["key"], x["label"], x["sub"], x["group_label"]) for x in cols]
+    assert strip(conv.context["phases"]) == strip(parent.context["phases"])
+    keys = [x["key"] for x in conv.context["phases"]]
+    assert "sum" in keys and "a0" in keys
+    a0 = next(x for x in conv.context["phases"] if x["key"] == "a0")
+    assert a0["label"] == "10월 미달성자" and "앞 창 미달성자" not in conv.text
+    tot_c, tot_p = conv.context["data"]["total"], parent.context["data"]["total"]
+    assert tot_c["cells"][:-1] == tot_p["cells"][:-1] and tot_c["sums"][:-1] == tot_p["sums"][:-1]      # 최종 달성만 문턱 때문에 다르다
+    assert "연속으로 채우면 3개월 합계 70만원(10만, 20만, 40만), 합산으로는 100만원" in conv.text
+    con.close()
+
+
+def test_copy_bridge_bad_date_and_audit_label_read_in_korean(env):
+    """브릿지 복사에 틀린 날짜를 넣으면 한국어 안내가 나온다. 복사의 변경 기록은 한국어 이름과 원본 이름으로 읽힌다."""
+    path = copy_db(env, "copyko")
+    con = db.connect(path)
+    src = _promo(con, "삼성화재 10~11월 연속가동 브릿지")
+    main = login(env, "admin", path)
+    from urllib.parse import unquote
+    data = {"action": "copy_bridge", "promo_id": str(src), "period_ym": "2026-12", "c_from_1": "2026-12-16", "c_to_1": "2026-12-41",
+            "c_from_2": "2027-01-01", "c_to_2": "2027-01-15", "name": "틀린 날짜"}
+    r = main.post("/promo/tiers", data=data)
+    where = unquote(r.headers["location"])
+    assert r.status_code == 303 and "err=" in where
+    msg = where.split("err=", 1)[1].split("#")[0]
+    assert "창의 날짜를 읽지 못했습니다" in msg and not re.search(r"[A-Za-z]{4,}", msg)
+    assert not con.execute("SELECT 1 FROM promotion WHERE name='틀린 날짜'").fetchone()
+    row = con.execute("SELECT target FROM audit_log WHERE action='promotion_copy' ORDER BY id DESC LIMIT 1").fetchone()
+    shown = audit_view.target_ko("promotion_copy", row["target"], audit_view._Names(con))
+    assert audit_view.action_ko("promotion_copy") == "프로모션 다음 달 복사"
+    assert shown.startswith("프로모션: 삼성화재 11~12월 연속가동 브릿지") and "원본: 삼성화재 10~11월 연속가동 브릿지" in shown and "바뀐 칸" not in shown
     con.close()

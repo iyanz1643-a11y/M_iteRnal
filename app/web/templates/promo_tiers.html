@@ -93,11 +93,20 @@
     <label class="f">문턱을 셀 조직<select name="r_gate_org"><option value="">맨 위 조직</option>{% for o in gate_orgs %}<option value="{{ o.path_key }}" {{ 'selected' if o.path_key == r.gate_org }}>{{ o.label }}</option>{% endfor %}</select></label>
   </div>
   {% if alt_supported %}<div class="k" style="margin:16px 0 8px;font-size:13px">추가안. 앞 창을 놓친 사람이 다른 기준으로 연속을 채우는 길입니다. 기준을 비우면 쓰지 않습니다</div>
-  <div class="frow" data-alt-form="1">
-    <label class="f">추가안 이름<input class="sm" type="text" name="r_alt_label" value="{{ r.alt.label }}" placeholder="예: 10월 미달성자 추가안"></label>
-    {% for seq in window_seqs %}<label class="f">{{ seq }}번 창 기준<input type="number" name="r_alt_min_{{ seq }}" min="0" step="any" value="{{ r.alt.floors[seq] }}" placeholder="비우면 그 창은 보지 않음"></label>{% endfor %}
+  <input type="hidden" name="r_alt_n" value="{{ r.alts|length }}">
+  {% for a in r.alts %}{% set n = loop.index %}<div class="alt-chain" data-alt-form="1" data-alt-key="{{ a.key }}">
+  <div class="k" style="margin:12px 0 6px;font-size:13px">{{ '새 추가안' if a.new else '추가안 ' ~ n }}</div>
+  <input type="hidden" name="r_alt_key_{{ n }}" value="{{ a.key }}">
+  <div class="frow">
+    <label class="f">추가안 이름<input class="sm" type="text" name="r_alt_label_{{ n }}" value="{{ a.label }}" placeholder="예: 10월 미달성자 추가안"></label>
+    {% for seq in window_seqs %}<label class="f">{{ seq }}번 창 기준<input type="number" name="r_alt_min_{{ n }}_{{ seq }}" min="0" step="any" value="{{ a.floors[seq] }}" placeholder="비우면 그 창은 보지 않음"></label>{% endfor %}
   </div>
-  <div class="checks" style="margin-top:8px"><span class="cap" style="margin:0 8px 0 0">대상: 이 창을 놓친 사람</span>{% for seq in window_seqs %}<label><input type="checkbox" name="r_alt_missed" value="{{ seq }}" {{ 'checked' if seq in r.alt.missed }}>{{ seq }}번 창</label>{% endfor %}</div>
+  <div class="frow">
+    <label class="f">채우면 받는 구간 번호<input type="number" name="r_alt_tier_{{ n }}" min="1" step="1" value="{{ a.tier_no }}"></label>
+    <label class="f">가중 인정<select name="r_alt_boost_{{ n }}"><option value="1" {{ 'selected' if a.boost }}>가중 인정한 값으로 봅니다</option><option value="0" {{ 'selected' if not a.boost }}>원래 값으로 봅니다</option></select></label>
+  </div>
+  <div class="checks" style="margin-top:8px"><span class="cap" style="margin:0 8px 0 0">대상: 이 창을 놓친 사람</span>{% for seq in window_seqs %}<label><input type="checkbox" name="r_alt_missed_{{ n }}" value="{{ seq }}" {{ 'checked' if seq in a.missed }}>{{ seq }}번 창</label>{% endfor %}</div>
+  </div>{% endfor %}
   {% else %}<div class="cap" style="margin:16px 0 0" data-alt-form="0">추가안(앞 창 미달성자의 다른 기준)은 계산 엔진이 받을 수 있게 되면 여기서 넣습니다.</div>{% endif %}
   <div class="k" style="margin:16px 0 8px;font-size:13px">13회차 유지율 문턱. 표시만 합니다</div>
   <div class="frow">

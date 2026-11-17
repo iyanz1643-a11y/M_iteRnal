@@ -38,7 +38,7 @@ def env():
     prod = {r["product_name"]: r["product_id"] for r in con.execute("SELECT product_id, product_name FROM product")}
     n = [0]
 
-    def add(agent, day, premium, *, insurer="샘플생명", product="샘플생명 건강보험", raw=None, status="inforce", app_day=None, self_family=None, paid=None):
+    def add(agent, day, premium, *, insurer="샘플생명", product="샘플생명 건강보험", raw=None, status="inforce", app_day=None, self_family=None, paid=None, converted=None):
         n[0] += 1
         pid = prod.get(product) if product else None
         cid = con.execute(
@@ -46,7 +46,7 @@ def env():
                                     premium, premium_monthly, converted_premium, policy_count, status, payment_mode, last_paid_ym, self_family, created_at)
                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (ins[insurer], f"T{n[0]:05d}", pid, raw, agent, f"A{n[0]:05d}", app_day or day, day if status != "applied" else None,
-             premium, premium, premium, 1, status, "monthly", paid, self_family, db.now())).lastrowid
+             premium, premium, premium if converted is None else converted, 1, status, "monthly", paid, self_family, db.now())).lastrowid
         con.commit()
         return cid
 
@@ -457,10 +457,44 @@ def _five(env):
     return env["fcs"](env["branches"][hq1["org_id"]][0])[:2] + env["fcs"](env["branches"][hq2["org_id"]][0])[:3]
 
 
+def _value_check(res, per, boosted):
+    """조직 줄의 value_sum, plain_sum, sum_value 와 추가안의 value_sum 이 사람별 progress() 값의 합과 같고 합계 줄이 줄의 합인지 본다.
+    per 는 같은 범위와 기준일의 progress() 다. boosted 는 창을 읽는 프로모션(딸린 시책이면 부모)에 가중 인정이 있는가다."""
+    rows, t = res["rows"], res["total"]
+    for r in rows:
+        ids = r["agent_ids"]
+        for i, ph in enumerate(r["phases"]):
+            if ph["state"] == "future":
+                assert ph["value_sum"] is None and ph["plain_sum"] is None
+                continue
+            assert ph["value_sum"] == pytest.approx(sum(per[a]["windows"][i]["value"] for a in ids))
+            if boosted:
+                assert ph["plain_sum"] == pytest.approx(sum(per[a]["windows"][i]["plain"] for a in ids))
+            else:
+                assert ph["plain_sum"] is None
+        if r["sum_target"] is None:
+            assert r["sum_value"] == r["value"]
+        else:
+            assert r["sum_value"] == pytest.approx(sum(per[a]["value"] for a in ids)) == pytest.approx(r["value"] - r["value_left"])
+        for k, c in enumerate(r["alts"]):
+            elig = [per[a]["paths"]["alts"][k] for a in ids if per[a]["paths"]["alts"][k]["eligible"]]
+            for j, ph in enumerate(c["phases"]):
+                assert ph["value_sum"] == (None if ph["state"] == "future" else pytest.approx(sum(m["windows"][j]["value"] for m in elig)))
+    assert t["sum_value"] == pytest.approx(sum(r["sum_value"] for r in rows))
+    for i, ph in enumerate(t["phases"]):
+        for key in ("value_sum", "plain_sum"):
+            vals = [r["phases"][i][key] for r in rows]
+            assert ph[key] == (None if ph["state"] == "future" or (key == "plain_sum" and not boosted) else pytest.approx(sum(vals)))
+    for k, c in enumerate(t["alts"]):
+        for j, ph in enumerate(c["phases"]):
+            assert ph["value_sum"] == (None if ph["state"] == "future" else pytest.approx(sum(r["alts"][k]["phases"][j]["value_sum"] for r in rows)))
+
+
 def _phase_check(con, p, scope, ref, root):
     """조직 줄의 phases, n_chain, n_sum 이 사람별 progress() 를 센 것과 같고 합계가 줄의 합인지 본다. 합계 줄을 돌려준다."""
     res = pm.org_progress(con, p, root, scope, ref, near_pct=30)
     per = pm.progress(con, p, scope, ref)
+    _value_check(res, per, bool(p["rules"]["boost"]))
     states = [pm.PHASE_STATE[pm.window_state(w, ref)["state"]] for w in p["windows"]]
     for r in res["rows"]:
         ids = r["agent_ids"]
@@ -821,3 +855,408 @@ def test_alt_chain_validation(env):
     with pytest.raises(ValueError):                      # 결합을 바꾸려면 추가안을 먼저 비운다
         pm.update(con, parent, by="t", name="x", kind="travel", windows=Q4, combine_rule="both", insurer_id=life, date_basis="contract_date",
                   tiers=_tiers((1_000_000, "x")))
+
+
+# ------------------------------------------------------------------ 13. 조직 줄의 실적 합계 (value_sum, plain_sum, sum_value)
+def _sums(t):
+    return [(ph["state"], ph["value_sum"], ph["plain_sum"]) for ph in t["phases"]]
+
+
+def test_value_sums_follow_the_promotion_metric_converted_premium(env):
+    """지표가 인정보험료인 흥국 BOOM-UP 꼴. 창별 합계와 합산 값이 사람별 progress() 의 합과 같고, 보험료 지표의 같은 프로모션과는 다르다."""
+    con, add = env["con"], env["add"]
+    a1, a2, a3, a4, _idle = scope = _five(env)
+    root = env["root"]["path_key"]
+    kw = {"insurer": "한빛손해", "product": "한빛손해 건강종합보험"}
+    add(a1, "2026-10-10", 100_000, converted=60_000, **kw)
+    add(a2, "2026-10-12", 50_000, converted=30_000, **kw)       # 보험료로는 10월 5만을 채우고 인정보험료로는 못 채운다
+    add(a3, "2026-10-14", 40_000, converted=80_000, **kw)       # 거꾸로다
+    add(a4, "2026-10-16", 60_000, converted=70_000, **kw)       # 퇴사자
+    add(a1, "2026-11-10", 100_000, converted=130_000, **kw)
+    add(a3, "2026-11-05", 200_000, converted=250_000, **kw)
+    add(a1, "2026-12-10", 200_000, converted=210_000, **kw)     # 11월 17일에 보면 기준일 뒤 날짜의 계약이다
+    con.execute("UPDATE agent SET status='terminated', termination_date='2026-11-10' WHERE agent_id=?", (a4,))
+    con.commit()
+    conv = pm._load(con, _heungkuk(con, metric="converted_premium"))
+    prem = pm._load(con, _heungkuk(con))
+    assert (conv["metric"], conv["metric_ko"], prem["metric"]) == ("converted_premium", "인정보험료", "premium_monthly")
+
+    t = _phase_check(con, conv, scope, MID, root)
+    assert _sums(t) == [("done", 170_000, None), ("open", 380_000, None), ("future", None, None)]
+    assert _shape(t)[0] == ("done", 2, 2)                       # a1, a3. 인정보험료로 센다
+    # 합산 값은 대상자만 더한다. 퇴사자 몫은 value 에만 있다. 기준일 뒤 날짜의 계약은 지금 동작대로 합산에 들어 있다
+    assert (t["sum_value"], t["value"], t["value_left"], t["n_left"]) == (760_000, 830_000, 70_000, 1)
+    assert t["sum_value"] - sum(ph["value_sum"] for ph in t["phases"] if ph["value_sum"] is not None) == 210_000
+    res = pm.org_progress(con, conv, root, scope, MID, near_pct=30)
+    assert res["metric"] == "converted_premium" and res["unit"] == "원"
+    rows = {r["path_key"]: r for r in res["rows"]}
+    hq1, hq2 = (rows[h["path_key"]] for h in env["hqs"])
+    assert ([ph["value_sum"] for ph in hq1["phases"]], hq1["sum_value"], hq1["value"]) == ([90_000, 130_000, None], 430_000, 430_000)
+    assert ([ph["value_sum"] for ph in hq2["phases"]], hq2["sum_value"], hq2["value"]) == ([80_000, 250_000, None], 330_000, 400_000)
+    # 사람별 progress() 와 같은 숫자다. 한 사람만 물어도 같다
+    per = pm.progress(con, conv, scope, MID)
+    assert [per[a]["windows"][0]["value"] for a in (a1, a2, a3)] == [60_000, 30_000, 80_000]
+    assert pm.progress(con, conv, [a3], MID)[a3]["value"] == per[a3]["value"] == 330_000
+    # 기간이 끝나면 창별 합계의 합이 합산 값이다
+    t = _phase_check(con, conv, scope, AFTER, root)
+    assert _sums(t) == [("done", 170_000, None), ("done", 380_000, None), ("done", 210_000, None)]
+    assert t["sum_value"] == sum(ph["value_sum"] for ph in t["phases"]) == 760_000
+
+    # 같은 계약을 보험료 지표로 세면 다른 숫자다
+    t = _phase_check(con, prem, scope, MID, root)
+    assert _sums(t) == [("done", 190_000, None), ("open", 300_000, None), ("future", None, None)]
+    assert _shape(t)[0] == ("done", 2, 2) and (t["sum_value"], t["value"]) == (690_000, 750_000)
+
+
+def test_value_sums_with_boost_and_alt_chain(env):
+    """DB생명 변경판. value_sum 은 조건 1의 인정값, plain_sum 은 합산용 원래 값, 추가안의 value_sum 은 추가안 대상자만 더한다."""
+    con, add = env["con"], env["add"]
+    b1, _b2, b3, b4, _idle = scope = _five(env)
+    root = env["root"]["path_key"]
+    p = pm._load(con, _db_life_v2(con))
+    add(b1, "2026-10-03", 50_000)                        # 10만으로 인정
+    add(b3, "2026-10-20", 90_000)                        # 3주차라 그대로. 10월을 놓친다
+    add(b4, "2026-10-10", 60_000)                        # 12만으로 인정
+    t = _phase_check(con, p, scope, OCT_END, root)
+    assert _sums(t) == [("open", 310_000, 200_000), ("future", None, None), ("future", None, None)]
+    assert t["sum_value"] == t["value"] == 200_000
+    assert [ph["value_sum"] for ph in t["alt"]["phases"]] == [None, None]
+
+    add(b1, "2026-11-03", 50_000)                        # 11월은 2배가 없다
+    add(b3, "2026-11-10", 250_000)                       # 추가안 대상자의 11월
+    t = _phase_check(con, p, scope, MID, root)
+    assert _sums(t) == [("done", 310_000, 200_000), ("open", 300_000, 300_000), ("future", None, None)]
+    assert t["sum_value"] == 500_000
+    # 추가안 대상은 10월을 놓친 세 사람이고 11월 실적은 그 가운데 한 사람에게만 있다. 10월을 채운 b1 의 5만은 넣지 않는다
+    assert (t["alt"]["n_eligible"], [ph["value_sum"] for ph in t["alt"]["phases"]]) == (3, [250_000, None])
+
+    add(b3, "2026-12-05", 400_000)                       # 12월 1주차. 10만까지 2배라 인정값 50만
+    t = _phase_check(con, p, scope, DEC_END, root)
+    assert _sums(t) == [("done", 310_000, 200_000), ("done", 300_000, 300_000), ("open", 500_000, 400_000)]
+    assert t["sum_value"] == 900_000 == sum(ph["plain_sum"] for ph in t["phases"])
+    assert [ph["value_sum"] for ph in t["alt"]["phases"]] == [250_000, 500_000]
+    # 추가안을 합산용 값으로 재게 하면(boost 거짓) 추가안 합계도 원래 값이다
+    flat = pm._load(con, _db_life_v2(con, alt=[{**ALT_V2[0], "boost": False}]))
+    t = _phase_check(con, flat, scope, DEC_END, root)
+    assert [ph["value_sum"] for ph in t["alt"]["phases"]] == [250_000, 400_000]
+    # 가중 인정을 모든 조건에 쓰면 합산에도 배수가 들어간다. plain_sum 은 value_sum 과 같고 sum_value 도 늘어난다
+    every = pm._load(con, _db_life_v2(con, alt=[], boost={**BOOST_V2, "applies_to": "all"}))
+    t = _phase_check(con, every, scope, DEC_END, root)
+    assert _sums(t) == [("done", 310_000, 310_000), ("done", 300_000, 300_000), ("open", 500_000, 500_000)]
+    assert t["sum_value"] == 1_110_000 and t["alt"] is None
+
+
+def test_value_sums_for_other_combine_rules_rate_and_attached(env):
+    """합산 조건이 없는 결합과 정률은 sum_value 가 value 와 같다(퇴사자 몫 포함). 창별 합계는 대상자만 더한다. 딸린 시책은 부모의 값이다."""
+    con, add = env["con"], env["add"]
+    a1, a2, *_rest = scope = _five(env)
+    root = env["root"]["path_key"]
+    for mon in ("10", "11", "12"):
+        add(a1, f"2026-{mon}-20", 450_000)
+    add(a2, "2026-10-20", 100_000)
+    con.execute("UPDATE agent SET status='terminated', termination_date='2026-11-10' WHERE agent_id=?", (a2,))
+    con.commit()
+
+    def check(pid, ref, boosted=False):
+        p = pm._load(con, pid)
+        res = pm.org_progress(con, p, root, scope, ref, near_pct=30)
+        _value_check(res, pm.progress(con, p, scope, ref), boosted)
+        return res["total"]
+
+    single = pm.create(con, period_ym=YM, name="z", kind="monthly", windows=[Q4[0]], tiers=[(200_000, "fixed", 1, None)],
+                       date_basis="contract_date", by="t")
+    t = check(single, AFTER)
+    assert _sums(t) == [("done", 450_000, None)]
+    assert (t["sum_target"], t["sum_value"], t["value"], t["value_left"]) == (None, 550_000, 550_000, 100_000)
+    rate = pm.create(con, period_ym=YM, name="r", kind="rate", windows=Q4[:2], rates=[(None, "initial_premium", 0.5, "next_month")],
+                     date_basis="contract_date", by="t")
+    t = check(rate, MID)
+    assert _sums(t) == [("done", 450_000, None), ("open", 450_000, None)] and (t["sum_value"], t["value"]) == (1_000_000, 1_000_000)
+    summed = pm.create(con, period_ym=YM, name="s", kind="travel", windows=Q4, tiers=_tiers((1_000_000, "x")), combine_rule="sum",
+                       date_basis="contract_date", by="t")
+    t = check(summed, MID)
+    assert _sums(t) == [("done", 450_000, None), ("open", 450_000, None), ("future", None, None)]
+    assert (t["sum_target"], t["sum_value"], t["value"], t["value_left"]) == (1_000_000, 1_350_000, 1_450_000, 100_000)
+    # 범위가 비어도 끝난 창과 진행 중 창은 0 이고 시작 전 창은 None 이다
+    t = pm.org_progress(con, pm._load(con, summed), root, [], MID, near_pct=30)["total"]
+    assert _sums(t) == [("done", 0, None), ("open", 0, None), ("future", None, None)] and t["sum_value"] == 0
+    # 딸린 시책은 부모의 창과 값으로 낸다
+    parent = _db_life(con)
+    conv = pm.create(con, period_ym=YM, name="시험 Convention", kind="travel", windows=Q4, tiers=_tiers((1, "추가 시책 원문 확인")),
+                     combine_rule="sum", date_basis="contract_date", rules={"parent_promo_id": parent}, by="t", publish=True)
+    got, want = check(conv, AFTER, boosted=True), check(parent, AFTER, boosted=True)
+    assert got["phases"] == want["phases"] and got["sum_value"] == want["sum_value"] == 1_350_000
+
+
+def test_metric_can_be_changed_after_publish(env):
+    """게시한 프로모션의 지표를 pm.update 로 인정보험료로 바꿀 수 있다. 변경 기록에 남고 그 뒤의 진척은 새 지표로 센다."""
+    con, add = env["con"], env["add"]
+    a1, a2, *_rest = scope = _five(env)
+    root = env["root"]["path_key"]
+    kw = {"insurer": "한빛손해", "product": "한빛손해 건강종합보험"}
+    add(a1, "2026-10-10", 100_000, converted=40_000, **kw)
+    add(a2, "2026-10-12", 30_000, converted=90_000, **kw)
+    pid = _heungkuk(con)
+    before = pm._load(con, pid)
+    assert before["status"] == "published" and before["metric"] == "premium_monthly"
+    t = pm.org_progress(con, before, root, scope, OCT_END, near_pct=30)["total"]
+    assert (t["phases"][0]["value_sum"], t["phases"][0]["n_met"]) == (130_000, 1)
+    # update 는 준 값으로 모두 바꾼다. 지표만 바꾸려면 나머지는 지금 값을 그대로 넘긴다
+    out = pm.update(con, pid, by="t", name=before["name"], kind=before["kind"], windows=[(w["label"], w["date_from"], w["date_to"]) for w in before["windows"]],
+                    tiers=[(x["min_value"], x["reward_kind"], x["reward_value"], x["reward_label"]) for x in before["tiers"]],
+                    insurer_id=before["insurer_id"], insurer_name=before["insurer_name"], sector=before["sector"], categories=before["categories"],
+                    target_note=before["target_note"], date_basis=before["date_basis"], per_contract_cap=before["per_contract_cap"],
+                    combine_rule=before["combine_rule"], pay_timing=before["pay_timing"], caution=before["caution"], metric="converted_premium")
+    assert out["changed"] == ["metric"]
+    after = pm._load(con, pid)
+    assert (after["status"], after["metric"], after["metric_ko"], after["unit"]) == ("published", "converted_premium", "인정보험료", "원")
+    assert after["window_tiers"].keys() == before["window_tiers"].keys() and after["rules"] == before["rules"]
+    log = con.execute("SELECT target, before_json, after_json FROM audit_log WHERE action='promotion_update' ORDER BY id DESC LIMIT 1").fetchone()
+    assert log["target"] == f"{pid}:metric" and "premium_monthly" in log["before_json"] and "converted_premium" in log["after_json"]
+    t = _phase_check(con, after, scope, OCT_END, root)
+    assert (t["phases"][0]["value_sum"], t["phases"][0]["n_met"], t["sum_value"]) == (130_000, 1, 130_000)
+    per = pm.progress(con, after, scope, OCT_END)
+    assert (per[a1]["windows"][0]["value"], per[a2]["windows"][0]["value"]) == (40_000, 90_000)      # 달성한 사람이 a1 에서 a2 로 바뀐다
+    assert not per[a1]["windows"][0]["tier"] and per[a2]["windows"][0]["tier"]
+
+
+# ------------------------------------------------------------------ 14. 확정한 프로모션의 조직별 진척, 센 계약 목록, 미달성 인원
+ROW_KEYS = ("n_target", "n_active", "n_achieved", "n_missed", "n_lost", "n_inactive", "value", "sum_value", "n_chain", "n_sum", "phases", "alt", "alts",
+            "windows", "agent_ids")
+CONTRACT_KEYS = {"contract_id", "window_seq", "window_label", "date", "contract_date", "insurer", "product", "premium", "converted", "count",
+                 "value", "value_each", "boosted", "status", "after_ref"}
+
+
+def _three_ways(env, **kw):
+    """DB생명 변경판을 12월 말까지 채운다. 원안 연속(e), 합산(s), 추가안(t, u)으로 달성하고 n 은 놓친다. 프로모션 번호와 다섯 사람을 돌려준다."""
+    add = env["add"]
+    e, s, t, u, n = scope = _five(env)
+    for mon, v in (("10", 100_000), ("11", 200_000), ("12", 400_000)):
+        add(e, f"2026-{mon}-20", v)
+    add(s, "2026-10-20", 1_100_000)
+    add(t, "2026-11-20", 250_000)
+    add(t, "2026-12-20", 450_000)
+    add(u, "2026-11-20", 250_000)
+    add(u, "2026-12-05", 350_000)                        # 12월 1주차. 인정값 45만
+    add(n, "2026-11-20", 240_000)
+    add(n, "2026-12-20", 450_000)
+    return _db_life_v2(env["con"], **kw), scope
+
+
+def _fin(con, p, scope, ref=AFTER):
+    return {x["agent_id"]: x for x in pm.final_results(con, p, scope, ref)["rows"]}
+
+
+def test_confirmed_org_progress_keeps_confirmed_values_and_revoke_recalculates(env):
+    """확정한 프로모션의 조직별 진척은 확정 때 남긴 값으로 센다. 확정 뒤에 계약을 철회하고, 새 계약을 넣고, 사람이 퇴사하고, 조건을 고쳐도
+    숫자가 그대로이고 사람별 확정 값(final_results)과 같다. 무르면 다시 계산한 값으로 돌아간다."""
+    con, add = env["con"], env["add"]
+    root = env["root"]["path_key"]
+    pid, scope = _three_ways(env)
+    e, s, t, u, n = scope
+    p = pm._load(con, pid)
+    before = pm.org_progress(con, p, root, scope, AFTER, near_pct=30)
+    assert before["confirmed"] is False and before["confirm"] is None and before["detail"] is None
+    assert before["estimate_note"] == pm.ESTIMATE_NOTE and pm.confirmed_progress(con, p, scope) is None
+    est = _fin(con, p, scope)
+    pm.confirm_results(con, pid, "admin", AFTER)
+    got = pm.org_progress(con, p, root, scope, MID, near_pct=30)        # 기준일은 쓰지 않는다. 창은 모두 끝난 것으로 본다
+    assert got["confirmed"] is True and got["detail"] == "full" and got["confirm"]["ref_date"] == AFTER.isoformat()
+    assert got["estimate_note"] == got["amounts"]["note"] == pm.CONFIRMED_NOTE and got["note"] == pm.ORG_NOTE_CONFIRMED
+    # 바뀐 것이 없으면 확정 전 예상과 같은 숫자다
+    assert len(got["rows"]) == len(before["rows"]) == 2
+    for a, b in zip(got["rows"] + [got["total"]], before["rows"] + [before["total"]]):
+        assert {k: a.get(k) for k in ROW_KEYS} == {k: b.get(k) for k in ROW_KEYS}
+        assert (a["n_open"], a["n_near"], a["n_left"], a["value_left"], a["unnamed"]) == (0, 0, 0, 0, None)
+    assert [ph["state"] for ph in got["total"]["phases"]] == ["done", "done", "done"]
+    assert (got["total"]["n_achieved"], got["total"]["n_missed"], got["total"]["n_sum"], got["total"]["n_chain"]) == (4, 1, 1, 1)
+    assert _alt_shape(got["total"]) == (3, [("done", 2), ("done", 3)], 2)
+
+    # 확정 뒤에 원장과 조건이 바뀐다
+    con.execute("UPDATE contract SET status='withdrawn' WHERE agent_id=?", (e,))           # 달성자의 계약이 모두 철회됐다
+    add(n, "2026-12-21", 2_000_000)                                                        # 놓친 사람에게 늦게 들어온 계약
+    con.execute("UPDATE agent SET status='terminated', termination_date='2027-01-06' WHERE agent_id=?", (s,))
+    con.commit()
+    pm.update(con, pid, by="t", name="시험 여행시상 변경판", kind="travel", windows=Q4, combine_rule="either", categories=["health"],
+              insurer_id=p["insurer_id"], insurer_name="샘플생명", date_basis="contract_date", tiers=_tiers((1_000_000, "싱가포르")),
+              rules={"alt_chains": []})
+    p = pm._load(con, pid)
+    live = pm.progress(con, p, scope, AFTER)
+    assert live[e]["value"] == 0 and live[n]["status"] == "achieved"                       # 다시 세면 다른 숫자다
+    again = pm.org_progress(con, p, root, scope, AFTER, near_pct=30)
+    assert again["rows"] == got["rows"] and again["total"] == got["total"] and again["windows"] == got["windows"]
+    # 같은 사람의 같은 숫자: 사람별 확정 값과 같다
+    fin = _fin(con, p, scope)
+    key = lambda x: (x["value"], x["tier_no"], x["reward"], x["amount"], x["outcome"])
+    assert set(fin) == set(scope) and {a: key(x) for a, x in fin.items()} == {a: key(x) for a, x in est.items()}
+    per = pm.confirmed_progress(con, p, scope)
+    assert set(per) == set(scope)
+    for a, x in fin.items():
+        r = per[a]
+        assert (r["value"], (r["tier"] or {}).get("tier_no"), r["reward"], r["amount"], r["outcome"]) == key(x)
+        assert r["confirmed"] and r["next"] is None and r["status"] == ("achieved" if x["outcome"] == "achieved" else "missed")
+        assert sum(w["plain"] for w in r["window_values"]) == pytest.approx(x["value"])
+        assert [w["value"] for w in r["windows"]] == [w["value"] for w in r["window_values"]]
+    assert per[u]["paths"]["alt"]["achieved"] and per[e]["paths"]["each"]["tier_no"] == 1  # 확정 때의 규칙과 계약으로 본 길
+    for r in again["rows"]:
+        ids = r["agent_ids"]
+        assert r["value"] == pytest.approx(sum(fin[a]["value"] for a in ids)) == pytest.approx(r["sum_value"])
+        assert r["n_achieved"] == sum(1 for a in ids if fin[a]["tier_no"]) == sum(1 for a in ids if fin[a]["outcome"] == "achieved")
+        assert r["n_missed"] == r["n_lost"] == r["n_target"] - r["n_achieved"] and r["left_ids"] == []
+        for i, ph in enumerate(r["phases"]):
+            assert ph["value_sum"] == pytest.approx(sum(per[a]["window_values"][i]["value"] for a in ids))
+            assert ph["plain_sum"] == pytest.approx(sum(per[a]["window_values"][i]["plain"] for a in ids))
+    assert s in [a for r in again["rows"] for a in r["agent_ids"]]                         # 확정 뒤에 퇴사한 사람은 확정 대상 그대로다
+    # 범위 밖 사람은 확정 값에서도 세지 않는다
+    part = pm.org_progress(con, p, root, [e, n], AFTER, near_pct=30)
+    assert part["total"]["n_target"] == 2 and part["total"]["n_achieved"] == 1 and set(pm.confirmed_progress(con, p, [e, n])) == {e, n}
+
+    # 무르면 다시 계산한 값이다
+    pm.revoke_confirmation(con, pid, "admin", "늦게 들어온 계약 반영")
+    back = pm.org_progress(con, p, root, scope, AFTER, near_pct=30)
+    assert back["confirmed"] is False and back["detail"] is None and back["estimate_note"] == pm.ESTIMATE_NOTE
+    assert pm.confirmed_progress(con, p, scope) is None
+    live = pm.progress(con, p, scope, AFTER)
+    for r in back["rows"]:
+        assert r["value"] == pytest.approx(sum(live[a]["value"] for a in r["agent_ids"] + r["left_ids"]))
+        assert r["n_achieved"] == sum(1 for a in r["agent_ids"] if pm.is_achieved(p, live[a]))
+    t_back = back["total"]
+    assert (t_back["n_target"], t_back["n_left"], t_back["value_left"], t_back["alt"]) == (4, 1, 1_100_000, None)      # 퇴사자와 고친 조건이 반영된다
+    assert t_back["n_achieved"] == 1 and e not in [a for r in back["rows"] for a in r["agent_ids"] if pm.is_achieved(p, live[a])]
+    assert t_back["value"] == pytest.approx(got["total"]["value"] - 700_000 + 2_000_000)
+
+
+def test_counted_contracts_add_up_to_person_values_live_and_confirmed(env):
+    """센 계약 목록의 합이 사람별 값과 같다. 확정 전에는 progress(), 확정 뒤에는 확정 값이다. 고객 이름과 증권번호는 싣지 않는다."""
+    con, add = env["con"], env["add"]
+    pid, scope = _three_ways(env)
+    e, _s, _t, u, n = scope
+    add(e, "2026-11-25", 30_000, status="withdrawn")                   # 세지 않는 계약
+    add(e, "2026-11-26", 40_000, self_family=1)                        # 본인 계약 제외
+    add(e, "2026-12-28", 10_000)                                       # 12월 15일에 보면 기준일 뒤 날짜의 계약이다
+    p = pm._load(con, pid)
+    for ref in (DEC_MID, AFTER):
+        per = pm.progress(con, p, scope, ref)
+        for a in scope:
+            cc = pm.counted_contracts(con, p, a, ref)
+            assert (cc["confirmed"], cc["source"], cc["ref"], cc["metric"], cc["unnamed"]) == (False, "ledger", ref.isoformat(), "premium_monthly", 0)
+            assert cc["value"] == pytest.approx(per[a]["value"]) == pytest.approx(sum(x["value"] for x in cc["rows"]))
+            assert cc["n"] == len(cc["rows"]) and all(set(x) == CONTRACT_KEYS for x in cc["rows"])
+            for w in per[a]["windows"]:
+                mine = [x for x in cc["rows"] if x["window_seq"] == w["seq"]]
+                assert sum(x["value_each"] for x in mine) == pytest.approx(w["value"]) and sum(x["value"] for x in mine) == pytest.approx(w["plain"])
+                assert all(x["window_label"] == w["label"] and w["date_from"] <= x["date"] <= w["date_to"] for x in mine)
+    rows = pm.counted_contracts(con, p, e, DEC_MID)["rows"]
+    assert [(x["date"], x["value"], x["status"], x["after_ref"]) for x in rows] == [
+        ("2026-10-20", 100_000, "inforce", False), ("2026-11-20", 200_000, "inforce", False), ("2026-12-20", 400_000, "inforce", True),
+        ("2026-12-28", 10_000, "inforce", True)]
+    assert rows[0]["insurer"] == "샘플생명" and rows[0]["product"] == "샘플생명 건강보험" and rows[0]["premium"] == rows[0]["converted"] == 100_000
+    boosted = pm.counted_contracts(con, p, u, AFTER)["rows"]
+    assert [(x["date"], x["value"], x["value_each"], x["boosted"]) for x in boosted] == [
+        ("2026-11-20", 250_000, 250_000, False), ("2026-12-05", 350_000, 450_000, True)]
+
+    est = _fin(con, p, scope)
+    pm.confirm_results(con, pid, "admin", AFTER)
+    con.execute("UPDATE contract SET status='withdrawn' WHERE agent_id=? AND contract_date='2026-10-20'", (e,))
+    add(n, "2026-12-21", 2_000_000)
+    con.commit()
+    fin = _fin(con, p, scope)
+    for a in scope:
+        cc = pm.counted_contracts(con, p, a, date(2027, 3, 1))
+        assert (cc["confirmed"], cc["source"], cc["ref"], cc["unnamed"]) == (True, "confirm", AFTER.isoformat(), None)
+        assert cc["value"] == pytest.approx(fin[a]["value"]) == pytest.approx(est[a]["value"])
+        assert all(set(x) == CONTRACT_KEYS and not x["after_ref"] for x in cc["rows"])
+    kept = pm.counted_contracts(con, p, e)["rows"]
+    assert [(x["date"], x["value"], x["status"]) for x in kept][0] == ("2026-10-20", 100_000, "withdrawn")     # 확정 값은 그대로, 상태는 지금 것
+    assert 2_000_000 not in [x["value"] for x in pm.counted_contracts(con, p, n)["rows"]]
+    assert [(x["value"], x["value_each"], x["boosted"]) for x in pm.counted_contracts(con, p, u)["rows"]] == [(250_000, 250_000, False), (350_000, 450_000, True)]
+    # 무르면 다시 원장에서 센다
+    pm.revoke_confirmation(con, pid, "admin", "늦게 들어온 계약 반영")
+    live = pm.progress(con, p, scope, AFTER)
+    for a in scope:
+        cc = pm.counted_contracts(con, p, a, AFTER)
+        assert cc["source"] == "ledger" and cc["value"] == pytest.approx(live[a]["value"])
+    assert "2026-10-20" not in [x["date"] for x in pm.counted_contracts(con, p, e, AFTER)["rows"]]
+    assert 2_000_000 in [x["value"] for x in pm.counted_contracts(con, p, n, AFTER)["rows"]]
+
+
+def test_n_missed_splits_into_lost_and_open(env):
+    """미달성 인원은 대상에서 최종 달성을 뺀 수다. 그 가운데 놓친 것이 정해진 사람(n_lost)과 진행 중인 사람(n_open)을 가른다.
+    화면의 명단 열쇠 missed(달성하지 않은 사람 모두)와 최종 상태 miss, open 과 같은 조건이다."""
+    con, add = env["con"], env["add"]
+    a1, a2, a3, a4, idle = scope = _five(env)
+    root = env["root"]["path_key"]
+    kw = {"insurer": "한빛손해", "product": "한빛손해 건강종합보험"}
+    p = pm._load(con, _heungkuk(con))
+    for a, v in ((a1, 100_000), (a2, 50_000), (a3, 40_000)):           # a3 은 10월 5만을 놓친다. a4 와 idle 은 실적이 없다
+        add(a, "2026-10-10", v, **kw)
+
+    def check(ref):
+        res = pm.org_progress(con, p, root, scope, ref, near_pct=30)
+        per = pm.progress(con, p, scope, ref)
+        for r in res["rows"]:
+            ids = r["agent_ids"]
+            assert r["n_missed"] == r["n_target"] - r["n_achieved"] == sum(1 for a in ids if not pm.is_achieved(p, per[a])) == r["n_lost"] + r["n_open"]
+            assert r["n_lost"] == sum(1 for a in ids if not pm.is_achieved(p, per[a]) and per[a]["status"] == "missed")
+        t = res["total"]
+        for k in ("n_missed", "n_lost", "n_open"):
+            assert t[k] == sum(r[k] for r in res["rows"])
+        return t["n_target"], t["n_achieved"], t["n_missed"], t["n_lost"], t["n_open"]
+
+    assert check(date(2026, 10, 20)) == (5, 0, 5, 0, 5)               # 10월이 끝나기 전에는 모두 진행 중이다
+    for a, v in ((a1, 150_000), (a2, 100_000), (a3, 400_000)):
+        add(a, "2026-11-10", v, **kw)
+    assert check(MID) == (5, 0, 5, 3, 2)                               # 10월을 놓친 세 사람은 무효다. 진행 중인 두 사람도 미달성에 든다
+    add(a1, "2026-12-10", 200_000, **kw)
+    assert check(DEC_MID) == (5, 1, 4, 3, 1)                           # a1 달성. a2 는 12월이 남아 진행 중이다
+    assert check(AFTER) == (5, 1, 4, 4, 0)                             # 기간이 끝나면 진행 중이 없다
+    assert pm.org_progress(con, p, root, [], MID, near_pct=30)["total"]["n_missed"] == 0
+
+
+def test_confirmed_org_progress_for_attached_and_old_confirmations(env):
+    """확정 값으로 낼 수 없는 칸은 None 이다. 딸린 시책은 부모의 확정 때 규칙이 없어 창별 인원을 내지 않고 실적 합계만 낸다.
+    규칙과 센 계약을 남기지 않은 예전 확정은 사람별 값과 달성 인원만 낸다."""
+    con = env["con"]
+    root = env["root"]["path_key"]
+    parent, scope = _three_ways(env, alt=[])
+    e, s, _t, _u, _n = scope
+    conv = pm.create(con, period_ym=YM, name="시험 Convention", kind="travel", windows=Q4, tiers=_tiers((1, "추가 시책 원문 확인")),
+                     combine_rule="sum", date_basis="contract_date", rules={"parent_promo_id": parent}, by="t", publish=True)
+    c = pm._load(con, conv)
+    before = pm.org_progress(con, c, root, scope, AFTER, near_pct=30)["total"]
+    assert before["n_achieved"] == 2
+    pm.confirm_results(con, conv, "admin", AFTER)
+    con.execute("UPDATE contract SET status='withdrawn' WHERE agent_id=?", (e,))
+    con.commit()
+    res = pm.org_progress(con, c, root, scope, AFTER, near_pct=30)
+    t = res["total"]
+    assert res["confirmed"] and res["detail"] == "values"
+    assert (t["n_target"], t["n_achieved"], t["n_missed"], t["value"], t["sum_value"]) == tuple(before[k] for k in ("n_target", "n_achieved", "n_missed", "value", "sum_value"))
+    assert [(ph["state"], ph["target"], ph["n_met"], ph["n_chain"]) for ph in t["phases"]] == [("done", m, None, None) for m in (100_000, 200_000, 400_000)]
+    assert [(ph["value_sum"], ph["plain_sum"]) for ph in t["phases"]] == [(ph["value_sum"], ph["plain_sum"]) for ph in before["phases"]]
+    assert (t["n_chain"], t["n_sum"], t["windows"], t["unnamed"], t["sum_target"]) == (None, None, None, None, before["sum_target"])
+    fin = _fin(con, c, scope)
+    assert t["n_achieved"] == sum(1 for x in fin.values() if x["tier_no"]) and t["value"] == pytest.approx(sum(x["value"] for x in fin.values()))
+    cc = pm.counted_contracts(con, c, e)                               # 딸린 시책은 부모의 계약이다
+    assert (cc["confirmed"], cc["source"]) == (True, "confirm") and cc["value"] == pytest.approx(fin[e]["value"]) == 700_000
+    assert {x["status"] for x in cc["rows"]} == {"withdrawn"}
+
+    # 예전 확정: 규칙과 센 계약이 없다. 시험 DB 에서만 지워서 흉내 낸다
+    pp = pm._load(con, parent)
+    pm.confirm_results(con, parent, "admin", AFTER)
+    head = pm.confirmation(con, parent)
+    full = pm.org_progress(con, pp, root, scope, AFTER, near_pct=30)
+    assert full["detail"] == "full" and full["total"]["n_achieved"] == 1 and full["total"]["phases"][0]["n_met"] == 1    # 확정 때는 e 의 계약이 이미 철회였다
+    con.execute("UPDATE promotion_confirm SET rule_json=NULL WHERE confirm_id=?", (head["confirm_id"],))
+    con.execute("DELETE FROM promotion_result_contract WHERE confirm_id=?", (head["confirm_id"],))
+    con.commit()
+    old = pm.org_progress(con, pp, root, scope, AFTER, near_pct=30)
+    t = old["total"]
+    assert old["confirmed"] and old["detail"] == "none"
+    assert (t["n_target"], t["n_achieved"], t["n_missed"], t["value"]) == tuple(full["total"][k] for k in ("n_target", "n_achieved", "n_missed", "value"))
+    assert [(ph["n_met"], ph["n_chain"], ph["value_sum"], ph["plain_sum"]) for ph in t["phases"]] == [(None, None, None, None)] * 3
+    assert (t["n_chain"], t["n_sum"], t["windows"]) == (None, None, None) and t["sum_value"] == t["value"]
+    per = pm.confirmed_progress(con, pp, scope)
+    assert per[s]["window_values"] is None and per[s]["windows"] == [] and per[s]["detail"] is None and per[s]["tier"]["tier_no"] == 1
+    gone = pm.counted_contracts(con, pp, s)
+    assert (gone["confirmed"], gone["source"], gone["rows"], gone["value"]) == (True, None, [], 0)

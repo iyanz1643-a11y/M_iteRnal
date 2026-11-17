@@ -10,14 +10,14 @@
 {% if not sel %}<div class="card" style="margin-top:32px"><div class="k">게시된 프로모션이 없습니다</div></div>{% else %}
 <div class="seg">{% for c in cards %}<a class="{{ 'on' if c.promo_id == sel.promo_id }}" href="/promo/progress?p={{ c.promo_id }}{{ mq }}">{{ c.name }}{% if c.revised %} · 변경{% endif %}</a>{% endfor %}</div>
 <div class="grid g4" style="margin-top:20px">
-  <div class="card"><div class="k">대상</div><div class="mid">{{ summary.n }}<span class="unit">명</span></div><div class="cap">{{ sel.insurer_name or '전 보험사' }} · {{ sel.kind_ko }}</div></div>
+  <div class="card"><div class="k">대상{% if summary.confirmed %} <span class="chip good tiny" data-confirmed="1">확정</span>{% endif %}</div><div class="mid">{{ summary.n }}<span class="unit">명</span></div><div class="cap">{{ sel.insurer_name or '전 보험사' }} · {{ sel.kind_ko }}</div></div>
   <div class="card"><div class="k"><span class="dot"></span>{{ '실적 있음' if sel.kind == 'rate' else '구간 달성' }}</div><div class="mid">{{ summary.achieved }}<span class="unit">명</span></div><div class="cap">{{ sel.period_text }}</div></div>
   <div class="card"><div class="k"><span class="dot warn"></span>구간 근접</div><div class="mid">{{ summary.near }}<span class="unit">명</span></div><div class="cap">다음 구간까지 {{ summary.near_text }} 이내</div></div>
   <div class="card"><div class="k"><span class="dot {{ 'bad' if summary.missed else 'off' }}"></span>무효</div><div class="mid">{{ summary.missed }}<span class="unit">명</span></div><div class="cap">{{ sel.due }}</div></div>
 </div>
 {{ pr.team_table(sel, rows, summary, show_amount) }}
 <p class="cap" data-note="basis">{{ basis_note(sel, rows[0].r if rows else none, ref) }}</p>
-<p class="cap">구간과 금액은 예상입니다. {% if sel.rules.count_basis == 'application' %}청약 기준이라 청약도 세고 철회, 반송, 해지는 뺍니다.{% else %}청약과 반송도 세지 않습니다.{% endif %}</p>
+<p class="cap">{% if summary.confirmed %}구간과 금액은 확정한 값입니다. 지급은 보험사 정산을 따릅니다.{% else %}구간과 금액은 예상입니다.{% endif %} {% if sel.rules.count_basis == 'application' %}청약 기준이라 청약도 세고 철회, 반송, 해지는 뺍니다.{% else %}청약과 반송도 세지 않습니다.{% endif %}</p>
 {{ pr.versions(sel.versions) }}
 {{ ui.ref_note() }}
 {% endif %}

@@ -84,6 +84,11 @@
   /* 묶음 안 알약 줄은 지금 화면이 보이게 옆으로 넘겨 둔다 */
   var on = document.querySelector('.subnav a.on');
   if (on) on.parentNode.scrollLeft = on.offsetLeft - on.parentNode.offsetLeft - 16;
+  /* 고르는 줄(.seg)이 화면보다 길면 고른 것이 보이게 옆으로 넘겨 둔다 */
+  document.querySelectorAll('.seg a.on').forEach(function (a) {
+    var p = a.parentNode;
+    if (p.scrollWidth > p.clientWidth) p.scrollLeft = Math.max(a.offsetLeft - p.offsetLeft - 16, 0);
+  });
   /* 큰 제목이 위 막대 밑으로 지나가면 막대에 바탕과 작은 제목을 띄운다 */
   var nav = document.querySelector('.nav'), h = document.querySelector('main h1');
   if (!h || !('IntersectionObserver' in window)) { nav.classList.add('stuck'); return; }

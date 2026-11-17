@@ -223,7 +223,17 @@ def _period_text(p):
     md = lambda d: f"{int(d[5:7])}월 {int(d[8:10])}일"
     if len(p["windows"]) == 1:
         return f"{md(p['date_from'])} ~ {md(p['date_to'])}"
-    return " · ".join(f"{w['label']} {md(w['date_from'])}~{md(w['date_to'])}" for w in p["windows"])
+    return " · ".join(_window_text(w, md) for w in p["windows"])
+
+
+def _window_text(w, md) -> str:
+    """창 하나의 기간 글. 창 이름과 날짜가 같은 말을 되풀이하지 않게 한다. 이름이 날짜 글의 앞머리면(10월 과 10월 1일~10월 31일) 날짜만,
+    이름에 이미 날짜가 있으면(10월 19일에서 31일) 이름만 적는다. 그 밖에는 이름과 날짜를 함께 적는다."""
+    span = f"{md(w['date_from'])}~{md(w['date_to'])}"
+    label = (w["label"] or "").strip()
+    if not label or span.startswith(label):
+        return span
+    return label if "일" in label and any(ch.isdigit() for ch in label) else f"{label} {span}"
 
 
 def _cards(con, ctx, include_unpublished=False):

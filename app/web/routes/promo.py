@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app import db
+from app.engine import classify
 from app.engine import org_award as oa
 from app.engine import promotion as pm
 from app.web import auth, awards, org_labels, org_values, promo_extra
@@ -42,13 +43,20 @@ def near_pcts(con, ctx, agent_ids) -> dict:
     return org_values.for_agents(con, agent_ids, org_values.NEAR_KEY, ctx["ym"])
 
 
-def _scope_agents(con, ctx):
-    ids = ctx["agent_ids"] if ctx["role"] != "main" else {r["agent_id"] for r in con.execute("SELECT agent_id FROM agent WHERE status='active'")}
+def _scope_agents(con, ctx, with_left=False):
+    """범위 안 설계사. 재직자만이다. with_left 가 참이면 범위 안 퇴사자도 싣고 줄마다 left 를 붙인다 (D-42).
+    퇴사자의 범위는 자료 기준 달의 소속 조직, 곧 퇴사 전 소속으로 본다. 그 달에 소속 이력이 없는 퇴사자는 싣지 않는다.
+    엔진의 조직별 진척이 사람을 조직에 놓는 기준(pm._homes)과 같다. 관리자의 범위(ctx agent_ids)도 같은 이력에서 나온다."""
+    if ctx["role"] != "main":
+        ids = ctx["agent_ids"]
+    else:
+        ids = {r["agent_id"] for r in con.execute("SELECT agent_id FROM agent" + ("" if with_left else " WHERE status='active'"))}
     q, lst = _in(ids)
     ym = ctx["ym"]
-    return _q(con, f"""SELECT a.agent_id, a.internal_code code, a.name, o.name org FROM agent a
+    keep = "(a.status='active' OR h.agent_id IS NOT NULL)" if with_left else "a.status='active'"
+    return _q(con, f"""SELECT a.agent_id, a.internal_code code, a.name, o.name org, a.status!='active' AS "left" FROM agent a
                        LEFT JOIN agent_org_history h ON h.agent_id=a.agent_id AND h.effective_from<=? AND (h.effective_to IS NULL OR h.effective_to>=?)
-                       LEFT JOIN org_unit o ON o.org_id=h.org_id WHERE a.agent_id IN ({q}) AND a.status='active' ORDER BY a.internal_code""", (ym, ym, *lst))
+                       LEFT JOIN org_unit o ON o.org_id=h.org_id WHERE a.agent_id IN ({q}) AND {keep} ORDER BY a.internal_code""", (ym, ym, *lst))
 
 
 @router.get("/promo/list", response_class=HTMLResponse)
@@ -70,19 +78,52 @@ def _gates(con, cards, ref=None) -> list:
     return out
 
 
+CONFIRMED_VIEW_NOTE = "메인 관리자가 확정한 결과입니다. 확정한 뒤 계약이 바뀌어도 다시 계산하지 않습니다. 지난 프로모션 화면과 같은 값입니다."
+
+
+def _confirmed_team_rows(con, ctx, sel, head, only=None):
+    """확정한 프로모션의 사람별 줄. 다시 계산하지 않고 엔진이 남긴 확정 값(pm.final_results)을 옮긴다. 지난 프로모션 화면과 같은 숫자다.
+    확정 값에는 창별 실적과 다음 구간이 없어 그 칸은 비운다. 대상은 확정할 때의 재직자 가운데 범위 안 사람이다."""
+    scope = {a["agent_id"]: a for a in _scope_agents(con, ctx, with_left=True)}
+    keep = None if only is None else set(only)
+    ids = [a for a in scope if keep is None or a in keep]
+    fin = pm.final_results(con, sel, ids)
+    tiers = {t["tier_no"]: t for t in sel["tiers"]}
+    rows = []
+    for x in fin["rows"]:
+        tier = (tiers.get(x["tier_no"]) or {"tier_no": x["tier_no"]}) if x["tier_no"] else None
+        r = {"value": x["value"], "tier": tier, "next": None, "reward": x["reward"], "amount": x["amount"], "broken": False, "capped": False,
+             "status": "achieved" if x["outcome"] == "achieved" else "missed", "windows": [], "basis": fin["basis"], "confirmed": True}
+        rows.append({**scope[x["agent_id"]], "left": False, "r": r})
+    rows.sort(key=lambda x: -x["r"]["value"])
+    summary = {"near_text": org_values.pct_text([]), "n": len(rows), "achieved": fin["summary"]["achieved"], "near": 0, "missed": 0, "n_left": 0, "value_left": 0,
+               "top": max((x["r"]["value"] for x in rows), default=0),
+               "confirmed": {"by": _who_name(con, head["confirmed_by"]) or head["confirmed_by"], "at": head["confirmed_at"], "note": CONFIRMED_VIEW_NOTE}}
+    return rows, summary
+
+
 def _team_rows(con, ctx, sel, ref, only=None):
-    """팀원 달성 현황의 줄과 요약. only 를 주면 범위 안 설계사 가운데 그 사람만 남긴다. 조직별 보기의 사람 목록도 이 함수를 쓴다."""
-    agents = _scope_agents(con, ctx)
+    """팀원 달성 현황의 줄과 요약. only 를 주면 범위 안 설계사 가운데 그 사람만 남긴다. 조직별 보기의 사람 목록도 이 함수를 쓴다.
+    확정한 프로모션이면 확정 값을 보인다(_confirmed_team_rows). 퇴사자는 프로모션 달성 대상이 아니라 줄로 싣지 않는다 (D-42, 11월 14일 결정).
+    범위 안 퇴사자의 퇴사 전 실적은 조직별 진척의 실적 합계에만 든다. 그 인원과 합계를 요약(n_left, value_left)에 실어 표 아래에 안내한다.
+    only 를 주면 퇴사자는 보지 않는다."""
+    head = pm.confirmation(con, sel["promo_id"])
+    if head:
+        return _confirmed_team_rows(con, ctx, sel, head, only)
+    agents = _scope_agents(con, ctx, with_left=only is None)
     if only is not None:
         keep = set(only)
         agents = [a for a in agents if a["agent_id"] in keep]
     res = pm.progress(con, sel, [a["agent_id"] for a in agents], ref)
     pcts = near_pcts(con, ctx, [a["agent_id"] for a in agents])
-    rows = [{**a, "r": res[a["agent_id"]]} for a in agents]
+    rows = [{**a, "r": res[a["agent_id"]]} for a in agents if not a["left"]]
+    gone = [res[a["agent_id"]] for a in agents if a["left"] and res[a["agent_id"]].get("target", True)]
     rows.sort(key=lambda x: -x["r"]["value"])
     near_rows = [x for x in rows if near(x["r"], org_values.ratio(pcts[x["agent_id"]]))]
-    summary = {"near_text": org_values.pct_text(pcts.values()), "n": len(rows), "achieved": sum(1 for x in rows if x["r"]["tier"] or (sel["kind"] == "rate" and x["r"]["value"] > 0)),
-               "near": len(near_rows), "missed": sum(1 for x in rows if x["r"]["broken"]), "top": max((x["r"]["value"] for x in rows), default=0)}
+    summary = {"near_text": org_values.pct_text(pcts[x["agent_id"]] for x in rows), "n": len(rows),
+               "achieved": sum(1 for x in rows if x["r"]["tier"] or (sel["kind"] == "rate" and x["r"]["value"] > 0)),
+               "near": len(near_rows), "missed": sum(1 for x in rows if x["r"]["broken"]), "top": max((x["r"]["value"] for x in rows), default=0),
+               "n_left": len(gone), "value_left": sum(r["value"] for r in gone), "confirmed": None}
     return rows, summary
 
 
@@ -136,13 +177,14 @@ def progress_cards(con, ctx, ym: str | None = None) -> tuple:
 
 @router.get("/promo/progress", response_class=HTMLResponse)
 def promo_progress(request: Request, p: int | None = None, view: str | None = None, org: str | None = None, direct: int | None = None,
-                   ym: str | None = None, who: str | None = None, row: str | None = None, ctx: dict = Depends(guard), con=Depends(get_con)):
+                   ym: str | None = None, who: str | None = None, row: str | None = None, sort: str | None = None,
+                   person: int | None = None, f: str | None = None, ctx: dict = Depends(guard), con=Depends(get_con)):
     cards, head = progress_cards(con, ctx, ym)
     if view == "org":
         if ctx["role"] not in ("main", "manager"):                 # 가정: 설계사에게는 조직별 보기가 없다
             auth.log(con, ctx["login_id"], "access_denied", "/promo/progress org")
             raise HTTPException(403, "조직별 보기는 메인 관리자와 관리자만 봅니다.")
-        return _org_view(request, con, ctx, cards, head, p, org, bool(direct), who, row)
+        return _org_view(request, con, ctx, cards, head, p, org, bool(direct), who, row, sort, person, f)
     gates = _gates(con, cards)
     team_view = ctx["role"] == "main" or (ctx["role"] == "manager" and view != "me")
     if not team_view:
@@ -181,12 +223,13 @@ def my_phases(p, r) -> tuple:
     if p["combine_rule"] not in pm.EACH_RULES or len(p["windows"]) < 2 or not r.get("windows"):
         return [], None
     nxt = r.get("next") or {}
+    void = bool(r.get("broken")) or r.get("status") == "missed"     # 무효가 됐거나 놓쳤으면 남은 금액을 보이지 않는다
     rows = []
     for w in r["windows"]:
         floor = window_floor(p, w)
         state = _STATE_PHASE[w["state"]]
         left = None
-        if state == "open" and not w["tier"] and floor is not None:
+        if state == "open" and not w["tier"] and floor is not None and not void:
             left = nxt["gap"] if nxt.get("path", "each") == "each" and nxt.get("min_value") == floor else max(floor - w["value"], 0)
         rows.append({"seq": w["seq"], "label": w["label"], "state": state, "state_ko": PHASE_KO[state], "value": w["value"], "plain": w.get("plain", w["value"]),
                      "floor": floor, "met": bool(w["tier"]), "left": left, "date_from": w["date_from"], "date_to": w["date_to"]})
@@ -195,7 +238,7 @@ def my_phases(p, r) -> tuple:
     if target:
         total = (r.get("paths") or {}).get("sum", {}).get("value", r["value"])
         met = bool((r.get("paths") or {}).get("sum", {}).get("tier_no"))
-        sum_row = {"target": target, "value": total, "met": met, "left": None if met else max(target - total, 0)}
+        sum_row = {"target": target, "value": total, "met": met, "left": None if met or void else max(target - total, 0)}
     return rows, sum_row
 
 
@@ -298,7 +341,7 @@ def _crumbs(con, org, starts) -> list:
 def org_numbers(con, ctx, sel, ref, org_key, *, keep_amounts: bool):
     """조직별 진척 하나. 팀원 달성 현황과 같은 범위, 달, 구간 근접 값으로 pm.org_progress 를 부른다.
     keep_amounts 가 거짓이면 금액(amounts)을 떼고 돌려준다 (D-17)."""
-    ids = [a["agent_id"] for a in _scope_agents(con, ctx)]
+    ids = [a["agent_id"] for a in _scope_agents(con, ctx, with_left=True)]     # 범위 안 퇴사자도 넘긴다. 엔진이 실적 합계에만 넣는다 (D-42)
     res = pm.org_progress(con, sel, org_key, ids, ref, ym=ctx["ym"], near_pct=near_pcts(con, ctx, ids))
     if not keep_amounts:
         res = {k: v for k, v in res.items() if k != "amounts"}
@@ -362,36 +405,65 @@ def chain_text(p) -> str | None:
     return text.replace("만원원", "만원").replace("건원", "건")
 
 
-def org_phases(data, sel, ref) -> list:
+def amount_text(v, p) -> str | None:
+    """조직별 표의 실적 글. 1만원부터는 만원 단위로 줄인다(125만원, 39.9만원). 천원 아래는 버리고 1,000만원부터는 만원 아래도 버린다.
+    기준에 못 미친 값이 기준과 같은 글로 보이지 않게 올리지 않는다. 건수 지표면 n건이고 값이 없으면 None 이다."""
+    if v is None:
+        return None
+    if p["metric"] == "policy_count":
+        return f"{v:g}건"
+    sign, v = ("-" if v < 0 else ""), abs(int(v))
+    if v < 10_000:
+        return f"{sign}{v:,}원"
+    man, frac = divmod(v // 1_000, 10)
+    return f"{sign}{man:,}.{frac}만원" if frac and man < 1_000 else f"{sign}{man:,}만원"
+
+
+def metric_note(shape, ref) -> str:
+    """표 위에 두는 지표와 기준 설명. '실적은 인정보험료 기준입니다' 와 기준일. shape 는 창을 읽는 프로모션이다(딸린 시책이면 부모)."""
+    basis = pm.BASIS_KO.get(shape["date_basis"], shape["date_basis"])
+    count = pm.COUNT_BASIS_KO.get(pm._r(shape)["count_basis"], "")
+    return f"실적은 {shape['metric_ko']} 기준입니다. 기준일은 {basis}이고 {count}으로 {ref.month}월 {ref.day}일까지 셉니다."
+
+
+def org_phases(data, sel, ref, shape=None) -> list:
     """조직별 표의 칸. [{key, label, sub, state, group}] 순서는 달(창)마다 대상자, 추가안 달마다 대상자, 합산 달성자, 최종 달성이다.
     대표님이 정한 표 모양이다(11월 17일). 줄마다 cells 에 같은 순서의 글을 붙인다. 숫자는 엔진 값(phases, alt, n_sum, n_achieved)을
     옮기기만 하고 화면에서 세지 않는다. 엔진 값이 없으면 칸을 비우고, 추가안(alt)이 없는 프로모션은 추가안 칸을 그리지 않는다.
-    창이 하나뿐이면 달 칸을 그리지 않는다. 대상, 가동, 근접, 미가동, 달성률, 순위는 줄의 두 번째 줄과 '자세히' 에 둔다."""
+    창이 하나뿐이면 달 칸을 그리지 않는다. 대상, 가동, 근접, 미가동, 달성률, 순위는 줄의 두 번째 줄과 '자세히' 에 둔다.
+
+    칸마다 인원과 함께 실적 합계를 보인다(대표님 지시, 11월 17일). 줄마다 sums 와 plains 에 cells 와 같은 순서로 붙인다.
+    sums 는 달 칸이 그 달 실적 합계(phases[].value_sum), 추가안 칸이 추가안 대상자의 합계(alt.phases[].value_sum),
+    합산 칸이 합산 실적 합계(sum_value, 없으면 value)다. 합산 칸이 없는 프로모션은 최종 달성 칸에 둔다.
+    plains 는 가중 인정이 있어 합산용 값이 다를 때의 달 칸 값(plain_sum)이다. 모두 엔진 값을 옮기기만 하고 없으면 None 이다.
+    shape 는 창과 지표를 읽는 프로모션이다. 딸린 시책이면 부모이고 비면 sel 이다. 칸의 모양(달 칸, 추가안, 합산 칸, 묶음 머리)은
+    shape 를 따른다. 그래서 딸린 시책의 표가 부모와 같은 모양이고 추가안 대상 칸의 이름도 부모의 추가안에서 읽는다."""
+    shape = shape or sel
     tot = data["total"]
-    phases = _phase_list(tot, data, ref) if len(sel["windows"]) > 1 else []
+    phases = _phase_list(tot, data, ref) if len(shape["windows"]) > 1 else []
     alt = tot.get("alt") or data.get("alt")
     alt_phases = (alt or {}).get("phases") or []
-    paired = sel["combine_rule"] in pm.PAIRED
+    paired = shape["combine_rule"] in pm.PAIRED
     g_main = ("조건 1-1" if alt else "조건 1") if paired else ""       # 칸 묶음 이름은 원문대로 조건 1-1, 조건 1-2, 조건 2
     cols = []
-    for ph, w in zip(phases, sel["windows"]):
-        floor = ph.get("target") if ph.get("target") is not None else window_floor(sel, w)
-        cols.append({"key": f"w{ph['seq']}", "label": f"{ph['label']} 대상자", "sub": (_short(floor, sel) if floor is not None else ""),
+    for ph, w in zip(phases, shape["windows"]):
+        floor = ph.get("target") if ph.get("target") is not None else window_floor(shape, w)
+        cols.append({"key": f"w{ph['seq']}", "label": f"{ph['label']} 대상자", "sub": (_short(floor, shape) if floor is not None else ""),
                      "state": ph["state"], "group": "main", "group_label": g_main})
     if alt:
-        conf = next((c for c in (pm._r(sel).get("alt_chains") or []) if c.get("key") == alt.get("key")), {})
-        wl = {w["seq"]: w["label"] for w in sel["windows"]}
+        conf = next((c for c in (pm._r(shape).get("alt_chains") or []) if c.get("key") == alt.get("key")), {})
+        wl = {w["seq"]: w["label"] for w in shape["windows"]}
         missed = [wl.get(int(x)) for x in conf.get("requires_missed") or [] if wl.get(int(x))]
         cols.append({"key": "a0", "label": (", ".join(missed) + " 미달성자") if missed else "앞 창 미달성자", "sub": "조건 1-2 대상", "state": None, "group": "alt",
                      "group_label": "조건 1-2", "short": "대상"})
     for ph in alt_phases:
         floor = ph.get("min_value")
-        cols.append({"key": f"a{ph['seq']}", "label": f"{ph['label']} 대상자", "sub": (_short(floor, sel) if floor is not None else ""),
+        cols.append({"key": f"a{ph['seq']}", "label": f"{ph['label']} 대상자", "sub": (_short(floor, shape) if floor is not None else ""),
                      "state": ph.get("state"), "group": "alt", "group_label": "조건 1-2", "short": ph["label"]})
-    target = sum_target(sel, data)
+    target = sum_target(shape, data)
     if target:
-        cols.append({"key": "sum", "label": f"합산 {_short(target, sel)} 달성자", "sub": "", "state": None, "group": "sum",
-                     "group_label": "조건 2" if paired else ""})
+        cols.append({"key": "sum", "label": f"합산 {shape['metric_ko']}", "sub": f"기준 {_short(target, shape)}", "state": None, "group": "sum",
+                     "group_label": "조건 2" if paired else "", "pre": f"{_short(target, shape)} 달성"})
     cols.append({"key": "final", "label": "최종 달성", "sub": "", "state": None, "group": "final", "group_label": ""})
     for i, c in enumerate(cols):                                     # 묶음 머리의 칸 수. 묶음의 첫 칸에만 둔다
         first = i == 0 or cols[i - 1]["group_label"] != c["group_label"]
@@ -410,10 +482,33 @@ def org_phases(data, sel, ref) -> list:
             out.append(f"{x['n_sum']}명" if x.get("n_sum") is not None else "")
         out.append(f"{x['n_achieved']}명")
         return out
+
+    def sums(x):
+        """(칸마다 실적 합계, 칸마다 합산용 값). 엔진이 낸 값만 옮긴다. 시작 전 달과 엔진 값이 없는 칸은 None 이다."""
+        xp = _phase_list(x, data, ref) if phases else []
+        val = [ph.get("value_sum") if ph.get("state") != "future" else None for ph in xp]
+        plain = [ph.get("plain_sum") if ph.get("state") != "future" else None for ph in xp]
+        val += [None] * (len(phases) - len(val))
+        plain += [None] * (len(phases) - len(plain))
+        plain = [pv if pv is not None and pv != v else None for v, pv in zip(val, plain)]
+        if alt:
+            val.append(None)
+        xa = (x.get("alt") or {}).get("phases") or []
+        for i, _ph in enumerate(alt_phases):
+            val.append(xa[i].get("value_sum") if i < len(xa) and xa[i].get("state") != "future" else None)
+        whole = x.get("sum_value", x.get("value"))
+        if target:
+            val.append(whole)
+        val.append(None if target else whole)
+        return val, plain + [None] * (len(val) - len(plain))
     alt_ix = [i for i, c in enumerate(cols) if c["group"] == "alt"]
     for r in [*data["rows"], tot]:
         r["cells"] = cells(r)
-        r["alt_line"] = " · ".join(f"{cols[i]['short']} {r['cells'][i] or '-'}" for i in alt_ix)    # 휴대폰에서 조건 1-2 를 둘째 줄로
+        r["sums"], r["plains"] = sums(r)
+        r["n_missed"] = r["n_target"] - r["n_achieved"]             # 미달성 인원. 엔진이 따로 내지 않아 대상에서 최종 달성을 뺀다. 명단 열쇠 missed 와 같은 수다
+        r["alt_line"] = " · ".join(                                  # 휴대폰에서 조건 1-2 를 둘째 줄로. 금액은 인원 뒤에 붙인다
+            f"{cols[i]['short']} {r['cells'][i] or '-'}" + (f" {amount_text(r['sums'][i], shape)}" if r["sums"][i] is not None else "")
+            for i in alt_ix)
     return cols
 
 
@@ -430,7 +525,32 @@ def _short(v, p) -> str:
 # 범위 안 설계사만 싣고, 금액은 싣지 않는다. 실적과 남은 금액은 팀원 달성 현황과 같은 규칙이다.
 WHO_KO = {"target": "대상", "active": "가동", "near": "구간 근접", "inactive": "미가동", "final": "최종 달성", "missed": "미달성",
           "sum": "합산 달성", "chain": "연속 유지 중", "alt_el": "조건 1-2 대상"}
-STATUS_LIST_KO = {"met": "달성", "open": "진행 중", "miss": "미달성", "future": "시작 전"}
+STATUS_LIST_KO = {"met": "달성", "open": "진행 중", "miss": "미달성", "future": "시작 전", "not_target": "대상 아님"}
+
+
+def final_status(sel, r) -> str:
+    """한 사람의 최종 상태 열쇠. 달성(met)은 엔진의 is_achieved, 미달성(miss)은 엔진이 놓쳤다고 본 것, 그 밖은 진행 중(open)이다."""
+    if r.get("status") == "not_target":
+        return "not_target"
+    return "met" if pm.is_achieved(sel, r) else ("miss" if r["status"] == "missed" else "open")
+
+
+def has_floors(data) -> bool:
+    """달마다 기준이 있는 프로모션인가. 엔진이 낸 창별 단계의 기준(phases[].target)으로 본다."""
+    return any(ph.get("target") is not None for ph in (data["total"].get("phases") or []))
+
+
+def person_months(r, multi=True, floors=True) -> list:
+    """한 사람의 달(창)별 실적. 엔진의 사람별 결과(windows[].value, plain, tier)를 옮긴다. value 는 그 달 기준에 대는 값이고
+    plain 은 합산에 쓰는 값이 다를 때만 싣는다. 시작 전 달은 값을 싣지 않는다. met 은 그 달 기준을 채웠는가이고 달 기준이 없으면 None 이다."""
+    out = []
+    for w in (r.get("windows") or []) if multi else []:
+        state = _STATE_PHASE[w["state"]]
+        plain = w.get("plain", w["value"])
+        out.append({"seq": w["seq"], "label": w["label"], "state": state, "met": bool(w["tier"]) if floors else None,
+                    "value": None if state == "future" else w["value"],
+                    "plain": plain if state != "future" and plain != w["value"] else None})
+    return out
 
 
 def cell_who(col_key: str) -> str | None:
@@ -497,8 +617,15 @@ def _who_rule(sel, data, who, pcts):
     return None
 
 
-def who_roster(con, ctx, sel, ref, data, phases, who, row_key):
-    """명단 하나. row_key 가 표의 줄(path_key)이면 그 줄만, 비거나 all 이면 모든 줄이다. 없는 열쇠나 줄이면 None."""
+SORT_KO = {"cell": "누른 칸 실적 순", "sum": "합산 실적 큰 순"}
+
+
+def who_roster(con, ctx, sel, ref, data, phases, who, row_key, sort=None):
+    """명단 하나. row_key 가 표의 줄(path_key)이면 그 줄만, 비거나 all 이면 모든 줄이다. 없는 열쇠나 줄이면 None.
+    사람마다 달(창)별 실적 months 와 합산 실적 total, 합산 기준까지 남은 값 sum_left 를 함께 싣는다. 모두 엔진의 사람별 결과
+    (pm.progress 의 windows[].value, plain, value)를 옮긴 것이고 남은 값만 기준에서 합산 실적을 뺀다. 시작 전 달은 값을 싣지 않는다.
+    sort 가 sum 이면 합산 실적이 큰 순, 아니면 누른 칸의 실적이 큰 순이다. 시상 금액은 싣지 않는다."""
+    sort = sort if sort in SORT_KO else "cell"
     rows = data["rows"] if row_key in (None, "", "all") else [r for r in data["rows"] if r["path_key"] == row_key and not r["direct"]] or \
         [r for r in data["rows"] if r["path_key"] == row_key]
     if not rows:
@@ -511,6 +638,10 @@ def who_roster(con, ctx, sel, ref, data, phases, who, row_key):
     title, pick, view = rule
     res = pm.progress(con, sel, ids, ref)
     scope = {a["agent_id"]: a for a in _scope_agents(con, ctx)}         # 범위 안 사람만. org_progress 도 같은 목록으로 셌다
+    multi = len(data["windows"]) > 1
+    shape = pm._parent(con, sel) or sel                                 # 합산 기준은 창을 읽는 프로모션의 것이다
+    target, floors = sum_target(shape, data), has_floors(data)
+    on_seq = int(who[1:]) if who.startswith("w") and who[1:].isdigit() else (int(who[5:]) if who.startswith("alt_w") and who[5:].isdigit() else None)
     groups, n = [], 0
     for r in rows:
         people = []
@@ -519,17 +650,163 @@ def who_roster(con, ctx, sel, ref, data, phases, who, row_key):
                 continue
             value, plain, floor, st = view(res[a])
             left = max(floor - value, 0) if floor is not None and st != "met" else None
+            total = res[a]["value"]
             people.append({"agent_id": a, "code": scope[a]["code"], "name": scope[a]["name"], "branch": scope[a]["org"] or "-",
                            "value": value, "plain": plain if plain is not None and plain != value else None, "floor": floor, "left": left,
-                           "status": st, "status_ko": STATUS_LIST_KO[st]})
-        people.sort(key=lambda x: (-x["value"], x["code"]))
+                           "status": st, "status_ko": STATUS_LIST_KO[st], "months": person_months(res[a], multi, floors), "total": total,
+                           "sum_left": sum_left(target, res[a])})
+        people.sort(key=lambda x: (-(x["total"] if sort == "sum" else x["value"]), x["code"]))
         n += len(people)
         groups.append({"title": "바로 소속" if r["direct"] else org_labels.title(r), "path_key": r["path_key"], "people": people})
     return {"who": who, "title": title, "row": row_key or "all", "n": n, "groups": [g for g in groups if g["people"]],
-            "summary": [(g["title"], len(g["people"])) for g in groups if g["people"]], "estimate_note": pm.ESTIMATE_NOTE}
+            "summary": [(g["title"], len(g["people"])) for g in groups if g["people"]], "estimate_note": pm.ESTIMATE_NOTE,
+            "windows": [{"seq": w["seq"], "label": w["label"]} for w in data["windows"]] if multi else [], "on_seq": on_seq,
+            "sum_target": target, "sum_target_text": _short(target, shape) if target else None, "sort": sort, "sorts": SORT_KO,
+            "sortable": on_seq is not None, "marks": multi and floors,    # 누른 칸이 달 칸일 때만 두 순서가 다르다
+            "has_plain": any(m["plain"] is not None for g in groups for x in g["people"] for m in x["months"])}
 
 
-def _org_view(request, con, ctx, cards, head, p, org_key, direct, who=None, row_key=None):
+PEOPLE_FILTER_KO = {"all": "전체", "met": "달성", "miss": "미달성"}
+
+
+def sum_left(target, r):
+    """합산 기준까지 남은 값. 기준에서 합산 실적을 뺀다. 합산 조건이 없거나 무효가 됐거나 놓친 사람은 None 이다."""
+    if target is None or r.get("broken") or r.get("status") == "missed":
+        return None
+    return max(target - r["value"], 0)
+
+
+def people_view(sel, data, people, f, href, shape=None) -> dict:
+    """본부 화면의 사람 표. 줄마다 달별 실적, 합산 실적, 합산 기준까지 남은 값, 최종 상태, 개인 화면 주소를 붙인다.
+    값은 팀원 달성 현황과 같은 사람별 결과(pm.progress)를 옮긴 것이고 남은 값만 기준에서 합산 실적을 뺀다.
+    f 는 거르기다. met 은 최종 달성, miss 는 아직 달성하지 않은 사람 모두(진행 중 포함)다. 명단 열쇠 final, missed 와 같은 조건이다.
+    실적이 없는 사람은 zero 에 따로 모아 화면에서 접어 둔다. 순서는 합산 실적이 큰 순이다(_team_rows)."""
+    f = f if f in PEOPLE_FILTER_KO else "all"
+    multi, floors = len(data["windows"]) > 1, has_floors(data)
+    if any(x["r"].get("confirmed") for x in people):                # 확정 값에는 달별 실적이 없다. 달 칸을 그리지 않는다
+        multi = False
+    shape = shape or sel
+    target = sum_target(shape, data)
+    for x in people:
+        r = x["r"]
+        st = final_status(sel, r)
+        x.update(months=person_months(r, multi, floors), total=r["value"], sum_left=sum_left(target, r),
+                 status=st, status_ko=STATUS_LIST_KO[st], met=st == "met", href=f"{href}&person={x['agent_id']}")
+    counts = {"all": len(people), "met": sum(1 for x in people if x["met"]), "miss": sum(1 for x in people if not x["met"])}
+    shown = [x for x in people if f == "all" or (f == "met") == x["met"]]
+    return {"f": f, "filters": PEOPLE_FILTER_KO, "counts": counts, "rows": [x for x in shown if x["total"] or x["met"]],
+            "zero": [x for x in shown if not x["total"] and not x["met"]], "sum_target": target, "marks": multi and floors,
+            "sum_target_text": _short(target, shape) if target else None, "windows": [{"seq": w["seq"], "label": w["label"]} for w in data["windows"]] if multi else [],
+            "has_plain": any(m["plain"] is not None for x in people for m in x["months"])}
+
+
+def counted_contracts(con, shape, agent_id) -> list:
+    """한 사람의 계약 가운데 엔진이 이 프로모션에 센 것. 거르기는 엔진의 pm._counted 를 그대로 부르고 화면에서 다시 거르지 않는다.
+    엔진에 사람별 계약 목록을 내는 공개 함수가 아직 없어 progress() 가 쓰는 함수를 부른다. 줄마다 기준일과 센 값은 엔진 값이고,
+    보험사, 상품명, 보험료, 인정보험료, 상태는 계약 원장에서 읽는다. 고객 이름과 증권번호는 싣지 않는다."""
+    rows, _unnamed = pm._counted(con, shape, [agent_id])
+    if not rows:
+        return []
+    ids = sorted({x["contract_id"] for x in rows})
+    q = ",".join("?" * len(ids))
+    info = {x["contract_id"]: x for x in con.execute(
+        f"""SELECT c.contract_id, c.status, c.premium_monthly, c.converted_premium, c.policy_count, ins.name insurer, {pm.NAME_SQL} product
+            FROM contract c {classify.JOINS} LEFT JOIN insurer ins ON ins.insurer_id=c.insurer_id
+            WHERE c.agent_id=? AND c.contract_id IN ({q})""", (agent_id, *ids))}
+    labels = {w["seq"]: w["label"] for w in shape["windows"]}
+    out = []
+    for x in rows:
+        c = info.get(x["contract_id"])
+        if not c:
+            continue
+        each = x.get("value_each", x["value"])
+        out.append({"date": x["date"], "window": labels.get(x["window_seq"], ""), "insurer": c["insurer"] or "-", "product": c["product"] or "상품명 없음",
+                    "premium": c["premium_monthly"], "converted": c["converted_premium"], "count": c["policy_count"],
+                    "value": x["value"], "value_each": each if each != x["value"] else None,
+                    "status_ko": CONTRACT_STATUS_KO.get(c["status"], c["status"])})
+    out.sort(key=lambda x: (x["date"], x["product"]))
+    return out
+
+
+CONTRACT_STATUS_KO = {"applied": "청약", "inforce": "정상", "withdrawn": "철회", "declined": "반송", "lapsed": "실효", "cancelled": "해지", "matured": "만기"}
+NEXT_PATH_KO = {"each": "이번 달 기준까지", "alt": "조건 1-2의 이번 달 기준까지", "sum": "합산 기준까지"}
+
+
+def _person_view(request, con, ctx, cards, head, sel, ref, org, starts, person):
+    """개인 화면(person=agent_id). 조직별 보기 안의 셋째 단계다. 범위 안 설계사만 열리고 범위 밖이면 403 이다.
+    달별 실적, 합산 실적, 조건별 상태, 다음에 채울 것, 엔진이 센 계약 목록을 보인다. 값은 pm.progress 의 그 사람 결과다.
+    예상 시상(금액과 보상 글)은 메인 관리자에게만 넘긴다. 관리자에게는 실적 금액까지만 넘긴다 (D-17, D-74 가정)."""
+    is_main = ctx["role"] == "main"
+    scope = {a["agent_id"]: a for a in _scope_agents(con, ctx)}
+    if person not in scope:
+        auth.log(con, ctx["login_id"], "access_denied", "/promo/progress person")
+        raise HTTPException(403, "볼 수 없는 사람입니다.")
+    if not sel:
+        raise HTTPException(404, "게시된 프로모션이 없습니다.")
+    who = scope[person]
+    shape = pm._parent(con, sel) or sel
+    r = pm.progress(con, sel, [person], ref)[person]
+    # 위로 가는 경로. 누른 조직이 그 사람의 소속 위에 있으면 그 조직까지, 아니면 소속 조직까지다. 범위 밖 조직은 싣지 않는다
+    home = (pm._homes(con, [person], ctx["ym"]).get(person) or {}).get("org_id")
+    home_row = con.execute("SELECT org_id, parent_id, name, level, path_key FROM org_unit WHERE org_id=?", (home,)).fetchone() if home else None
+    at = org if org and home in pm.orgs.descendants(con, org["org_id"]) else (dict(home_row) if home_row else None)
+    crumbs = [c for c in (_crumbs(con, at, starts) if at else []) if c["org_id"] in ctx["org_ids"]]
+    rows, sum_row = my_phases(shape, r)
+    floors = {x["seq"]: x for x in rows}
+    months = [{**m, "floor": (floors.get(m["seq"]) or {}).get("floor"), "left": (floors.get(m["seq"]) or {}).get("left"),
+               "date_from": w["date_from"], "date_to": w["date_to"]} for m, w in zip(person_months(r), r.get("windows") or [])]
+    for m in months:
+        if m["floor"] is None:
+            m["met"] = None                                         # 달 기준이 없는 결합은 채움 여부를 보이지 않는다
+    paths = r.get("paths") or {}
+    paired = shape["combine_rule"] in pm.PAIRED
+    each = None
+    if paired and paths.get("each"):
+        each = "miss" if paths["each"]["broken"] else ("met" if paths["each"]["tier_no"] else "open")
+    elif shape["combine_rule"] == "all" and months:
+        each = "miss" if r["broken"] else ("met" if r["tier"] else "open")
+    st = final_status(sel, r)
+    alt = my_alt(shape, r)
+    # 다음에 채울 것. 조건마다 남은 값을 모은다. 값은 내 달성 현황과 같은 것(my_phases, my_alt)이고 여기서 새로 재지 않는다.
+    # 조건이 깨졌으면 그 길은 싣지 않는다. 이미 달성했거나 조건에 남은 값이 없으면 엔진이 낸 다음 구간(next)만 쓴다
+    todo = []
+    if st == "open":
+        if each != "miss":
+            for m in months:
+                if m["left"]:
+                    todo.append({"label": f"{m['label']} 기준까지", "value": m["left"], "note": None})
+                elif m["state"] == "future" and m["floor"] is not None:
+                    todo.append({"label": f"{m['label']} 기준", "value": m["floor"], "note": "시작 전"})
+        if alt and not alt["achieved"] and not alt["broken"]:
+            for w in alt["rows"]:
+                if w["left"]:
+                    todo.append({"label": f"{alt['label']} {w['label']} 기준까지", "value": w["left"], "note": None})
+                elif w["state"] == "future" and w["min_value"] is not None:
+                    todo.append({"label": f"{alt['label']} {w['label']} 기준", "value": w["min_value"], "note": "시작 전"})
+        if sum_row and sum_row["left"]:
+            todo.append({"label": f"합산 {_short(sum_row['target'], shape)}까지", "value": sum_row["left"], "note": None})
+    nxt = r.get("next")
+    if not todo and nxt and st not in ("miss", "not_target"):
+        path = nxt.get("path") or ("each" if shape["combine_rule"] == "all" else "sum")
+        todo.append({"label": NEXT_PATH_KO.get(path, NEXT_PATH_KO["sum"]), "value": nxt["gap"], "note": None})
+    next_reward = nxt.get("reward") if nxt and is_main else None        # 보상 글에는 금액이 들 수 있어 메인 관리자에게만
+    amount = {"amount": r.get("amount"), "reward": r.get("reward")} if is_main else None
+    here = f"/promo/progress?view=org&p={sel['promo_id']}" + (f"&ym={head['ym']}" if not head["now"] else "")
+    return page(request, ctx, "promo_progress_person.html", cards=cards, sel=sel, shape=shape, head=head, ref=ref.isoformat(), who=who, r=r,
+                crumbs=crumbs, months=months, sum_row=sum_row, alt=alt, each=each, each_ko=STATUS_LIST_KO.get(each),
+                has_alt=bool(pm._r(shape).get("alt_chains")), paired_text=PAIRED_TEXT.get(shape["combine_rule"]) if paired else None,
+                todo=todo, next_reward=next_reward, status=st, status_ko=STATUS_LIST_KO[st], amount=amount, show_amount=is_main,
+                contracts=counted_contracts(con, shape, person), unnamed=r.get("unnamed", 0), here=here,
+                org_q=("&org=" + quote(at["path_key"])) if at and at["org_id"] in ctx["org_ids"] else "",
+                metric_note=metric_note(shape, ref), basis=r.get("basis"), attached=shape is not sel,
+                boost_text=boost_text(shape), assumption=PERSON_ASSUMPTION, org_title=org_labels.title)
+
+
+PERSON_ASSUMPTION = ("개인 화면을 보는 범위는 가정입니다. 메인 관리자는 시상 금액까지, 관리자는 범위 안 설계사의 실적과 센 계약의 보험료까지 봅니다. "
+                     "시상 금액과 수수료는 관리자에게 보이지 않습니다.")
+
+
+def _org_view(request, con, ctx, cards, head, p, org_key, direct, who=None, row_key=None, sort=None, person=None, f=None):
     is_main = ctx["role"] == "main"
     starts = _org_starts(con, ctx)
     sel = next((c for c in cards if c["promo_id"] == p), cards[0] if cards else None)
@@ -539,13 +816,18 @@ def _org_view(request, con, ctx, cards, head, p, org_key, direct, who=None, row_
     if org_key and (not org or org["org_id"] not in ctx["org_ids"]):     # 범위 밖이나 없는 조직
         auth.log(con, ctx["login_id"], "access_denied", "/promo/progress org")
         raise HTTPException(403, "볼 수 없는 조직입니다.")
+    if person is not None:
+        return _person_view(request, con, ctx, cards, head, sel, ref, org if org_key else None, starts, person)
     data, crumbs, people, people_summary, top = None, [], None, None, None
     if sel and org:
         data = org_numbers(con, ctx, sel, ref, org["path_key"], keep_amounts=is_main)
         crumbs = _crumbs(con, org, starts)
         kids = [r for r in data["rows"] if not r["direct"]]
         has_children = bool(con.execute("SELECT 1 FROM org_unit WHERE parent_id=? LIMIT 1", (org["org_id"],)).fetchone())
-        if direct or not has_children:                             # 맨 아래 조직이거나 바로 소속인 사람 줄을 누르면 사람 목록
+        # 본부 화면: 아래 조직이 모두 맨 아래 조직이면 지점별 표 아래에 그 조직 사람 전원을 바로 보인다 (대표님 지시, 11월 17일)
+        has_grand = bool(con.execute("SELECT 1 FROM org_unit c JOIN org_unit g ON g.parent_id=c.org_id WHERE c.parent_id=? LIMIT 1",
+                                     (org["org_id"],)).fetchone())
+        if direct or not has_children or not has_grand:            # 맨 아래 조직, 바로 소속인 사람 줄, 본부 화면이면 사람 목록
             members = [a for r in data["rows"] if (r["direct"] or not direct) for a in r["agent_ids"]]
             people, people_summary = _team_rows(con, ctx, sel, ref, only=members)
         for r in data["rows"]:
@@ -564,18 +846,29 @@ def _org_view(request, con, ctx, cards, head, p, org_key, direct, who=None, row_
                 r["title"] = org_labels.title(r)
             top = {"reward": screen["top_org_reward"], "rows": firsts, "level_ko": org_labels.level_name(firsts[0]) if firsts else "",
                    "by_parent": parent["name"] if parent else None}
-    phases = org_phases(data, sel, ref) if data else []
+    shape = (pm._parent(con, sel) or sel) if sel else None          # 창과 지표를 읽는 프로모션. 딸린 시책이면 부모다
+    phases = org_phases(data, sel, ref, shape) if data else []
     roster = None
     if data and who:
-        roster = who_roster(con, ctx, sel, ref, data, phases, who, row_key)
+        roster = who_roster(con, ctx, sel, ref, data, phases, who, row_key, sort)
         if roster is None:
             raise HTTPException(404, "없는 명단입니다.")
     if sel:
         sel["versions"] = promo_extra.versions(con, sel)
-        sel["chain_text"] = chain_text(sel)
-    return page(request, ctx, "promo_progress_org.html", cards=cards, sel=sel, org=org, data=data, crumbs=crumbs, starts=starts, people=people,
+        sel["chain_text"] = chain_text(shape)
+    mq = f"&ym={head['ym']}" if not head["now"] else ""
+    here = (f"/promo/progress?view=org&p={sel['promo_id']}{mq}&org={quote(org['path_key'])}" + ("&direct=1" if direct else "")) if sel and org else ""
+    pv = people_view(sel, data, people, f, here, shape) if people is not None else None
+    head_c = pm.confirmation(con, sel["promo_id"]) if sel else None  # 확정한 프로모션. 조직 줄의 숫자는 엔진이 아직 다시 계산한 값으로 낸다
+    confirmed = {"by": _who_name(con, head_c["confirmed_by"]) or head_c["confirmed_by"], "at": head_c["confirmed_at"]} if head_c else None
+    if roster:
+        for g in roster["groups"]:
+            for x in g["people"]:
+                x["href"] = f"{here}&person={x['agent_id']}"
+    return page(request, ctx, "promo_progress_org.html", pv=pv, confirmed=confirmed, cards=cards, sel=sel, org=org, data=data, crumbs=crumbs, starts=starts, people=people,
                 summary=people_summary, direct=direct, top=top, gates=gates, ref=ref.isoformat(), show_amount=is_main, head=head,
-                phases=phases, roster=roster, who=who, row_key=row_key, cell_who=cell_who,
+                phases=phases, roster=roster, who=who, row_key=row_key, cell_who=cell_who, shape=shape,
+                man=(lambda v: amount_text(v, shape)), metric_note=metric_note(shape, ref) if shape else "",
                 root_path=_q(con, "SELECT path_key FROM org_unit WHERE parent_id IS NULL ORDER BY org_id LIMIT 1")[0]["path_key"] if is_main else None,
                 assumption=ORG_ASSUMPTION, org_level=org_labels.level_name, org_title=org_labels.title)
 
@@ -851,7 +1144,7 @@ def _rules_view(r) -> dict:
             "exclude_self": bool(r.get("exclude_self")), "drop": list(r.get("drop_statuses") or []), "parent": r.get("parent_promo_id"),
             "levels": ", ".join(r.get("target_levels") or []), "gate_min": r.get("gate_min_achievers") or "", "gate_org": r.get("gate_org_path") or "",
             "ret_min": num_text(r["retention_min"] * 100) if r.get("retention_min") else "", "ret_ref": r.get("retention_ref") or "",
-            "ret_basis": r.get("retention_basis") or "count", "alt": _alt_view(r)}
+            "ret_basis": r.get("retention_basis") or "count", "alts": _alt_views(r)}
 
 
 def _rules_from_form(f, num) -> dict:
@@ -884,24 +1177,38 @@ ALT_SUPPORTED = "alt_chains" in pm.RULE_DEFAULTS                  # 추가안(al
 
 
 def _alt_from_form(f, num) -> dict:
-    """추가안 칸 하나를 엔진의 alt_chains 꼴 [{key, label, windows: {창 순번: 기준}, requires_missed: [창 순번]}] 로 옮긴다.
-    기준을 모두 비우면 추가안을 지운다. 검사는 엔진(pm._clean_alts)이 한다."""
-    if not ALT_SUPPORTED:
+    """추가안 칸을 엔진의 alt_chains 꼴 [{key, label, windows: {창 순번: 기준}, requires_missed: [창 순번], boost, tier_no}] 로 옮긴다.
+    폼은 추가안마다 한 묶음(r_alt_*_{n})이고 묶음 수는 r_alt_n 이다. 열쇠, 가중 인정 여부, 구간 번호를 폼에 실어 그대로 돌려준다.
+    그래야 아무것도 바꾸지 않고 저장했을 때 조건이 그대로다. 기준을 모두 비운 묶음은 뺀다. 모두 빼면 추가안을 지운다.
+    폼에 추가안 칸이 없으면(r_alt_n 이 없으면) 지금 값을 그대로 둔다. 검사는 엔진(pm._clean_alts)이 한다."""
+    n = str(f.get("r_alt_n") or "")
+    if not ALT_SUPPORTED or not n.isdigit():
         return {}
-    wins = {seq: num(f.get(f"r_alt_min_{seq}")) for seq in WINDOW_SEQS}
-    wins = {seq: v for seq, v in wins.items() if v is not None}
-    missed = [int(x) for x in f.getlist("r_alt_missed") if str(x).isdigit()]
-    if not wins:
-        return {"alt_chains": []}
-    return {"alt_chains": [{"key": "alt1", "label": str(f.get("r_alt_label") or "").strip() or None, "windows": wins, "requires_missed": missed}]}
+    chains = []
+    for i in range(1, int(n) + 1):
+        wins = {seq: num(f.get(f"r_alt_min_{i}_{seq}")) for seq in WINDOW_SEQS}
+        wins = {seq: v for seq, v in wins.items() if v is not None}
+        if not wins:
+            continue
+        tier = str(f.get(f"r_alt_tier_{i}") or "").strip()
+        if tier and not tier.isdigit():
+            raise ValueError("추가안의 구간 번호는 숫자로 넣습니다.")
+        chains.append({"key": str(f.get(f"r_alt_key_{i}") or "").strip() or None, "label": str(f.get(f"r_alt_label_{i}") or "").strip() or None,
+                       "windows": wins, "requires_missed": [int(x) for x in f.getlist(f"r_alt_missed_{i}") if str(x).isdigit()],
+                       "boost": f.get(f"r_alt_boost_{i}", "1") != "0", "tier_no": int(tier) if tier else 1})
+    return {"alt_chains": chains}
 
 
-def _alt_view(r) -> dict:
-    chains = r.get("alt_chains") or []
-    c = chains[0] if chains else {}
-    wins = {int(k): v for k, v in (c.get("windows") or {}).items()}
-    return {"label": c.get("label") or "", "missed": [int(x) for x in c.get("requires_missed") or []],
-            "floors": {seq: num_text(wins.get(seq)) for seq in WINDOW_SEQS}}
+def _alt_views(r) -> list:
+    """추가안마다 폼 한 묶음. 맨 끝에 새로 넣을 빈 묶음 하나를 둔다. 열쇠, 가중 인정 여부, 구간 번호를 함께 싣는다."""
+    out = []
+    for c in r.get("alt_chains") or []:
+        wins = {int(k): v for k, v in (c.get("windows") or {}).items()}
+        out.append({"key": c.get("key") or "", "label": c.get("label") or "", "missed": [int(x) for x in c.get("requires_missed") or []],
+                    "floors": {seq: num_text(wins.get(seq)) for seq in WINDOW_SEQS}, "boost": c.get("boost", True) is not False,
+                    "tier_no": int(c.get("tier_no") or 1), "new": False})
+    out.append({"key": "", "label": "", "missed": [], "floors": {seq: "" for seq in WINDOW_SEQS}, "boost": True, "tier_no": 1, "new": True})
+    return out
 
 
 def _tier_form_defaults(con, ctx, line_id=None, promo_id=None):
@@ -1004,6 +1311,12 @@ COPY_FORM_NOTE = ("다음 달 창 날짜를 넣으면 구간, 금액, 조건을 
                   "그 달에 묶인 값(원안 금액, 13회차 유지율 기준일, 가중 인정 날짜 목록)은 옮기지 않습니다 (D-95 가정).")
 
 
+def ko_error(e) -> str:
+    """화면에 보일 오류 글. 엔진의 한국어 안내는 그대로 쓰고, 한글이 없는 글(파이썬의 영어 오류)은 한국어 안내로 바꾼다."""
+    text = str(e)
+    return text if any("가" <= ch <= "힣" for ch in text) else "입력한 값을 읽지 못했습니다. 날짜는 2026-12-16 처럼, 숫자는 숫자만 넣습니다."
+
+
 def _copy_bridge(con, ctx, f) -> RedirectResponse:
     """브릿지 다음 달 복사. 메인 관리자만 쓴다(구간과 조건 입력은 메뉴에서 메인 관리자 화면이고, 여기서도 한 번 더 본다).
     창 날짜는 화면에서 받고 pm.copy_bridge 가 초안을 만든다. 옮기지 않은 값(cleared)은 새 초안 화면에 안내로 보인다."""
@@ -1018,9 +1331,14 @@ def _copy_bridge(con, ctx, f) -> RedirectResponse:
         wins = [(str(f.get(f"c_label_{i}") or "").strip() or None, f.get(f"c_from_{i}") or "", f.get(f"c_to_{i}") or "") for i in range(1, n + 1)]
         if any(not a or not b for _lab, a, b in wins):
             raise ValueError("새 창의 시작일과 종료일을 모두 넣습니다.")
+        for _lab, a, b in wins:                                   # 날짜 꼴을 먼저 본다. 엔진의 영어 오류가 화면에 나오지 않게 한다
+            try:
+                date.fromisoformat(str(a)), date.fromisoformat(str(b))
+            except ValueError as e:
+                raise ValueError("창의 날짜를 읽지 못했습니다. 2026-12-16 처럼 연, 월, 일을 넣습니다.") from e
         res = pm.copy_bridge(con, src, period_ym=ym, windows=wins, by=ctx["login_id"], name=str(f.get("name") or "").strip() or None)
     except ValueError as e:
-        return RedirectResponse(f"{back}&err={quote(str(e))}#copy", status_code=303)
+        return RedirectResponse(f"{back}&err={quote(ko_error(e))}#copy", status_code=303)
     cleared = ",".join(res["cleared"])
     msg = "초안을 만들었습니다. " + res["note"]
     return RedirectResponse(f"/promo/tiers?edit={res['promo_id']}&msg={quote(msg)}" + (f"&cleared={quote(cleared)}" if cleared else ""), status_code=303)
@@ -1038,12 +1356,13 @@ def _copied_from(con, promo_id):
 
 
 def _tier_table(f, prefix, num) -> list:
-    """폼의 구간표 한 장. 기준이 빈 줄은 뺀다. 비율은 퍼센트로 받아 100 으로 나눈다. prefix 는 공통 표 't_', 창별 표 'wt2_' 꼴이다."""
+    """폼의 구간표 한 장. 기준이 빈 줄은 뺀다. 비율은 퍼센트로 받아 100 으로 나눈다. prefix 는 공통 표 't_', 창별 표 'wt2_' 꼴이다.
+    정액의 금액은 비울 수 있다. 시상안에 금액이 그림으로만 있을 때 '원문 확인' 으로 두는 구간이다(브릿지 샘플)."""
     rows = [(num(f.get(f"{prefix}min_{i}")), f.get(f"{prefix}kind_{i}", "fixed"), num(f.get(f"{prefix}value_{i}")), f.get(f"{prefix}label_{i}", "").strip())
             for i in TIER_ROWS if num(f.get(f"{prefix}min_{i}")) is not None]
     for _m, k, v, lab in rows:
-        if k in ("fixed", "rate") and v is None:
-            raise ValueError("정액과 비율 보상에는 값을 넣어야 합니다.")
+        if k == "rate" and v is None:                           # 정액은 금액을 비워 둘 수 있다. 화면에 '원문 확인' 으로 보인다
+            raise ValueError("비율 보상에는 값을 넣어야 합니다.")
         if k in ("travel", "goods") and not lab:
             raise ValueError("여행과 물품 보상에는 이름을 넣어야 합니다.")
     return [(m, k, (v / 100 if k == "rate" else v), lab) for m, k, v, lab in rows]
@@ -1084,6 +1403,8 @@ async def promo_tiers_save(request: Request, ctx: dict = Depends(guard), con=Dep
             if res["changed"]:                                     # 판 이력의 '바뀐 점' 메모. 이번 고치기 줄에 붙는다
                 promo_extra.add_version_note(con, promo_id, f.get("version_note"), by=ctx["login_id"])
             msg = "고쳤습니다. 바뀐 항목 " + str(len(changed)) + "개를 변경 기록에 남겼습니다." if changed else "바뀐 것이 없습니다."
+            if not res["changed"] and str(f.get("version_note") or "").strip():     # 메모는 조건을 고친 판에만 붙는다
+                msg += " 바뀐 내용이 없어 메모를 남기지 않았습니다."
         else:
             new_id = pm.create(con, period_ym=ctx["ym"], source_line_id=int(f["source_line_id"]) if f.get("source_line_id") else None,
                                publish=f.get("action") == "publish", **common)
@@ -1093,7 +1414,7 @@ async def promo_tiers_save(request: Request, ctx: dict = Depends(guard), con=Dep
                 con.commit()
             msg = "프로모션을 " + ("게시했습니다." if f.get("action") == "publish" else "초안으로 저장했습니다.")
     except (ValueError, KeyError) as e:
-        back = f"/promo/tiers?err={quote(str(e))}" + (f"&edit={promo_id}" if promo_id else (f"&line={f.get('source_line_id')}" if f.get("source_line_id") else ""))
+        back = f"/promo/tiers?err={quote(ko_error(e))}" + (f"&edit={promo_id}" if promo_id else (f"&line={f.get('source_line_id')}" if f.get("source_line_id") else ""))
         return RedirectResponse(back, status_code=303)
     return RedirectResponse(f"/promo/publish?msg={quote(msg)}", status_code=303)
 
