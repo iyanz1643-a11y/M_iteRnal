@@ -6,6 +6,8 @@
 <p class="lede">{% if editing %}고친 내용은 바로 반영되고, 고치기 전과 뒤가 변경 기록에 남습니다.{% if d.status == 'published' %} 게시 중인 프로모션이라 설계사 화면도 함께 바뀝니다.{% endif %}
 {% else %}주차, 연계, 여행 시상처럼 금액이 원문의 표나 그림에만 있는 프로모션을 등록합니다.{% endif %}</p>
 {% if err %}<div class="alert" style="margin-top:20px">{{ err }}</div>{% endif %}{% if msg %}<div class="okmsg" style="margin-top:20px">{{ msg }}</div>{% endif %}
+{% if cleared %}<div class="alert" style="margin-top:12px" data-cleared="1">복사하면서 옮기지 않은 값: {{ cleared|join(', ') }}. 이번 달 원문에 맞춰 다시 넣으세요.</div>{% endif %}
+{% if copied_from %}<p class="cap" style="margin-top:12px" data-copied-from="{{ copied_from.promo_id }}">{{ copied_from.name }}에서 복사한 초안입니다.</p>{% endif %}
 {% if d.origin %}<div class="origin" style="margin-top:20px"><b>원문</b> · {{ d.insurer_name }} · {{ d.origin }}</div>{% endif %}
 <form class="wide" method="post" action="/promo/tiers" style="margin-top:24px"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
 <input type="hidden" name="source_line_id" value="{{ d.source_line_id }}"><input type="hidden" name="promo_id" value="{{ d.promo_id }}">
@@ -46,7 +48,7 @@
 <section class="card" id="window-tiers" data-window-tiers><div class="k" style="margin-bottom:4px">창별 구간표</div>
   <div class="cap" style="margin:0 0 14px" data-note="window-tiers">{{ wt_note }} {{ wt_assumption }}</div>
   <label class="toggle-line"><input type="checkbox" name="window_mode" value="1" data-window-mode {{ 'checked' if d.window_mode }}>창마다 다른 문턱을 씁니다</label>
-  <div class="cap" data-window-hint style="margin:6px 0 0">결합 규칙을 창마다 달성으로 고르거나 유형을 연계 시상으로 두면 고를 수 있습니다.</div>
+  <div class="cap" data-window-hint style="margin:6px 0 0">결합 규칙을 창마다 달성이나 조건 묶음(모두, 하나)으로 고르거나 유형을 연계 시상이나 브릿지 시상으로 두면 고를 수 있습니다.</div>
   <div class="wt-tables">
   {% for seq in window_seqs %}{% set rows = d.window_tiers[seq] %}
   <details class="wt" {{ 'open' if d.window_mode and rows[0][0] != '' }}><summary>{{ seq }}번 창의 구간표{% if rows[0][0] != '' %} · {{ rows|selectattr(0)|list|length }}구간{% endif %}</summary>
@@ -58,21 +60,88 @@
   </details>{% endfor %}
   </div></section>
 {% endif %}
+{% set r = d.rules %}
+<section class="card" id="rules" data-rules-form="1"><div class="k" style="margin-bottom:4px">조건 확장</div>
+  <div class="cap" style="margin:0 0 14px" data-note="rules">{{ rules_note }} {{ rules_assumption }}</div>
+  <div class="frow">
+    <label class="f">실적 세기<select name="r_count_basis">{% for k, v in COUNT_BASIS_KO.items() %}<option value="{{ k }}" {{ 'selected' if k == r.count_basis }}>{{ v }}</option>{% endfor %}</select></label>
+    <label class="toggle-line" style="align-self:end"><input type="checkbox" name="r_exclude_self" value="1" {{ 'checked' if r.exclude_self }}>본인 계약 제외. 본인·가족계약 칸이 표시된 계약을 뺍니다</label>
+  </div>
+  <div class="k" style="margin:16px 0 8px;font-size:13px">세지 않을 상태. 철회와 반송은 늘 빠집니다</div>
+  <div class="checks">{% for s in DROPPABLE %}<label><input type="checkbox" name="r_drop" value="{{ s }}" {{ 'checked' if s in r.drop }}>{{ STATUS_KO[s] }}</label>{% endfor %}</div>
+  <div class="frow" style="margin-top:16px">
+    <label class="f">대상 상품 이름에 드는 낱말. 줄마다 하나<textarea name="r_include" placeholder="예: 건강">{{ r.include }}</textarea></label>
+    <label class="f">제외 상품 이름에 드는 낱말. 줄마다 하나<textarea name="r_exclude" placeholder="예: 실손">{{ r.exclude }}</textarea></label>
+  </div>
+  <div class="k" style="margin:16px 0 8px;font-size:13px">가중 인정. 배수를 비우면 쓰지 않습니다</div>
+  <div class="frow">
+    <label class="f">배수<input type="number" name="r_boost_factor" min="1" step="any" value="{{ r.boost_factor }}" placeholder="2"></label>
+    <label class="f">매월 시작일<input type="number" name="r_boost_day_from" min="1" max="31" value="{{ r.boost_day_from }}" placeholder="1"></label>
+    <label class="f">매월 종료일<input type="number" name="r_boost_day_to" min="1" max="31" value="{{ r.boost_day_to }}" placeholder="14"></label>
+    <label class="f">배수를 적용할 한도 (원)<input type="number" name="r_boost_cap" min="0" step="1000" value="{{ r.boost_cap }}" placeholder="없으면 비워 둠"></label>
+  </div>
+  <div class="frow">
+    <label class="f">한도의 범위<select name="r_boost_cap_scope"><option value="contract" {{ 'selected' if r.boost_cap_scope == 'contract' }}>건마다</option><option value="range" {{ 'selected' if r.boost_cap_scope == 'range' }}>그 기간 합계</option></select></label>
+    <label class="f">적용<select name="r_boost_applies"><option value="all" {{ 'selected' if r.boost_applies == 'all' }}>모든 조건</option><option value="each" {{ 'selected' if r.boost_applies == 'each' }}>조건 1(창마다 달성)에만</option></select></label>
+    <label class="f">또는 날짜 목록. 줄마다 시작일~종료일<textarea name="r_boost_ranges" placeholder="2026-10-01~2026-10-14">{{ r.boost_ranges }}</textarea></label>
+  </div>
+  <div class="k" style="margin:16px 0 8px;font-size:13px">딸린 시책. 다른 프로모션 달성자에게 붙는 시책일 때만</div>
+  <div class="frow">
+    <label class="f">부모 프로모션<select name="r_parent"><option value="">없음</option>{% for x in parents %}<option value="{{ x.promo_id }}" {{ 'selected' if x.promo_id == r.parent }}>{{ x.name }} · {{ x.period_ym[:4] }}년 {{ x.period_ym[4:]|int }}월</option>{% endfor %}</select></label>
+    <label class="f">대상 직급 코드. 쉼표로<input class="sm" type="text" name="r_levels" value="{{ r.levels }}" placeholder="비우면 전원"></label>
+    <label class="f">문턱 인원<input type="number" name="r_gate_min" min="1" value="{{ r.gate_min }}" placeholder="15"></label>
+    <label class="f">문턱을 셀 조직<select name="r_gate_org"><option value="">맨 위 조직</option>{% for o in gate_orgs %}<option value="{{ o.path_key }}" {{ 'selected' if o.path_key == r.gate_org }}>{{ o.label }}</option>{% endfor %}</select></label>
+  </div>
+  {% if alt_supported %}<div class="k" style="margin:16px 0 8px;font-size:13px">추가안. 앞 창을 놓친 사람이 다른 기준으로 연속을 채우는 길입니다. 기준을 비우면 쓰지 않습니다</div>
+  <div class="frow" data-alt-form="1">
+    <label class="f">추가안 이름<input class="sm" type="text" name="r_alt_label" value="{{ r.alt.label }}" placeholder="예: 10월 미달성자 추가안"></label>
+    {% for seq in window_seqs %}<label class="f">{{ seq }}번 창 기준<input type="number" name="r_alt_min_{{ seq }}" min="0" step="any" value="{{ r.alt.floors[seq] }}" placeholder="비우면 그 창은 보지 않음"></label>{% endfor %}
+  </div>
+  <div class="checks" style="margin-top:8px"><span class="cap" style="margin:0 8px 0 0">대상: 이 창을 놓친 사람</span>{% for seq in window_seqs %}<label><input type="checkbox" name="r_alt_missed" value="{{ seq }}" {{ 'checked' if seq in r.alt.missed }}>{{ seq }}번 창</label>{% endfor %}</div>
+  {% else %}<div class="cap" style="margin:16px 0 0" data-alt-form="0">추가안(앞 창 미달성자의 다른 기준)은 계산 엔진이 받을 수 있게 되면 여기서 넣습니다.</div>{% endif %}
+  <div class="k" style="margin:16px 0 8px;font-size:13px">13회차 유지율 문턱. 표시만 합니다</div>
+  <div class="frow">
+    <label class="f">문턱 (%)<input type="number" name="r_ret_min" min="0" max="100" step="any" value="{{ r.ret_min }}" placeholder="95"></label>
+    <label class="f">판정 기준일<input type="date" name="r_ret_ref" value="{{ r.ret_ref }}"></label>
+    <label class="f">비율 기준<select name="r_ret_basis"><option value="count" {{ 'selected' if r.ret_basis == 'count' }}>건수</option><option value="amount" {{ 'selected' if r.ret_basis == 'amount' }}>실적</option></select></label>
+  </div></section>
+<section class="card" id="screen-fields"><div class="k" style="margin-bottom:4px">화면 표시</div>
+  <div class="cap" style="margin:0 0 14px">계산에는 쓰지 않습니다. 최다 달성 조직 보상 글은 조직별 진척에서 메인 관리자에게만 보입니다. 고르는 보상은 지난 프로모션에서 달성자마다 기록합니다.</div>
+  <label class="f">최다 달성 조직 보상<input class="sm" type="text" name="top_org_reward" maxlength="100" value="{{ d.screen.top_org_reward or '' }}" placeholder="예: 최다 달성 본부장 행사 동참"></label>
+  <div class="k" style="margin:16px 0 8px;font-size:13px">달성자가 고르는 보상</div>
+  <div class="checks">{% for k, v in CHOICE_KO.items() %}<label><input type="checkbox" name="reward_choices" value="{{ k }}" {{ 'checked' if k in d.screen.reward_choices }}>{{ v }}</label>{% endfor %}</div></section>
 <section class="card"><div class="k" style="margin-bottom:14px">지급과 유의사항</div>
   <div class="frow"><label class="f">지급 시점<select name="pay_timing"><option value="{{ 'unspecified' if d.pay_timing == 'unspecified' }}">표기 없음</option>{% for k in pm.TIMING_KO if pm.timing_ko(k) %}<option value="{{ k }}" {{ 'selected' if k == d.pay_timing }}>{{ pm.timing_ko(k) }}</option>{% endfor %}</select></label></div>
   <label class="toggle-line" style="margin-top:14px"><input type="checkbox" name="inst13_required" value="1" {{ 'checked' if d.inst13_required }}>13회차 유지 계약만 인정합니다</label>
   <div class="cap" style="margin:6px 0 0" data-note="inst13">{{ inst13_note }}{% if d.inst13_from_timing %} 이 프로모션은 지급 시점에 13회차가 들어 있어 이미 13회차 조건이 붙어 있습니다.{% endif %}</div>
   <label class="f" style="margin-top:12px">유의사항<textarea name="caution" placeholder="예: 13회차 유지 시 지급. 현금 대체 불가">{{ d.caution }}</textarea></label></section>
+{% if editing %}<section class="card"><div class="k" style="margin-bottom:4px">바뀐 점</div><div class="cap" style="margin:0 0 10px">고친 내용이 있으면 판 이력에 새 판으로 남고, 여기 적은 말이 바뀐 점으로 보입니다. 금액은 적지 않습니다.</div>
+  <label class="f">바뀐 점 메모<input class="sm" type="text" name="version_note" maxlength="300" placeholder="예: 10월 미달성자 추가안 신설, 여행지 확정"></label></section>{% endif %}
 <div class="actions">{% if editing %}<button class="primary" name="action" value="update">고친 내용 저장</button><a class="second" href="/promo/publish" style="display:inline-grid;place-items:center;height:52px;border-radius:999px;background:var(--card);color:var(--ink);font-weight:600;padding:0 28px">그만두기</a>
 {% else %}<button class="primary" name="action" value="publish">게시하기</button><button class="second" name="action" value="draft">초안으로 저장</button>{% endif %}</div>
 </form>
 <script>
 (function(){var sel=document.querySelector('[data-combine]'),kind=document.querySelector('select[name=kind]'),box=document.querySelector('[data-window-mode]'),hint=document.querySelector('[data-window-hint]');
 if(!sel||!box)return;
-function sync(){var ok=sel.value==='all'||(!sel.value&&kind&&kind.value==='linked');box.disabled=!ok;if(!ok)box.checked=false;if(hint)hint.style.display=ok?'none':'';
+function sync(){var ok=['all','both','either'].indexOf(sel.value)>=0||(!sel.value&&kind&&(kind.value==='linked'||kind.value==='bridge'));box.disabled=!ok;if(!ok)box.checked=false;if(hint)hint.style.display=ok?'none':'';
 document.querySelectorAll('[data-window-tiers] details.wt').forEach(function(x){x.classList.toggle('off',!box.checked)})}
 sel.addEventListener('change',sync);if(kind)kind.addEventListener('change',sync);box.addEventListener('change',sync);sync()})();
 </script>
+{% if is_main and d.promo_id != '' and d.kind == 'bridge' %}{% set nw = d.windows|selectattr(1)|list %}
+<h2 class="sec" id="copy">다음 달로 복사</h2>
+<p class="cap">{{ copy_note }}</p>
+<form method="post" action="/promo/tiers" class="wide" data-copy-form="1"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+<input type="hidden" name="promo_id" value="{{ d.promo_id }}"><input type="hidden" name="action" value="copy_bridge">
+<section class="card"><div class="frow">
+  <label class="f">귀속 월<input type="month" name="period_ym" required></label>
+  <label class="f">새 이름. 비우면 원래 이름 뒤에 복사본<input class="sm" type="text" name="name" value=""></label></div>
+  {% for w in nw %}<div class="frow w3" style="margin-top:10px">
+    <label class="f">{{ loop.index }}번 창의 이름. 비우면 날짜로<input class="sm" type="text" name="c_label_{{ loop.index }}" value="" placeholder="{{ w[0] }} 다음"></label>
+    <label class="f">시작일<input type="date" name="c_from_{{ loop.index }}" required></label>
+    <label class="f">종료일<input type="date" name="c_to_{{ loop.index }}" required></label></div>{% endfor %}
+  <div class="actions" style="margin-top:14px"><button class="primary" type="submit">초안으로 복사</button></div></section>
+</form>
+{% endif %}
 {% if plan %}
 <h2 class="sec" id="original">원안 보상</h2>
 <p class="cap">메인 관리자만 넣고 봅니다. 위의 금액은 적립금을 뺀 배포안으로 보고, 보험사 원안은 여기에 따로 넣습니다. 비워 두면 {{ plan.missing }}으로 보입니다. 넣은 값은 변경 기록에 남습니다.</p>

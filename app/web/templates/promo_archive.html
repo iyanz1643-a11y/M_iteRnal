@@ -124,6 +124,27 @@
 </table></div>
 {% endif %}
 
+{% if choice %}
+<h2 class="sec" id="reward-choice">보상 선택 기록</h2>
+<p class="cap">메인 관리자만 적고 봅니다. 달성자마다 {% if choice.options %}{{ choice.options|map(attribute=1)|join(', ') }} 가운데 고른 보상과 {% endif %}여행 참석 여부를 적습니다. 적은 것은 사번으로 변경 기록에 남습니다.{% if choice.options %} 금을 고르면 참석 여부는 비웁니다.{% endif %}</p>
+{% if choice.cash_note %}<p class="cap" data-note="cash">{{ choice.cash_note }}</p>{% endif %}
+{% if not choice.ready %}<div class="card" data-choice-wait="1"><div class="k">결과를 확정한 뒤에 기록합니다</div><div class="cap">확정 전에는 달성자가 바뀔 수 있습니다.</div></div>
+{% elif not choice.rows %}<div class="card"><div class="k">달성자가 없습니다</div></div>
+{% else %}
+<form method="post" action="/promo/archive" data-choice-form="1"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+<input type="hidden" name="action" value="reward_choice"><input type="hidden" name="promo_id" value="{{ p.promo_id }}"><input type="hidden" name="ym" value="{{ sel_ym }}">
+<div class="card tablecard choice-table"><table>
+<tr><th>성명</th><th class="hide-sm">구간</th>{% if choice.options %}<th>고른 보상</th>{% endif %}<th>참석</th></tr>
+{% for x in choice.rows %}<tr data-choice-code="{{ x.code or '' }}"><td class="strong">{{ x.name or x.code or '-' }}<div class="sm-sub"><span>{{ x.org or '-' }} · {{ x.reward or (x.tier_no ~ '구간') }}</span></div></td>
+<td class="hide-sm">{{ x.reward or (x.tier_no ~ '구간') }}</td>
+{% if choice.options %}<td><select name="choice_{{ x.agent_id }}" aria-label="고른 보상"><option value="">아직</option>{% for k, v in choice.options %}<option value="{{ k }}" {{ 'selected' if x.choice == k }}>{{ v }}</option>{% endfor %}</select></td>{% endif %}
+<td><select name="attend_{{ x.agent_id }}" aria-label="참석 여부"><option value="">아직</option>{% for k, v in choice.ATTEND_KO.items() %}<option value="{{ k }}" {{ 'selected' if x.attend == k }}>{{ v }}</option>{% endfor %}</select></td></tr>{% endfor %}
+</table></div>
+<div class="confirm-acts" style="margin-top:14px"><button class="primary" type="submit">기록 저장</button><span class="cap" style="margin:0">{{ choice.rows|length }}명 가운데 {{ choice.n_done }}명 기록됨</span></div>
+</form>
+{% endif %}
+{% endif %}
+
 {% if sel.i13 %}{% set i13 = sel.i13 %}
 <h2 class="sec" id="inst13">13회차 판정</h2>
 <p class="cap">{{ i13.note }} {{ inst13_assumption }}{% if not i13.money %} 팀원의 금액은 보이지 않고 판정만 보입니다.{% endif %}</p>

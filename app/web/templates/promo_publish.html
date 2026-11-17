@@ -25,7 +25,7 @@
 {% if not cards %}<div class="card"><div class="k">아직 만든 프로모션이 없습니다</div></div>{% endif %}
 <div class="pgrid">{% for p in cards %}{% call pr.card(p) %}
   <form method="post" action="/promo/publish"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="promo_id" value="{{ p.promo_id }}">
-  <a class="ghost" href="/promo/tiers?edit={{ p.promo_id }}">고치기</a>
+  <a class="ghost" href="/promo/tiers?edit={{ p.promo_id }}">고치기</a>{% if p.kind == 'bridge' %}<a class="ghost" href="/promo/tiers?edit={{ p.promo_id }}#copy" data-copy-link="{{ p.promo_id }}">다음 달로 복사</a>{% endif %}
   {% if p.status == 'published' %}<button class="ghost" name="action" value="withdrawn">회수</button>
   {% else %}<button class="ghost" name="action" value="published">게시</button><button class="ghost" name="action" value="delete">지우기</button>{% endif %}</form>
 {% endcall %}{% endfor %}</div>

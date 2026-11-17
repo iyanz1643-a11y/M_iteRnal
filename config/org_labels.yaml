@@ -1,0 +1,13 @@
+# 화면에 보이는 조직 계층 이름. 내부 계층 코드(org_unit.level, config/org_levels.yaml)는 그대로 두고 표시 이름만 바꾼다.
+# 실제 계약현황은 칸 이름과 업무상 뜻이 한 단계씩 어긋난다. 본사=회사, 본부=직할본부, 지점=이터널총괄본부, 센터=예하 본부, 팀=지점이다.
+#
+# rules 의 under 는 조직의 path_key 다. 이름이 아니라 경로로 고른다. 위에서부터 처음 맞는 규칙 하나를 쓴다.
+#   title        그 조직 자체의 표시 이름
+#   depth_labels 그 조직 아래 계층의 이름. 첫째가 바로 아래, 둘째가 그 아래다. 모자라면 org_levels.yaml 의 이름을 쓴다
+#   start        참이면 메인 관리자의 조직별 진척(/promo/progress?view=org)이 이 조직에서 시작한다. 조직이 없으면 맨 위 조직이다
+# 이 파일에 없는 조직은 org_levels.yaml 의 계층 이름을 그대로 쓴다. 샘플 자료(app/samples_promo.py)도 같은 경로로 만든다.
+rules:
+  - under: "hq:직할본부 > branch:이터널"
+    title: 이터널총괄본부
+    depth_labels: [본부, 지점]
+    start: true

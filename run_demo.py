@@ -2,6 +2,7 @@
 
     python run_demo.py      # data/raw/sample/ 에 샘플 파일 생성 → data/demo.db 적재·계산 → 요약 출력
     python run_demo.py <DB 경로> <샘플 폴더>      # 다른 곳에 만들어 볼 때
+    python run_demo.py --promo-now ...            # 미리보기용. 11월을 자료 기준 달로 열어 프로모션 기준일을 오늘로 둔다
 
 샘플 파일은 data/raw/sample 에만 만들고 다시 돌릴 때 그 폴더만 지운다. data/raw 의 다른 폴더는
 연결 어댑터가 보관한 원본(data/raw/<종류>/<월>/)과 화면의 업로드 폴더라서 건드리지 않는다.
@@ -10,7 +11,7 @@ import pathlib
 import shutil
 import sys
 
-from app import db, masters, samples, samples_edu
+from app import db, masters, samples, samples_edu, samples_promo
 from app.engine import career, certification, commission, incentive, payments, performance, ranking, reconcile
 from app.loader import excel_loader, incentive_plan, pdf_incentive
 from app.sales import samples as sales_samples
@@ -27,7 +28,7 @@ def _show_path(p):
         return f"{p}/"
 
 
-def main(path=db.DEFAULT_DB, raw=None):
+def main(path=db.DEFAULT_DB, raw=None, promo_now=False):
     raw = pathlib.Path(raw) if raw else RAW
     con = db.init_db(path)
     info = masters.seed(con)
@@ -111,8 +112,14 @@ def main(path=db.DEFAULT_DB, raw=None):
     print(career.promotion_candidates(con, AS_OF).head(6).to_string(index=False))
     # 실제 원수사 32곳은 샘플 파일을 다 만든 뒤에 넣는다. 샘플 유지율과 정산서가 원수사마다 파일을 만들기 때문이다
     print(f"\n[insurers] 실제 원수사 {masters.seed_real_insurers(con)}곳을 마스터에 넣었습니다 (샘플 원수사 {len(masters.INSURERS)}곳은 그대로)")
+    # 이터널총괄본부 샘플 조직과 진행 중 프로모션, 브릿지. 보험사 이름이 맞아야 해서 실제 원수사 마스터 뒤에 넣는다
+    got = samples_promo.seed(con)
+    print(f"[promotion] 이터널총괄본부 샘플 조직과 흥국화재·DB생명·삼성화재 프로모션과 브릿지 {len(got)}건 (시험용 샘플, 지난 드림+ 는 확정)")
+    if promo_now:                                          # 미리보기에서만. 시험은 10월 기준 그대로 쓴다
+        print(f"[promotion] {samples_promo.open_month(con)} 업적과 랭킹을 계산해 자료 기준 달로 열었습니다 (수수료와 시상은 계산하지 않음)")
     con.close()
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else db.DEFAULT_DB, sys.argv[2] if len(sys.argv) > 2 else None)
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    main(args[0] if args else db.DEFAULT_DB, args[1] if len(args) > 1 else None, promo_now="--promo-now" in sys.argv[1:])

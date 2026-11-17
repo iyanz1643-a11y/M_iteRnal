@@ -50,6 +50,27 @@ S3 확정 기능. 아래 규칙은 열린 결정이 아니면 스스로 정한 �
 - 13회차 유지율 문턱 retention_min, retention_ref: 표시만 한다. retention() 이 사람마다 센 계약의 유지율과 문턱 충족을 낸다 (D-90 가정).
 - 조직별 진척 org_progress(): 조직 하나 바로 아래 조직마다 대상, 가동, 달성, 근접, 미가동 인원과 달성 인원 순위를 낸다.
   사람별 값은 progress() 를 그대로 합친다. 금액 합계는 amounts 에 따로 둔다.
+  창별 단계 phases 는 창마다 기준일로 본 상태(done, open, future)와 그 창의 최저 기준을 채운 인원, 연속이 살아 있는 인원을 낸다.
+  시작 전 창은 인원을 내지 않는다(None). 합산 조건을 채운 인원은 n_sum 이다. 최종 달성 n_achieved 의 뜻은 그대로다.
+- 추가안 alt_chains (11월 17일 2차 변경): 결합 either 에 달성 길을 더한다. 목록의 항목은
+  {key, label, windows: {창 순번: 최저 기준}, requires_missed: [창 순번], boost, tier_no} 다.
+  대상은 requires_missed 의 창을 채우지 못한 사람이다. 채웠는지는 그 창의 창별 구간표와 조건 1의 값(가중 인정값)으로 본다.
+  그 창이 끝나야 대상이 정해진다. 끝나기 전에는 pending 이고, 그 창을 채운 사람은 원안 연속 길로만 본다.
+  대상인 사람이 windows 의 창을 모두 채우면 달성이고 구간은 tier_no(기본 1)다. 끝난 창을 놓치면 추가안은 깨진다(broken).
+  boost 가 참(기본)이면 조건 1과 같은 인정값으로, 거짓이면 합산에 쓰는 값으로 잰다. 추가안에 가중 인정이 걸리는지는 원문 확인이다 (D-96 가정).
+  both 와 그 밖의 결합, 딸린 시책에는 두지 않는다. 결과는 progress() 의 paths.alt, paths.alts 와 org_progress() 의 alt, alts 다.
+
+브릿지 시상 (11월 17일). 이번 달 말 창과 다음 달 초 창을 연속으로 달성해야 받는 시상이다. 유형(kind)은 bridge 다.
+- 계산은 연계 시상과 같다. 창이 둘 이상이고 결합은 all(기본) 또는 both 다. 창은 날짜 순으로 겹치지 않게 둔다. 창이 달을 넘어도 된다.
+  창별 구간표의 단계 기준은 창마다 달라도 되고, 보상은 공통 구간표(없으면 마지막 창의 구간표)에서 읽는다. 정액도 비율도 된다.
+  비율 보상은 연계 시상과 같이 모든 창의 실적 합계에 곱한다 (D-94 가정. 돈 기준이라 확인이 필요하다).
+- 문턱 창 (D-93 가정): 브릿지에서 어떤 창의 구간표가 한 줄뿐이고 보상 구간표가 두 줄 이상이면 그 창은 문턱이다.
+  문턱을 넘으면 그 창은 맨 위 단계로 보고, 단계는 다른 창이 정한다. 포스터의 '창 1 10만, 창 2 10만에서 50만 5단계' 꼴이다.
+- 진행 표시: progress() 결과에 bridge 를 더한다. 지금 열린 창, 그 창에서 다음 단계까지 남은 값, 끝난 창에서 확보한 단계와 상태를 낸다.
+  상태는 BRIDGE_STATE_KO 다. 끝난 창을 놓치면 무효(void)이고 뒤 창은 세어도 받지 못한다. 금액은 모두 예상이다.
+- 다음 달 복사 copy_bridge(): 브릿지 하나를 새 창 날짜로 옮긴 초안을 만든다. 날짜는 부르는 쪽이 넣고 엔진은 달력을 짐작하지 않는다.
+  구간, 금액, 조건은 그대로 옮기고 상태는 초안이다. 원본 번호는 promotion.copied_from 과 변경 기록(promotion_copy)에 남는다.
+  원안(original_value)과 시상안 줄 번호, 13회차 유지율 기준일, 가중 인정 날짜 목록처럼 그 달에 묶인 값은 옮기지 않는다 (D-95 가정).
 """
 import calendar
 import json
@@ -60,7 +81,11 @@ from app import db
 from app.engine import classify, orgs, persist
 
 KIND_KO = {"rate": "정률 시책", "weekly": "주차 시상", "linked": "연계 시상", "monthly": "월 구간 시상",
-           "travel": "여행 시상", "activity": "가동 시상", "membership": "멤버십"}
+           "travel": "여행 시상", "activity": "가동 시상", "membership": "멤버십", "bridge": "브릿지 시상"}
+BRIDGE = "bridge"                                             # 월간 브릿지 시상. 모듈 설명의 '브릿지 시상'
+BRIDGE_RULES = ("all", "both")                                # 브릿지는 창마다 달성해야 한다
+BRIDGE_STATE_KO = {"before": "시작 전", "open": "진행 중", "waiting": "다음 창 시작 전", "achieved": "연속 달성",
+                   "void": "앞 창 미달성으로 무효", "missed": "미달성"}
 METRIC_KO = {"premium_monthly": "보험료", "converted_premium": "인정보험료", "policy_count": "건수"}
 METRIC_UNIT = {"premium_monthly": "원", "converted_premium": "원", "policy_count": "건"}
 BASIS_KO = {"receipt_date": "영수일자", "contract_date": "계약일자", "application_date": "청약일자"}
@@ -76,7 +101,9 @@ DROPPABLE = ("applied", "inforce", "lapsed", "cancelled", "matured")
 NAME_SQL = "COALESCE(pr.product_name, c.product_code_raw)"      # 상품 이름. 뷰 v_contract_extract 의 '상품' 과 같은 식
 RULE_DEFAULTS = {"count_basis": "issued", "boost": None, "product_include": [], "product_exclude": [], "exclude_self": False,
                  "drop_statuses": [], "parent_promo_id": None, "target_levels": [], "gate_min_achievers": None, "gate_org_path": None,
-                 "retention_min": None, "retention_ref": None, "retention_basis": "count"}
+                 "retention_min": None, "retention_ref": None, "retention_basis": "count", "alt_chains": []}
+ALT_LABEL = "추가안"
+ALT_KEYS = ("key", "label", "windows", "requires_missed", "boost", "tier_no")
 REWARD_KO = {"fixed": "정액", "rate": "실적의 비율", "travel": "여행", "goods": "물품"}
 TIMING_KO = {"next_month": "익월", "inst13": "13회차", "next_month+inst13": "익월과 13회차", "year1": "1차년", "year2": "2차년",
              "mixed": "혼합", "unspecified": "표기 없음"}
@@ -137,6 +164,11 @@ def _clean_tiers(tiers) -> list:
     return sorted((float(m), k, (float(v) if v not in (None, "") else None), (lab or None)) for m, k, v, lab in tiers)
 
 
+def _gate_table(kind, table, pay) -> bool:
+    """브릿지에서 문턱인 창별 구간표인가 (D-93 가정). 한 줄뿐이고 보상 구간표 pay 가 두 줄 이상이다."""
+    return kind == BRIDGE and len(table or ()) == 1 and len(pay or ()) > 1
+
+
 def _normalize(kind, windows, tiers, combine_rule, metric, date_basis, categories, window_tiers=None):
     """등록과 고치기가 함께 쓰는 검사. window_tiers 는 {창 순번(1부터): 구간표}다. 돌려줄 때 비지 않은 표만 남긴다."""
     if kind not in KIND_KO or metric not in METRIC_KO or date_basis not in BASIS_KO:
@@ -147,9 +179,14 @@ def _normalize(kind, windows, tiers, combine_rule, metric, date_basis, categorie
     for l, f, t in windows:
         if date.fromisoformat(f) > date.fromisoformat(t):
             raise ValueError(f"기간 창 '{l}' 의 시작일이 종료일보다 늦습니다.")
-    combine_rule = combine_rule or ("all" if kind == "linked" else ("sum" if len(windows) > 1 else "single"))
+    combine_rule = combine_rule or ("all" if kind in ("linked", BRIDGE) else ("sum" if len(windows) > 1 else "single"))
     if combine_rule not in COMBINE_KO or (combine_rule == "single" and len(windows) > 1):
         raise ValueError("창이 둘 이상이면 결합 규칙을 정해야 합니다.")
+    if kind == BRIDGE:
+        if len(windows) < 2 or combine_rule not in BRIDGE_RULES:
+            raise ValueError("브릿지 시상은 창이 둘 이상이고 창마다 달성하는 결합이어야 합니다.")
+        if any(date.fromisoformat(a[2]) >= date.fromisoformat(b[1]) for a, b in zip(windows, windows[1:])):
+            raise ValueError("브릿지 시상의 창은 날짜 순으로 겹치지 않게 넣습니다.")
     if combine_rule in PAIRED:
         if len(windows) < 2 or kind == "rate":
             raise ValueError("조건을 묶는 결합은 창이 둘 이상인 구간 시상에서만 씁니다.")
@@ -176,7 +213,7 @@ def _normalize(kind, windows, tiers, combine_rule, metric, date_basis, categorie
             raise ValueError("창별 구간표는 창마다 달성하는 결합 규칙에서만 씁니다.")
         elif not tiers and len(wt) != len(windows):
             raise ValueError("공통 구간표가 없으면 창마다 구간표가 있어야 합니다.")
-        elif len({len(t) for t in [tiers, *wt.values()] if t}) != 1:
+        elif len({len(t) for t in [tiers, *[x for x in wt.values() if not _gate_table(kind, x, tiers or wt[max(wt)])]] if t}) > 1:
             raise ValueError("창별 구간표와 공통 구간표의 구간 수가 같아야 합니다.")
     if kind != "rate" and not tiers and not wt:
         raise ValueError("구간표가 비어 있습니다.")
@@ -201,7 +238,7 @@ def _write_children(con, pid, windows, tiers, window_tiers=None):
 
 # ---------------------------------------------------------------- 조건 확장 (모듈 설명의 '조건 확장')
 RULE_COLS = ("count_basis", "boost_json", "product_include", "product_exclude", "exclude_self", "drop_statuses", "parent_promo_id",
-             "target_levels", "gate_min_achievers", "gate_org_path", "retention_min", "retention_ref", "retention_basis")
+             "target_levels", "gate_min_achievers", "gate_org_path", "retention_min", "retention_ref", "retention_basis", "alt_chains_json")
 
 
 def _names(v) -> list:
@@ -256,8 +293,54 @@ def _clean_boost(b, metric, combine_rule):
     return out
 
 
-def _clean_rules(con, rules, *, kind, metric, date_basis, combine_rule, promo_id=None) -> dict:
-    """조건 확장 값을 검사해 RULE_DEFAULTS 꼴로 돌려준다. 준 키만 바꾸고 나머지는 기본값이다."""
+def _clean_alts(chains, *, combine_rule, boost, parent, n_windows=None, n_tiers=None) -> list:
+    """추가안 목록을 검사해 [{key, label, windows: {창 순번: 최저 기준}, requires_missed: [창 순번], boost, tier_no}] 로 돌려준다.
+    n_windows 와 n_tiers 는 창 수와 공통 구간표의 구간 수다. 주면 창 순번과 구간 번호가 그 안인지 본다."""
+    if not chains:
+        return []
+    if combine_rule != "either":
+        raise ValueError("추가안은 창마다 달성과 합산 가운데 하나만 채우는 결합에서만 씁니다.")
+    if parent:
+        raise ValueError("딸린 시책에는 추가안을 두지 않습니다. 부모 프로모션에 둡니다.")
+    out, seen = [], set()
+    for i, c in enumerate(chains, start=1):
+        if not isinstance(c, dict) or set(c) - set(ALT_KEYS):
+            raise ValueError("추가안의 칸이 맞지 않습니다.")
+        key = str(c.get("key") or f"alt{i}").strip()
+        if key in seen:
+            raise ValueError("추가안의 열쇠가 겹칩니다.")
+        seen.add(key)
+        try:
+            wins = {int(k): float(v) for k, v in (c.get("windows") or {}).items() if v not in (None, "")}
+            missed = sorted({int(x) for x in (c.get("requires_missed") or ())})
+            tier_no = int(c.get("tier_no") or 1)
+        except (TypeError, ValueError, AttributeError) as e:
+            raise ValueError("추가안의 창 순번과 기준은 숫자로 넣습니다.") from e
+        if not wins or any(v <= 0 for v in wins.values()):
+            raise ValueError("추가안은 창마다 0보다 큰 기준이 하나 이상 있어야 합니다.")
+        if n_windows is not None and any(not 1 <= x <= n_windows for x in [*wins, *missed]):
+            raise ValueError("추가안에 없는 창이 있습니다.")
+        if tier_no < 1 or (n_tiers is not None and tier_no > n_tiers):
+            raise ValueError("추가안의 구간 번호가 공통 구간표에 없습니다.")
+        use_boost = True if c.get("boost") is None else bool(c["boost"])
+        if not use_boost and boost and boost["applies_to"] == "all":
+            raise ValueError("가중 인정을 모든 조건에 쓰면 추가안에서만 끌 수 없습니다.")
+        out.append({"key": key, "label": str(c.get("label") or "").strip() or ALT_LABEL, "windows": dict(sorted(wins.items())),
+                    "requires_missed": missed, "boost": use_boost, "tier_no": tier_no})
+    return out
+
+
+def _alts(p) -> list:
+    """프로모션의 추가안 목록. 창 순번을 숫자로 맞춘다. JSON 을 거치면 글자가 되기 때문이다. 없으면 빈 목록이다."""
+    return [{"key": c.get("key") or f"alt{i}", "label": c.get("label") or ALT_LABEL,
+             "windows": {int(k): float(v) for k, v in (c.get("windows") or {}).items()},
+             "requires_missed": [int(x) for x in c.get("requires_missed") or ()], "boost": c.get("boost", True) is not False,
+             "tier_no": int(c.get("tier_no") or 1)} for i, c in enumerate(_r(p).get("alt_chains") or (), start=1)]
+
+
+def _clean_rules(con, rules, *, kind, metric, date_basis, combine_rule, promo_id=None, n_windows=None, n_tiers=None) -> dict:
+    """조건 확장 값을 검사해 RULE_DEFAULTS 꼴로 돌려준다. 준 키만 바꾸고 나머지는 기본값이다.
+    n_windows 와 n_tiers 는 추가안의 창 순번과 구간 번호를 검사할 때 쓴다."""
     unknown = set(rules or {}) - set(RULE_DEFAULTS)
     if unknown:
         raise ValueError(f"모르는 조건입니다: {', '.join(sorted(unknown))}")
@@ -306,6 +389,8 @@ def _clean_rules(con, rules, *, kind, metric, date_basis, combine_rule, promo_id
     r["retention_ref"] = r["retention_ref"] or None
     if r["retention_basis"] not in ("count", "amount"):
         raise ValueError("유지율 기준이 맞지 않습니다.")
+    r["alt_chains"] = _clean_alts(r.get("alt_chains"), combine_rule=combine_rule, boost=r["boost"], parent=r["parent_promo_id"],
+                                  n_windows=n_windows, n_tiers=n_tiers)
     return r
 
 
@@ -314,7 +399,8 @@ def _rules_row(r) -> tuple:
             json.dumps(r["product_include"], ensure_ascii=False) if r["product_include"] else None,
             json.dumps(r["product_exclude"], ensure_ascii=False) if r["product_exclude"] else None,
             1 if r["exclude_self"] else 0, ",".join(r["drop_statuses"]) or None, r["parent_promo_id"], ",".join(r["target_levels"]) or None,
-            r["gate_min_achievers"], r["gate_org_path"], r["retention_min"], r["retention_ref"], r["retention_basis"])
+            r["gate_min_achievers"], r["gate_org_path"], r["retention_min"], r["retention_ref"], r["retention_basis"],
+            json.dumps(r["alt_chains"], ensure_ascii=False) if r.get("alt_chains") else None)
 
 
 def _write_rules(con, pid, r) -> None:
@@ -330,7 +416,9 @@ def _read_rules(row: dict) -> dict:
             "exclude_self": bool(row["exclude_self"]), "drop_statuses": row["drop_statuses"].split(",") if row["drop_statuses"] else [],
             "parent_promo_id": row["parent_promo_id"], "target_levels": row["target_levels"].split(",") if row["target_levels"] else [],
             "gate_min_achievers": row["gate_min_achievers"], "gate_org_path": row["gate_org_path"],
-            "retention_min": row["retention_min"], "retention_ref": row["retention_ref"], "retention_basis": row["retention_basis"] or "count"}
+            "retention_min": row["retention_min"], "retention_ref": row["retention_ref"], "retention_basis": row["retention_basis"] or "count",
+            "alt_chains": [{**c, "windows": {int(k): v for k, v in c["windows"].items()}}               # 칸이 없는 오래된 DB 는 빈 목록
+                           for c in (json.loads(row["alt_chains_json"]) if row.get("alt_chains_json") else [])]}
 
 
 def create(con, *, period_ym, name, kind, windows, tiers=(), rates=(), by, recipient_level="fc", insurer_id=None, insurer_name=None,
@@ -341,9 +429,11 @@ def create(con, *, period_ym, name, kind, windows, tiers=(), rates=(), by, recip
     window_tiers: {창 순번: [(min_value, reward_kind, reward_value, reward_label)]} 창별 구간표. 모듈 설명의 규칙이다.
     inst13_required: 13회차 유지 계약만 인정하는 조건. 지급 시점에 inst13 이 들면 이 값과 상관없이 13회차 조건이 있다.
     rules: 조건 확장 {count_basis, boost, product_include, product_exclude, exclude_self, drop_statuses, parent_promo_id,
-           target_levels, gate_min_achievers, gate_org_path, retention_min, retention_ref, retention_basis}. 준 키만 쓴다."""
+           target_levels, gate_min_achievers, gate_org_path, retention_min, retention_ref, retention_basis, alt_chains}. 준 키만 쓴다.
+           alt_chains 는 [{key, label, windows: {창 순번: 최저 기준}, requires_missed: [창 순번], boost, tier_no}] 다. 모듈 설명의 추가안이다."""
     windows, tiers, combine_rule, categories, wt = _normalize(kind, windows, tiers, combine_rule, metric, date_basis, categories, window_tiers)
-    clean = _clean_rules(con, rules, kind=kind, metric=metric, date_basis=date_basis, combine_rule=combine_rule) if rules else None
+    clean = _clean_rules(con, rules, kind=kind, metric=metric, date_basis=date_basis, combine_rule=combine_rule,
+                         n_windows=len(windows), n_tiers=len(tiers)) if rules else None
     if wt or inst13_required or clean:
         ensure(con)
     cur = con.execute(
@@ -399,7 +489,8 @@ def update(con, promo_id, *, by, name, windows, tiers=(), kind=None, insurer_id=
     merged = {**_r(before), **(rules or {})}
     clean = None
     if rules or merged != RULE_DEFAULTS:
-        clean = _clean_rules(con, merged, kind=kind, metric=metric, date_basis=date_basis, combine_rule=combine_rule, promo_id=promo_id)
+        clean = _clean_rules(con, merged, kind=kind, metric=metric, date_basis=date_basis, combine_rule=combine_rule, promo_id=promo_id,
+                             n_windows=len(windows), n_tiers=len(tiers))
     if wt or inst13_required is not None or clean:
         ensure(con)
     if clean:
@@ -499,6 +590,18 @@ def tiers_for(p, w) -> list:
     return p.get("window_tiers", {}).get(w["seq"]) or p["tiers"]
 
 
+def is_gate(p, w) -> bool:
+    """이 창이 브릿지의 문턱 창인가. 문턱을 넘으면 그 창은 맨 위 단계로 본다 (D-93 가정)."""
+    return _gate_table(p["kind"], p.get("window_tiers", {}).get(w["seq"]), p["tiers"])
+
+
+def _reach(p, w) -> int:
+    """창 하나에서 닿은 단계 번호. 못 닿으면 0, 문턱 창을 넘으면 보상 구간표의 맨 위 단계다."""
+    if not w["tier"]:
+        return 0
+    return p["tiers"][-1]["tier_no"] if w.get("gate") else w["tier"]["tier_no"]
+
+
 def has_inst13(p) -> bool:
     """13회차 유지 조건이 있는가. 13회차 유지 계약만 인정하는 조건(inst13_required)이 켜졌거나 지급 시점에 13회차가 든다."""
     return bool(p.get("inst13_required")) or "inst13" in (p.get("pay_timing") or "") or any("inst13" in (r["pay_timing"] or "") for r in p.get("rates", ()))
@@ -544,7 +647,9 @@ def fmt_value(v, p) -> str:
 
 def reward_text(t, value=None) -> str:
     if t["reward_kind"] == "fixed":
-        return f"{int(t['reward_value'] or 0):,}원"
+        if t["reward_value"] is None:                              # 금액이 원문 그림에만 있으면 지어내지 않는다
+            return t["reward_label"] or MISSING_ORIGINAL
+        return f"{int(t['reward_value']):,}원"
     if t["reward_kind"] == "rate":
         return f"{(t['reward_value'] or 0) * 100:g}%"
     return t["reward_label"] or REWARD_KO[t["reward_kind"]]
@@ -723,7 +828,8 @@ def _judge(p, per_window, states, basis, plain=None) -> dict:
     창별 구간표가 있으면 창마다 그 창의 표로 구간을 정하고, 낮은 쪽 구간 번호의 보상을 p["tiers"] 에서 읽는다."""
     plain = list(per_window) if plain is None else list(plain)
     ended_all = all(s["state"] == "ended" for s in states)
-    wins = [{**w, **s, "value": v, "plain": pv, "tier": (_tier_of(tiers_for(p, w), v) if p["combine_rule"] in EACH_RULES else None)}
+    wins = [{**w, **s, "value": v, "plain": pv, "tier": (_tier_of(tiers_for(p, w), v) if p["combine_rule"] in EACH_RULES else None),
+             "gate": is_gate(p, w)}
             for w, s, v, pv in zip(p["windows"], states, per_window, plain)]
     total = sum(plain)
     res = {"windows": wins, "value": total, "tier": None, "next": None, "reward": None, "amount": None, "status": "in_progress", "broken": False, "capped": False,
@@ -742,7 +848,7 @@ def _judge(p, per_window, states, basis, plain=None) -> dict:
         if p["combine_rule"] == "all":
             done = [w for w in wins if w["state"] == "ended"]
             res["broken"] = any(w["tier"] is None for w in done)          # 끝난 창을 놓치면 뒤 창은 무효다
-            reached = [w["tier"]["tier_no"] if w["tier"] else 0 for w in wins]
+            reached = [_reach(p, w) for w in wins]
             low = min(reached)
             tier = next((t for t in p["tiers"] if t["tier_no"] == low), None) if low else None
             focus = next((w for w in wins if w["state"] == "active"), wins[-1])
@@ -753,7 +859,7 @@ def _judge(p, per_window, states, basis, plain=None) -> dict:
             scale = p["tiers"]
         nxt = next((t for t in scale if t["min_value"] > base), None)
         if p["combine_rule"] == "all":
-            closed = [w["tier"]["tier_no"] if w["tier"] else 0 for w in wins if w["state"] == "ended"]
+            closed = [_reach(p, w) for w in wins if w["state"] == "ended"]
             cap = min(closed) if closed else None                         # 끝난 창의 구간보다 위로는 올라갈 수 없다
             if cap is not None and (nxt is None or nxt["tier_no"] > cap):
                 nxt = None
@@ -761,6 +867,8 @@ def _judge(p, per_window, states, basis, plain=None) -> dict:
         if nxt and not res["broken"]:
             pay = next((t for t in p["tiers"] if t["tier_no"] == nxt["tier_no"]), nxt)     # 보상은 보상 구간표에서 읽는다
             res["next"] = {"tier_no": nxt["tier_no"], "min_value": nxt["min_value"], "gap": nxt["min_value"] - base, "reward": reward_text(pay)}
+            if p["combine_rule"] == "all" and focus["gate"]:                    # 문턱 창의 다음은 단계가 아니라 문턱이다 (D-93)
+                res["next"].update(reward=GATE_TEXT, gate=True)
         top = scale[-1]["min_value"] if scale else 0
         res["pct"] = min(base / top * 100, 100) if top else 0
     res["tier"] = tier
@@ -776,23 +884,30 @@ def _judge(p, per_window, states, basis, plain=None) -> dict:
         res["status"] = "achieved" if tier else "missed"
     else:
         res["status"] = "achieved" if tier and not res["next"] else "in_progress"
+    if p["kind"] == BRIDGE:
+        res["bridge"] = bridge_view(p, res)
     return res
 
 
 def _judge_paired(p, wins, total, res):
     """결합 both, either. 조건 1은 창마다 창별 구간표(all 과 같은 규칙), 조건 2는 합계를 공통 구간표에 대입한다.
     both 는 두 조건의 구간 번호 가운데 낮은 쪽, either 는 높은 쪽을 쓴다. 보상은 공통 구간표에서 읽는다.
-    다음 구간은 both 면 뒤처진 조건에서, either 면 남은 비율이 작은 조건에서 고른다. res 를 채우고 구간을 돌려준다."""
+    다음 구간은 both 면 뒤처진 조건에서, either 면 남은 비율이 작은 조건에서 고른다. res 를 채우고 구간을 돌려준다.
+    either 에 추가안이 있으면 세 번째 길이다. 추가안을 채우면 그 항목의 구간 번호로 달성이고, 다음 구간도 열려 있는 길 가운데 남은 비율이 작은 것이다.
+    추가안이 다음이면 next 에 path=alt, key(추가안 열쇠), window_seq(그 창 순번)가 붙고 min_value 와 gap 은 그 창의 추가안 기준으로 잰 값이다.
+    res["paths"] 는 {each, sum, alt, alts} 다. alt 는 그 사람에게 걸리는 추가안 하나(없으면 None), alts 는 추가안 전부다 (_alt_paths)."""
     both = p["combine_rule"] == "both"
     done = [w for w in wins if w["state"] == "ended"]
-    each_no = min(w["tier"]["tier_no"] if w["tier"] else 0 for w in wins)
+    each_no = min(_reach(p, w) for w in wins)
     each_broken = any(w["tier"] is None for w in done)
-    closed = [w["tier"]["tier_no"] if w["tier"] else 0 for w in done]
+    closed = [_reach(p, w) for w in done]
     each_cap = min(closed) if closed else None
     focus = next((w for w in wins if w["state"] == "active"), wins[-1])
     hit = _tier_of(p["tiers"], total)
     sum_no = hit["tier_no"] if hit else 0
-    no = min(each_no, sum_no) if both else max(each_no, sum_no)
+    alts = [] if both else _alt_paths(p, wins)
+    alt_no = max((c["tier_no"] for c in alts if c["achieved"]), default=0)
+    no = min(each_no, sum_no) if both else max(each_no, sum_no, alt_no)
     tier = next((t for t in p["tiers"] if t["tier_no"] == no), None) if no else None
     scale = tiers_for(p, focus)
     n_each = None if each_broken else next((t for t in scale if t["min_value"] > focus["value"]), None)
@@ -802,6 +917,13 @@ def _judge_paired(p, wins, total, res):
     cands = []
     if n_each:
         cands.append({"path": "each", "t": n_each, "base": focus["value"], "no": each_no})
+    # 대상이고 깨지지 않은 추가안은 진행 중인 창(없으면 다음 창)을 아직 못 채웠을 때 다음 후보다. 남은 비율이 같으면 합산보다 앞이다
+    for c in alts:
+        live = [x for x in c["windows"] if x["state"] != "ended"]
+        w = next((x for x in live if x["state"] == "active"), live[0] if live else None)
+        if w and not w["met"] and c["eligible"] and not c["broken"]:
+            cands.append({"path": "alt", "t": {"tier_no": c["tier_no"], "min_value": w["min_value"]}, "base": w["value"], "no": alt_no,
+                          "key": c["key"], "seq": w["seq"]})
     if n_sum:
         cands.append({"path": "sum", "t": n_sum, "base": total, "no": sum_no})
     if both:
@@ -818,17 +940,164 @@ def _judge_paired(p, wins, total, res):
         pay = next((t for t in p["tiers"] if t["tier_no"] == pick["t"]["tier_no"]), pick["t"])
         res["next"] = {"tier_no": pick["t"]["tier_no"], "min_value": pick["t"]["min_value"], "gap": pick["t"]["min_value"] - pick["base"],
                        "reward": reward_text(pay), "path": pick["path"]}
+        if pick["path"] == "each" and focus["gate"]:
+            res["next"].update(reward=GATE_TEXT, gate=True)
+        if pick["path"] == "alt":
+            res["next"].update(key=pick["key"], window_seq=pick["seq"])
     each_top = scale[-1]["min_value"] if scale else 0
     sum_top = p["tiers"][-1]["min_value"] if p["tiers"] else 0
     each_pct = min(focus["value"] / each_top * 100, 100) if each_top else 0
     sum_pct = min(total / sum_top * 100, 100) if sum_top else 0
-    res["pct"] = min(each_pct, sum_pct) if both else max(each_pct, sum_pct)
+    alt_pct = max((c["pct"] for c in alts if c["eligible"] and not c["broken"]), default=0)
+    res["pct"] = min(each_pct, sum_pct) if both else max(each_pct, sum_pct, alt_pct)
+    main = next((c for c in alts if c["achieved"]), None) or next((c for c in alts if c["eligible"]), None) \
+        or next((c for c in alts if c["pending"]), None) or (alts[0] if alts else None)
     res["paths"] = {"each": {"tier_no": each_no or None, "broken": each_broken, "value": focus["value"], "pct": each_pct},
-                    "sum": {"tier_no": sum_no or None, "broken": False, "value": total, "pct": sum_pct}}
+                    "sum": {"tier_no": sum_no or None, "broken": False, "value": total, "pct": sum_pct},
+                    "alt": main, "alts": alts}
     return tier
 
 
+def _alt_paths(p, wins) -> list:
+    """추가안마다 한 사람의 진행. wins 는 _judge() 의 창 줄이다. 모듈 설명의 추가안 규칙이다 (D-96 가정).
+    [{key, label, eligible, pending, broken, achieved, tier_no, boost, pct, windows: [{seq, label, min_value, value, met, state}]}]
+    eligible 은 requires_missed 의 창이 모두 끝났고 하나도 채우지 못했을 때만 참이다. 아직 끝나지 않은 창이 있고 채운 창이 없으면 pending 이다.
+    value 는 boost 가 참이면 조건 1의 값(인정값), 거짓이면 합산에 쓰는 값이다. state 는 window_state() 의 ended, active, upcoming 이다.
+    pct 는 아직 못 채운 첫 창의 진행률이고 모두 채웠으면 100 이다."""
+    by_seq = {w["seq"]: w for w in wins}
+    out = []
+    for c in _alts(p):
+        need = [by_seq[s] for s in c["requires_missed"] if s in by_seq]
+        hit = any(w["tier"] for w in need)
+        pending = not hit and any(w["state"] != "ended" for w in need)
+        rows = []
+        for seq, m in sorted(c["windows"].items()):
+            w = by_seq.get(seq)
+            v = (w["value"] if c["boost"] else w["plain"]) if w else 0.0
+            rows.append({"seq": seq, "label": w["label"] if w else None, "min_value": m, "value": v, "met": v >= m,
+                         "state": w["state"] if w else "ended"})
+        todo = next((x for x in rows if not x["met"]), None)
+        out.append({"key": c["key"], "label": c["label"], "eligible": not hit and not pending, "pending": pending,
+                    "broken": any(x["state"] == "ended" and not x["met"] for x in rows),
+                    "achieved": not hit and not pending and todo is None, "tier_no": c["tier_no"], "boost": c["boost"],
+                    "pct": min(todo["value"] / todo["min_value"] * 100, 100) if todo else 100.0, "windows": rows})
+    return out
+
+
 # ---------------------------------------------------------------- 딸린 시책 (모듈 설명의 '조건 확장')
+# ---------------------------------------------------------------- 브릿지 시상 (모듈 설명의 '브릿지 시상')
+GATE_TEXT = "문턱 통과"
+BRIDGE_NOTE = "브릿지 시상은 창마다 달성해야 받습니다. 앞 창을 놓치면 뒤 창 실적은 시상에 들지 않습니다. 단계와 금액은 예상입니다."
+COPY_NOTE = "지난 브릿지 시상을 옮긴 초안입니다. 이번 달 포스터와 날짜, 구간, 금액을 맞춰 본 뒤 게시하세요."
+
+
+def bridge_view(p, res) -> dict:
+    """브릿지 진행 표시에 쓰는 값. _judge() 결과 res 를 받아 지금 열린 창(없으면 다음 창), 그 창에서 다음 단계까지 남은 값,
+    끝난 창에서 확보한 단계, 상태를 낸다. 단계와 금액은 모두 예상이다 (estimate).
+    stage: before(첫 창 전), open(창이 열림), between(창 사이), after(모든 창이 끝남)
+    state: BRIDGE_STATE_KO 의 열쇠. 끝난 창을 놓쳤으면 void 다."""
+    wins = res["windows"]
+    open_w = next((w for w in wins if w["state"] == "active"), None)
+    coming = next((w for w in wins if w["state"] == "upcoming"), None)
+    closed = [w for w in wins if w["state"] == "ended"]
+    stage = "open" if open_w else ("before" if not closed else ("between" if coming else "after"))
+    secured_no = min(_reach(p, w) for w in closed) if closed else None
+    secured = next((t for t in p["tiers"] if t["tier_no"] == secured_no), None) if secured_no else None
+    if res["broken"]:
+        state = "void"
+    elif stage == "after":
+        state = "achieved" if res["tier"] else "missed"
+    else:
+        state = {"open": "open", "between": "waiting", "before": "before"}[stage]
+    target = open_w or coming
+    nxt, capped = None, False
+    if target and not res["broken"]:
+        scale = tiers_for(p, target)
+        up = next((t for t in scale if t["min_value"] > target["value"]), None)
+        if up and not target["gate"] and secured_no is not None and up["tier_no"] > secured_no:
+            up = None                                                 # 앞 창에서 확보한 단계보다 위로는 오르지 않는다
+        top_no = p["tiers"][-1]["tier_no"] if p["tiers"] else 0
+        capped = (not up and not target["gate"] and secured_no is not None and 0 < secured_no < top_no
+                  and _reach(p, target) >= secured_no)
+        if up:
+            pay = next((t for t in p["tiers"] if t["tier_no"] == up["tier_no"]), up)
+            nxt = {"tier_no": up["tier_no"], "min_value": up["min_value"], "gap": up["min_value"] - target["value"],
+                   "reward": GATE_TEXT if target["gate"] else reward_text(pay), "gate": target["gate"]}
+    return {"stage": stage, "state": state, "state_ko": BRIDGE_STATE_KO[state],
+            "open_seq": open_w["seq"] if open_w else None, "open_label": open_w["label"] if open_w else None,
+            "days_left": open_w["days_left"] if open_w else None,
+            "target_seq": target["seq"] if target else None, "target_label": target["label"] if target else None,
+            "target_from": target["date_from"] if target else None, "target_value": target["value"] if target else None,
+            "target_tier_no": (_reach(p, target) or None) if target else None, "next": nxt, "capped": capped,
+            "secured_tier_no": secured_no, "secured_reward": reward_text(secured) if secured else None,
+            "secured_amount": secured["reward_value"] if secured and secured["reward_kind"] == "fixed" else None,
+            "windows": [{"seq": w["seq"], "label": w["label"], "date_from": w["date_from"], "date_to": w["date_to"], "state": w["state"],
+                         "value": w["value"], "tier_no": _reach(p, w) or None, "gate": w["gate"]} for w in wins],
+            "estimate": True, "note": BRIDGE_NOTE}
+
+
+def _window_label(f: str, t: str) -> str:
+    a, z = date.fromisoformat(f), date.fromisoformat(t)
+    return f"{a.month}월 {a.day}일에서 {z.day}일" if (a.year, a.month) == (z.year, z.month) else f"{a.month}월 {a.day}일에서 {z.month}월 {z.day}일"
+
+
+def copy_bridge(con, promo_id, *, period_ym, windows, by, name=None, rules=None) -> dict:
+    """브릿지 하나를 새 창으로 옮긴 초안(미게시)을 만든다. 사람이 확인한 뒤 set_status() 로 게시한다.
+    windows: [(label, from, to)] 또는 [(from, to)]. 창 수는 원본과 같다. label 이 비면 날짜로 짓는다. 엔진은 달력을 짐작하지 않는다.
+    name 이 없으면 원본 이름 뒤에 '복사본' 을 붙인다. rules 는 조건 확장에서 바꿀 키만 준다.
+    구간, 금액, 조건은 그대로 옮긴다. 그 달에 묶인 값은 옮기지 않고 cleared 에 적는다 (D-95 가정).
+    돌려주는 값 {promo_id, copied_from, cleared, note}. 원본 번호는 promotion.copied_from 과 audit_log(promotion_copy)에 남는다."""
+    src = _load(con, promo_id)
+    if not src:
+        raise ValueError("없는 프로모션입니다.")
+    if src["kind"] != BRIDGE:
+        raise ValueError("브릿지 시상만 다음 달로 복사합니다.")
+    if not (isinstance(period_ym, str) and len(period_ym) == 6 and period_ym.isdigit() and 1 <= int(period_ym[4:]) <= 12):
+        raise ValueError("귀속 월은 YYYYMM 으로 넣습니다.")
+    wins = [(None, *w) if len(w) == 2 else tuple(w) for w in windows]
+    if len(wins) != len(src["windows"]):
+        raise ValueError("새 창 수가 원본과 같아야 합니다.")
+    wins = [(lab or _window_label(f, t), f, t) for lab, f, t in wins]
+    ensure(con)
+    if con.execute("SELECT 1 FROM promotion WHERE copied_from=? AND period_ym=? AND status!='withdrawn'", (promo_id, period_ym)).fetchone():
+        raise ValueError("이 달로 이미 복사한 초안이 있습니다.")
+    base, cleared = dict(_r(src)), []
+    given = set(rules or {})
+    if base["parent_promo_id"] and "parent_promo_id" not in given:
+        raise ValueError("딸린 시책은 새 부모 프로모션을 넣어 복사합니다.")
+    if base["retention_ref"] and "retention_ref" not in given:
+        base["retention_ref"] = None
+        cleared.append("retention_ref")
+    if base["boost"] and base["boost"].get("ranges") and "boost" not in given:
+        base["boost"] = None
+        cleared.append("boost")
+    merged = {**base, **(rules or {})}
+    row = lambda t: (t["min_value"], t["reward_kind"], t["reward_value"], t["reward_label"])
+    common = [row(t) for t in _tier_rows(con, promo_id) if t.get("window_seq") is None]
+    wt = {seq: [row(t) for t in rows] for seq, rows in src["window_tiers"].items()}
+    if any(t.get("original_value") is not None for t in _tier_rows(con, promo_id)):
+        cleared.append("original_value")
+    new_id = create(con, period_ym=period_ym, name=(name or f"{src['name']} 복사본"), kind=BRIDGE, windows=wins, tiers=common, by=by,
+                    recipient_level=src["recipient_level"], insurer_id=src["insurer_id"], insurer_name=src["insurer_name"], sector=src["sector"],
+                    categories=src["category_list"], target_note=src["target_note"], metric=src["metric"], date_basis=src["date_basis"],
+                    per_contract_cap=src["per_contract_cap"], combine_rule=src["combine_rule"], pay_timing=src["pay_timing"], caution=src["caution"],
+                    window_tiers=wt or None, inst13_required=bool(src.get("inst13_required")),
+                    rules=(merged if merged != RULE_DEFAULTS else None), publish=False)
+    con.execute("UPDATE promotion SET copied_from=? WHERE promo_id=?", (promo_id, new_id))
+    con.execute("INSERT INTO audit_log(at, actor, action, target, before_json, after_json) VALUES(?,?,?,?,?,?)",
+                (db.now(), by, "promotion_copy", f"{new_id}:{promo_id}",
+                 json.dumps({"promo_id": promo_id, "period_ym": src["period_ym"], "windows": [(w["label"], w["date_from"], w["date_to"]) for w in src["windows"]]},
+                            ensure_ascii=False),
+                 json.dumps({"promo_id": new_id, "period_ym": period_ym, "windows": wins, "cleared": cleared, "status": "draft"}, ensure_ascii=False)))
+    con.commit()
+    return {"promo_id": new_id, "copied_from": promo_id, "cleared": cleared, "note": COPY_NOTE}
+
+
+def bridges(con, ym, role, include_unpublished=False) -> list:
+    """그 달에 걸친 브릿지 시상. listing() 에서 유형이 bridge 인 것만 남긴다. 창이 달을 넘으면 두 달 모두에 나온다."""
+    return [p for p in listing(con, ym, role, include_unpublished) if p["kind"] == BRIDGE]
+
+
 GATE_NOTE = "조직 달성 인원은 그 조직 재직자 전체에서 셉니다. 보는 범위와 상관없이 같은 숫자입니다."
 
 
@@ -1012,8 +1281,59 @@ def _homes(con, agent_ids, ym) -> dict:
     return out
 
 
-def _org_row(p, shape, unit, members, people, res, pcts, direct=False) -> tuple:
-    """조직 줄 하나와 그 줄의 예상 시상액 합계. shape 는 창을 읽는 프로모션이다. 딸린 시책이면 부모다."""
+PHASE_STATE = {"ended": "done", "active": "open", "upcoming": "future"}     # window_state() 의 상태를 조직별 진척의 말로
+SUM_RULES = ("both", "either", "sum")                                       # 합산 조건(공통 구간표)이 있는 결합
+
+
+def _org_phases(shape, states, targets, res) -> dict:
+    """조직 줄에 덧붙이는 창별 단계와 조건별 인원 {phases, n_chain, n_sum, sum_target}. 모양은 org_progress() 설명에 있다.
+    shape 는 창과 구간표를 읽는 프로모션(딸린 시책이면 부모), states 는 창마다 window_state() 의 상태, targets 는 그 줄의 대상자다.
+    창을 채웠는지는 progress() 가 낸 그 창의 구간(windows[i].tier)으로 본다. 창 실적은 조건 1에 쓰는 값이라 가중 인정이 들어 있다.
+    합산은 progress() 의 value 를 공통 구간표의 가장 낮은 기준에 댄다. 사람별 판정을 다시 하지 않고 세기만 한다."""
+    tiered = shape["kind"] != "rate"
+    each = tiered and shape["combine_rule"] in EACH_RULES
+    phases, alive, kept = [], set(targets), set(targets)
+    for i, (w, st) in enumerate(zip(shape["windows"], states)):
+        table = tiers_for(shape, w) if each else []
+        floor = min(t["min_value"] for t in table) if table else None
+        n_met = n_chain = None
+        if floor is not None and st != "upcoming":
+            met = {a for a in targets if res[a]["windows"][i]["tier"]}
+            alive &= met
+            if st == "ended":
+                kept &= met
+            n_met, n_chain = len(met), len(alive)
+        phases.append({"seq": w["seq"], "label": w["label"], "date_from": w["date_from"], "date_to": w["date_to"],
+                       "state": PHASE_STATE[st], "target": floor, "n_met": n_met, "n_chain": n_chain})
+    has_floor = any(ph["target"] is not None for ph in phases)
+    sum_target = min(t["min_value"] for t in shape["tiers"]) if tiered and shape["combine_rule"] in SUM_RULES and shape["tiers"] else None
+    alts = _org_alts(shape, states, targets, res)
+    return {"phases": phases, "n_chain": len(kept) if has_floor else None,
+            "n_sum": None if sum_target is None else sum(1 for a in targets if res[a]["value"] >= sum_target), "sum_target": sum_target,
+            "alt": alts[0] if alts else None, "alts": alts}
+
+
+def _org_alts(shape, states, targets, res) -> list:
+    """조직 줄의 추가안 인원. 추가안마다 {key, label, n_eligible, phases: [{seq, label, state, min_value, n_met}], n_achieved}.
+    n_eligible 은 대상이 정해진 사람(paths.alts 의 eligible), n_met 은 그 가운데 그 창의 추가안 기준을 채운 사람이다. 시작 전 창은 None 이다."""
+    st = {w["seq"]: s for w, s in zip(shape["windows"], states)}
+    labels = {w["seq"]: w["label"] for w in shape["windows"]}
+    out = []
+    for k, c in enumerate(_alts(shape) if shape["combine_rule"] == "either" and shape["kind"] != "rate" else []):
+        mine = [res[a]["paths"]["alts"][k] for a in targets]
+        elig = [m for m in mine if m["eligible"]]
+        phases = [{"seq": seq, "label": labels.get(seq), "state": PHASE_STATE[st.get(seq, "ended")], "min_value": m,
+                   "n_met": None if st.get(seq) == "upcoming" else sum(1 for x in elig if x["windows"][j]["met"])}
+                  for j, (seq, m) in enumerate(sorted(c["windows"].items()))]
+        out.append({"key": c["key"], "label": c["label"], "n_eligible": len(elig), "phases": phases,
+                    "n_achieved": sum(1 for m in mine if m["achieved"])})
+    return out
+
+
+def _org_row(p, shape, unit, members, people, res, pcts, direct=False, states=None) -> tuple:
+    """조직 줄 하나와 그 줄의 예상 시상액 합계. shape 는 창을 읽는 프로모션이다. 딸린 시책이면 부모다.
+    states 는 창마다 기준일로 본 상태다. 시작 전 창의 windows[].n_achieved 는 0 이다. 기준일 뒤 날짜의 계약이 원장에 있어도 세지 않는다."""
+    states = states or ["active"] * len(shape["windows"])
     targets = [a for a in members if people[a]["active"] and res[a].get("target", True)]
     left = [a for a in members if not people[a]["active"] and res[a].get("target", True)]
     achieved = [a for a in targets if is_achieved(p, res[a])]
@@ -1021,7 +1341,8 @@ def _org_row(p, shape, unit, members, people, res, pcts, direct=False) -> tuple:
     n = len(targets)
     wins = None
     if len(shape["windows"]) > 1 and shape["combine_rule"] in EACH_RULES:
-        wins = [{"seq": w["seq"], "label": w["label"], "n_achieved": sum(1 for a in targets if res[a]["windows"][i]["tier"])}
+        wins = [{"seq": w["seq"], "label": w["label"],
+                 "n_achieved": 0 if states[i] == "upcoming" else sum(1 for a in targets if res[a]["windows"][i]["tier"])}
                 for i, w in enumerate(shape["windows"])]
     amounts = [res[a]["amount"] for a in targets if res[a]["amount"] is not None]
     row = {"org_id": unit["org_id"], "path_key": unit["path_key"], "name": unit["name"], "level": unit["level"], "direct": direct, "rank": None,
@@ -1030,6 +1351,7 @@ def _org_row(p, shape, unit, members, people, res, pcts, direct=False) -> tuple:
            "achieve_rate": len(achieved) / n if n else None, "windows": wins,
            "value": sum(res[a]["value"] for a in targets + left), "value_left": sum(res[a]["value"] for a in left), "n_left": len(left),
            "unnamed": sum(res[a].get("unnamed", 0) for a in targets + left), "agent_ids": targets, "left_ids": left}
+    row.update(_org_phases(shape, states, targets, res))
     return row, (sum(amounts) if amounts else None)
 
 
@@ -1046,7 +1368,22 @@ def org_progress(con, p, org_key, agent_ids, ref: date, *, ym: str | None = None
     - rows: [{org_id, path_key, name, level, direct, rank, n_target, n_active, n_achieved, n_near, n_inactive, achieve_rate,
               windows, value, value_left, n_left, unnamed, agent_ids, left_ids}]
       direct 가 참인 줄은 org_key 조직에 바로 소속인 사람이고 순위가 없다. rank 는 아래 조직끼리 달성 인원 큰 순이고 0명이면 None 이다.
-      windows 는 창이 여럿이고 창마다 달성하는 결합일 때 [{seq, label, n_achieved}], 아니면 None 이다
+      windows 는 창이 여럿이고 창마다 달성하는 결합일 때 [{seq, label, n_achieved}], 아니면 None 이다. 시작 전 창은 0 이다
+      n_achieved 는 최종 달성 인원이다. progress() 의 구간에 닿은 사람이고 is_achieved() 와 같다
+    - rows 와 total 에 덧붙인 것. 창별 단계와 조건별 인원이고 대상자(agent_ids)만 센다
+      phases: 창마다 [{seq, label, date_from, date_to, state, target, n_met, n_chain}]. 창이 하나여도 한 줄이 나온다
+        state 는 기준일로 본 done(끝남), open(진행 중), future(시작 전)다. 기준일이 창의 마지막 날이면 open 이다
+        target 은 그 창의 최저 기준이다. 창마다 달성하는 결합(all, both, either)이 아니거나 정률이면 None 이다
+        n_met 은 그 창의 최저 기준을 채운 인원이다. 그 창 실적만 보고 가중 인정이 조건 1에 걸리면 인정값으로 본다
+        n_chain 은 첫 창부터 이 창까지 모두 채운 인원이다. n_met, n_chain 은 future 이거나 target 이 없으면 None 이다
+      n_chain: 끝난 창을 모두 채워 연속 조건이 살아 있는 인원. 진행 중 창은 보지 않는다. 끝난 창이 없으면 대상 전원이다.
+        창마다 달성하는 결합이 아니면 None 이다
+      n_sum: 합산 조건을 채운 인원. 합계가 공통 구간표의 가장 낮은 기준 이상이다. 결합이 both, either, sum 일 때만이고 그 밖에는 None 이다
+      sum_target: 합산의 가장 낮은 기준. 없으면 None 이다. 딸린 시책은 phases, n_chain, n_sum, sum_target 모두 부모의 창과 기준으로 센다
+      alt: 추가안 {key, label, n_eligible, phases: [{seq, label, state, min_value, n_met}], n_achieved}. 추가안이 없으면 None 이다.
+        n_eligible 은 추가안 대상으로 정해진 인원, n_met 은 그 가운데 그 창의 추가안 기준을 채운 인원이고 시작 전 창은 None 이다.
+        n_achieved 는 추가안으로 달성한 인원이고 줄의 n_achieved 에 이미 들어 있다. 합산도 채운 사람은 n_sum 에도 든다.
+        phases 의 n_met 과 n_chain 은 추가안과 상관없이 원안 기준이다. alts 는 추가안 전부의 목록이고 alt 는 그 첫 항목이다
     - total: rows 를 더한 줄. rank, agent_ids, left_ids 는 없다
     - amounts: {by_org: {path_key: 예상 시상액 합계 또는 None}, total, in_kind, note}. 메인 관리자에게만 넘긴다 (D-17)
     - gate: 딸린 시책의 조직 달성 인원 문턱(org_gate). 없으면 None
@@ -1067,9 +1404,10 @@ def org_progress(con, p, org_key, agent_ids, ref: date, *, ym: str | None = None
     else:
         pcts = _near_pcts(con, {a: h["org_id"] for a, h in people.items()})
     rows, by_org = [], {}
+    states = [window_state(w, ref)["state"] for w in shape["windows"]]
     direct = sorted(a for a, h in people.items() if h["org_id"] == org["org_id"])
     if direct:
-        row, amt = _org_row(p, shape, org, direct, people, res, pcts, direct=True)
+        row, amt = _org_row(p, shape, org, direct, people, res, pcts, direct=True, states=states)
         rows.append(row)
         by_org[org["path_key"]] = amt
     kids = [dict(x) for x in con.execute("SELECT org_id, name, level, path_key FROM org_unit WHERE parent_id=? ORDER BY path_key, org_id", (org["org_id"],))]
@@ -1078,7 +1416,7 @@ def org_progress(con, p, org_key, agent_ids, ref: date, *, ym: str | None = None
         mem = sorted(a for a, h in people.items() if h["org_id"] in sub)
         if not mem and not keep_empty:
             continue
-        row, amt = _org_row(p, shape, k, mem, people, res, pcts)
+        row, amt = _org_row(p, shape, k, mem, people, res, pcts, states=states)
         rows.append(row)
         by_org[k["path_key"]] = amt
     ranked = [x for x in rows if not x["direct"]]
@@ -1094,6 +1432,17 @@ def org_progress(con, p, org_key, agent_ids, ref: date, *, ym: str | None = None
     total["windows"] = None
     if rows and rows[0]["windows"] is not None:
         total["windows"] = [{**w, "n_achieved": sum(x["windows"][i]["n_achieved"] for x in rows)} for i, w in enumerate(rows[0]["windows"])]
+    blank = _org_phases(shape, states, [], {})                     # 줄이 없어도 창과 상태는 낸다. None 인 칸은 더해도 None 이다
+    add = lambda vals, base: None if base is None else sum(vals)
+    total["phases"] = [{**ph, "n_met": add((x["phases"][i]["n_met"] for x in rows), ph["n_met"]),
+                        "n_chain": add((x["phases"][i]["n_chain"] for x in rows), ph["n_chain"])} for i, ph in enumerate(blank["phases"])]
+    total["n_chain"] = add((x["n_chain"] for x in rows), blank["n_chain"])
+    total["n_sum"] = add((x["n_sum"] for x in rows), blank["n_sum"])
+    total["sum_target"] = blank["sum_target"]
+    total["alts"] = [{**c, "n_eligible": sum(x["alts"][k]["n_eligible"] for x in rows), "n_achieved": sum(x["alts"][k]["n_achieved"] for x in rows),
+                      "phases": [{**ph, "n_met": add((x["alts"][k]["phases"][j]["n_met"] for x in rows), ph["n_met"])}
+                                 for j, ph in enumerate(c["phases"])]} for k, c in enumerate(blank["alts"])]
+    total["alt"] = total["alts"][0] if total["alts"] else None
     amts = [v for v in by_org.values() if v is not None]
     return {"promo_id": p["promo_id"], "name": p["name"], "org": org, "ym": ym, "ref": ref.isoformat(), "basis": basis_note(shape),
             "estimate_note": ESTIMATE_NOTE, "note": ORG_NOTE, "metric": p["metric"], "unit": p["unit"],
@@ -1109,14 +1458,17 @@ def org_progress(con, p, org_key, agent_ids, ref: date, *, ym: str | None = None
 PLAN_BEGIN, PLAN_END = "-- [promotion_plan:begin]", "-- [promotion_plan:end]"
 CONFIRM_BEGIN, CONFIRM_END = "-- [promotion_confirm:begin]", "-- [promotion_confirm:end]"
 RULES_BEGIN, RULES_END = "-- [promotion_rules:begin]", "-- [promotion_rules:end]"
+BRIDGE_BEGIN, BRIDGE_END = "-- [promotion_bridge:begin]", "-- [promotion_bridge:end]"
+ALT_BEGIN, ALT_END = "-- [promotion_alt:begin]", "-- [promotion_alt:end]"
 MISSING_ORIGINAL = "원문 확인"
 
 
 def ensure(con) -> None:
-    """원안 칸, 확정 결과 표, S3 확정 기능의 칸과 표, 조건 확장 칸이 없는 오래된 DB 에서 schema.sql 의 [promotion_plan],
-    [promotion_confirm], [promotion_rules] 묶음을 차례로 돌린다. 이미 있는 칸과 표는 건너뛴다."""
+    """원안 칸, 확정 결과 표, S3 확정 기능의 칸과 표, 조건 확장 칸, 브릿지 복사 칸, 추가안 칸이 없는 오래된 DB 에서 schema.sql 의 [promotion_plan],
+    [promotion_confirm], [promotion_rules], [promotion_bridge], [promotion_alt] 묶음을 차례로 돌린다. 이미 있는 칸과 표는 건너뛴다."""
     text = db.SCHEMA.read_text(encoding="utf-8")
-    for begin, end in ((PLAN_BEGIN, PLAN_END), (CONFIRM_BEGIN, CONFIRM_END), (RULES_BEGIN, RULES_END)):
+    for begin, end in ((PLAN_BEGIN, PLAN_END), (CONFIRM_BEGIN, CONFIRM_END), (RULES_BEGIN, RULES_END), (BRIDGE_BEGIN, BRIDGE_END),
+                       (ALT_BEGIN, ALT_END)):
         block = text[text.index(begin):text.index(end)]
         body = "\n".join(line.split("--", 1)[0] for line in block.splitlines())
         for stmt in (x.strip() for x in body.split(";")):
@@ -1248,6 +1600,14 @@ def rule_conditions(p) -> list:
         out.append(f"조직 달성 인원 {r['gate_min_achievers']}명 이상일 때 열림")
     if r["retention_min"]:
         out.append(f"13회차 유지율 {r['retention_min'] * 100:g}% 이상" + (f", {r['retention_ref']} 기준" if r["retention_ref"] else ""))
+    labels = {w["seq"]: w["label"] for w in p["windows"]}
+    for c in _alts(p):
+        who = ", ".join(labels.get(s, f"{s}번 창") for s in c["requires_missed"])
+        need = ", ".join(f"{labels.get(s, f'{s}번 창')} {fmt_value(m, p)}" for s, m in sorted(c["windows"].items()))
+        txt = f"{c['label']}: " + (f"{who} 미달성자만, " if who else "") + f"{need} 연속 달성"
+        if b:
+            txt += ". 가중 인정 적용" if c["boost"] else ". 가중 인정 없이 셈"
+        out.append(txt)
     return out
 
 

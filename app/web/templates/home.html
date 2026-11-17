@@ -89,5 +89,5 @@
 
 {% if ctx.role == 'agent' %}{{ mine('내 이번 달') }}{{ promos() }}
 {% elif ctx.role == 'manager' %}{{ org('우리 조직', note=not d.mine) }}{% if d.mine %}{{ mine('내 이번 달') }}{% endif %}{{ promos() }}
-{% else %}{{ org('전체 조직') }}{{ promos() }}{% endif %}
+{% else %}{{ org('전체 조직') }}{% if d.gates %}<h2 class="sec" data-home="gates">문턱이 있는 시책</h2>{{ pr.gate_cards(d.gates) }}<p class="cap"><a href="/promo/progress?view=org">조직별 진척 보기</a></p>{% endif %}{{ promos() }}{% endif %}
 {% endblock %}

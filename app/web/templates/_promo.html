@@ -8,6 +8,7 @@
   <div class="promo-meta">{{ p.period_text }}{% if p.timing_ko %} · {{ p.timing_ko }} 지급{% endif %}</div>
   {% if p.target_note %}<div class="target">{{ p.target_note }}</div>{% endif %}
   <div class="chips" style="margin-top:12px"><span class="chip">{{ p.kind_ko }}</span>
+    {% if p.revised %}<span class="chip blue" data-revised="{{ p.revised }}">변경 {{ p.revised + 1 }}차</span>{% endif %}
     {% if p.status != 'published' %}<span class="chip warn">{{ {'draft':'초안','withdrawn':'회수'}[p.status] }}</span>{% endif %}
     {% if p.recipient_level != 'fc' %}<span class="chip">{{ {'ga':'GA 몫','hq':'총괄 몫','branch':'지사 몫'}.get(p.recipient_level, p.recipient_level) }}</span>{% endif %}</div>
   {% if caller is defined %}<div class="promo-acts">{{ caller() }}</div>{% endif %}
@@ -15,3 +16,64 @@
 {% endmacro %}
 
 {% macro val(v, p) %}{% if p.metric == 'policy_count' %}{{ v|n }}건{% else %}{{ v|won }}원{% endif %}{% endmacro %}
+
+{% macro gate_cards(gates) %}{# 딸린 시책의 조직 달성 인원 문턱. 숫자만 보인다. 사람 이름은 넣지 않는다 #}
+{% if gates %}<div class="grid{{ ' g2' if gates|length > 1 }}" style="margin-top:20px" data-gates="1">
+{% for g in gates %}<div class="card gate-card" data-gate="{{ g.promo_id }}">
+  <div class="k"><span class="dot {{ '' if g.open else 'warn' }}"></span>{{ g.name }} · 문턱</div>
+  <div class="mid">{{ g.n }}<span class="unit">명 / {{ g.min }}명</span></div>
+  <div class="track gate-track"><i style="left:{{ ([g.n / g.min * 100, 100]|min)|round(1) if g.min else 0 }}%"></i></div>
+  <div class="cap">{{ g.org_title or g.org_name }} 전체 달성 {{ g.n }}명 / {{ g.min }}명 · {% if g.open %}문턱을 넘어 열렸습니다{% else %}{{ g.min }}명 중 {{ g.n }}명, 남은 {{ g.left }}명{% endif %}</div>
+  <div class="cap" style="margin-top:2px">{{ g.note }}</div></div>{% endfor %}
+</div>{% endif %}
+{% endmacro %}
+
+{% macro team_table(sel, rows, summary, show_amount) %}{# 팀원 달성 현황의 사람 표. 조직별 보기의 맨 아래 사람 목록도 이 표를 쓴다 #}
+<div class="card tablecard" style="margin-top:16px" data-people="1"><table>
+<tr><th>성명</th><th class="hide-sm">소속</th>{% if sel.windows|length > 1 %}{% for w in sel.windows %}<th class="num hide-sm">{{ w.label }}</th>{% endfor %}{% endif %}
+<th class="num">{{ sel.metric_ko }}</th><th class="hide-sm">구간</th><th class="hide-sm">다음 구간까지</th>{% if show_amount %}<th class="num">예상 시상</th>{% endif %}</tr>
+{% for x in rows %}{% set r = x.r %}
+{% set tier %}{% if r.status == 'not_target' %}<span class="chip">대상 아님</span>{% elif r.broken %}<span class="chip bad">무효</span>{% elif r.tier %}<span class="chip good">{{ r.tier.tier_no }}구간</span>{% elif sel.kind == 'rate' and r.value %}<span class="chip good">대상</span>{% else %}<span class="chip">없음</span>{% endif %}{% endset %}
+{% set gap %}{% if r.next %}{{ val(r.next.gap, sel) }}{% elif r.capped %}<span class="chip">앞 구간에서 확정</span>{% elif r.tier and sel.tiers and r.tier.tier_no == sel.tiers[-1].tier_no %}<span class="chip blue">최고 구간</span>{% else %}-{% endif %}{% endset %}
+<tr data-agent="{{ x.code }}"><td class="strong">{{ x.name }}<div class="sm-sub"><span>{{ tier }}{% if r.next %} 다음 구간까지 {{ gap }}{% elif gap|trim != '-' %} {{ gap }}{% endif %}</span></div></td><td class="hide-sm">{{ x.org or '-' }}</td>
+{% if sel.windows|length > 1 %}{% for w in r.windows %}<td class="num hide-sm">{{ val(w.value, sel) }}</td>{% endfor %}{% endif %}
+<td class="num"><span class="minibar hide-sm"><i style="width:{{ (r.value / summary.top * 100)|round(1) if summary.top else 0 }}%"></i></span>{{ val(r.value, sel) }}</td>
+<td class="hide-sm">{{ tier }}</td>
+<td class="hide-sm">{{ gap }}</td>
+{% if show_amount %}<td class="num">{% if r.amount is not none %}{{ r.amount|won }}원{% elif r.reward %}{{ r.reward }}{% else %}-{% endif %}</td>{% endif %}</tr>{% else %}
+<tr><td colspan="8" class="cap">대상이 없습니다.</td></tr>{% endfor %}
+</table></div>
+{% endmacro %}
+
+{% macro month_head(head, ref, ctx, scope=None) %}{# 달성 현황 머리. 지금 보기는 오늘 기준, 지난 달은 그 달 기준일 #}
+{% if head.now %}<p class="eyebrow" data-head="now">{{ head.ym[:4] }}년 {{ head.ym[4:]|int }}월 현재{% if scope %} · {{ scope }}{% endif %} · 기준일 {{ ref|md }}</p>
+{% else %}<p class="eyebrow" data-head="past">{{ head.ym[:4] }}년 {{ head.ym[4:]|int }}월{% if scope %} · {{ scope }}{% endif %} · 기준일 {{ ref|md }}</p>{% endif %}
+{% endmacro %}
+
+{% macro month_seg(head, url) %}{# 달 고르기. 지난 달은 그 달 말일 기준으로 다시 센다 #}
+<div class="seg" aria-label="달 고르기" data-months="1"><a class="{{ 'on' if head.now }}" href="{{ url }}">지금</a>{% for m in head.months %}<a class="{{ 'on' if not head.now and head.ym == m }}" href="{{ url }}{{ '&' if '?' in url else '?' }}ym={{ m }}">{{ m[4:]|int }}월</a>{% endfor %}</div>
+{% if head.now %}<p class="cap" style="margin:6px 0 0">여러 달에 걸친 프로모션은 오늘({{ head.today|md }}) 기준입니다.{% if head.month_refs %} 한 달짜리 프로모션은 자료 기준 달의 기준일({% for d in head.month_refs %}{{ d|md }}{{ ', ' if not loop.last }}{% endfor %})로 셉니다.{% endif %} 지난 달은 달을 골라 봅니다.</p>{% endif %}
+{% endmacro %}
+
+{% macro versions(vs) %}{# 판 이력. 고치기의 변경 기록을 읽는다. 금액은 넣지 않는다 #}
+{% if vs %}<div class="card versions" style="margin-top:16px" data-versions="{{ vs|length }}"><div class="k">판 이력 · {{ vs|length }}판</div>
+{% for v in vs %}<div class="ver"><span class="chip {{ 'blue' if v.kind == 'revised' }}">{{ v.no }}차 {{ v.kind_ko }}</span> <span class="cap" style="margin:0">{{ v.at }}</span>
+{% if v.summary %}<div class="cap" style="margin:4px 0 0" data-ver-summary="{{ v.no }}">{{ v.summary|join(' · ') }}</div>{% endif %}
+{% if v.points %}<div class="cap" style="margin:4px 0 0;font-weight:600">바뀐 점: {% for x in v.points %}{{ x }}{{ ' · ' if not loop.last }}{% endfor %}</div>{% endif %}
+{% if v.fields_ko %}<div class="cap" style="margin:2px 0 0">바뀐 칸: {{ v.fields_ko|join(', ') }}</div>{% endif %}</div>{% endfor %}
+</div>{% endif %}
+{% endmacro %}
+
+{% macro phase_table(p, rows, sum_row) %}{# 내 달성 현황의 달(창)별 줄. 끝난 달은 달성 여부, 진행 중인 달은 남은 금액, 시작 전인 달은 기준만 #}
+{% if rows %}<div class="phase-list" data-phases="{{ rows|length }}">
+{% for w in rows %}<div class="phase {{ w.state }} {{ 'ok' if w.met }}" data-phase="{{ w.state }}">
+  <div class="ph-head"><b>{{ w.label }}</b><span class="chip {{ 'good' if w.met else ('bad' if w.state == 'done' else ('blue' if w.state == 'open' else '')) }}">{% if w.state == 'done' %}{{ '달성' if w.met else '미달' }}{% elif w.state == 'open' %}{{ '달성' if w.met else '진행 중' }}{% else %}시작 전{% endif %}</span></div>
+  <div class="cap" style="margin:2px 0 0">{{ w.date_from|md }}~{{ w.date_to|md }}{% if w.floor is not none %} · 기준 {{ val(w.floor, p) }}{% endif %}</div>
+  {% if w.state != 'future' %}<div class="ph-vals">{% if w.plain != w.value %}<span data-boost="1">원래 {{ val(w.plain, p) }}</span><span>인정 <b>{{ val(w.value, p) }}</b></span>{% else %}<span>실적 <b>{{ val(w.value, p) }}</b></span>{% endif %}</div>{% endif %}
+  {% if w.left %}<div class="cap" style="color:var(--blue);font-weight:600;margin:2px 0 0" data-left="{{ w.left|int }}">기준까지 {{ val(w.left, p) }} 남았습니다</div>{% endif %}
+</div>{% endfor %}
+{% if sum_row %}<div class="phase sum {{ 'ok' if sum_row.met }}" data-phase="sum"><div class="ph-head"><b>합산 {{ val(sum_row.target, p) }}</b><span class="chip {{ 'good' if sum_row.met else 'blue' }}">{{ '달성' if sum_row.met else '진행 중' }}</span></div>
+  <div class="ph-vals"><span>합계 <b>{{ val(sum_row.value, p) }}</b></span></div>
+  {% if sum_row.left %}<div class="cap" style="color:var(--blue);font-weight:600;margin:2px 0 0" data-sum-left="{{ sum_row.left|int }}">합산 {{ val(sum_row.target, p) }}까지 {{ val(sum_row.left, p) }} 남았습니다</div>{% endif %}</div>{% endif %}
+</div>{% endif %}
+{% endmacro %}

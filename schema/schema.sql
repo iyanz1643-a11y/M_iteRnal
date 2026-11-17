@@ -1847,3 +1847,54 @@ ALTER TABLE promotion ADD COLUMN retention_ref TEXT;                -- 유지율
 ALTER TABLE promotion ADD COLUMN retention_basis TEXT;              -- count / amount. 비면 count
 ALTER TABLE promotion_result_contract ADD COLUMN value_each NUMERIC;
 -- [promotion_rules:end]
+
+-- ---------------------------------------------------------------------------
+-- 프로모션 화면 칸 (파트 D 화면, 11월 17일). app/web/promo_extra.py 가 쓴다. 계산에는 쓰지 않는다. 덧붙이기만 한다.
+-- top_org_reward: 최다 달성 조직에게 주는 보상 글. 비면 조직별 보기에 최다 달성 조직을 따로 보이지 않는다.
+-- reward_choices: 달성자가 고르는 보상 코드를 쉼표로. travel1(여행1), travel2(여행2), gold(금).
+-- promotion_reward_choice: 달성자마다 고른 보상과 여행 참석 여부. 메인 관리자만 적고 audit_log 에 사번으로 남긴다.
+-- 오래된 DB 에서도 이 묶음만 다시 돌릴 수 있게 쓴다. promo_extra.ensure 가 이 묶음을 읽고, 이미 있는 칸은 건너뛴다.
+-- [promotion_screen:begin]
+ALTER TABLE promotion ADD COLUMN top_org_reward TEXT;               -- 최다 달성 조직 보상 글
+ALTER TABLE promotion ADD COLUMN reward_choices TEXT;               -- 고르는 보상 코드를 쉼표로
+CREATE TABLE IF NOT EXISTS promotion_reward_choice (
+    choice_id       INTEGER PRIMARY KEY,
+    promo_id        INTEGER NOT NULL REFERENCES promotion(promo_id),
+    agent_id        INTEGER NOT NULL REFERENCES agent(agent_id),
+    choice          TEXT CHECK (choice IN ('travel1','travel2','gold')),
+    attend          TEXT CHECK (attend IN ('yes','no')),   -- 여행 참석 / 불참. 비면 아직 모름
+    recorded_by     TEXT NOT NULL,                          -- 메인 관리자의 login_id
+    recorded_at     TEXT NOT NULL,
+    UNIQUE (promo_id, agent_id)
+);
+-- promotion_version_note: 고친 판의 '바뀐 점' 메모. 고치기의 변경 기록(audit_log promotion_update) 한 줄에 붙는다. 비면 화면이 칸 이름만 보인다.
+CREATE TABLE IF NOT EXISTS promotion_version_note (
+    note_id         INTEGER PRIMARY KEY,
+    promo_id        INTEGER NOT NULL REFERENCES promotion(promo_id),
+    audit_id        INTEGER NOT NULL,                       -- audit_log.id (action='promotion_update')
+    note            TEXT NOT NULL,
+    written_by      TEXT NOT NULL,
+    written_at      TEXT NOT NULL,
+    UNIQUE (audit_id)
+);
+-- [promotion_screen:end]
+
+-- ---------------------------------------------------------------------------
+-- 브릿지 시상 (파트 D, 11월 17일). app/engine/promotion.py 가 쓴다. 기존 CREATE 문은 그대로 두고 덧붙이기만 한다.
+-- promotion.kind 에 bridge(브릿지 시상)를 더한다. 칸은 그대로다. 규칙은 app/engine/promotion.py 머리말의 '브릿지 시상' 이다.
+-- copied_from: 다음 달로 복사해 만든 초안의 원본 promo_id. 비면 새로 만든 것이다. audit_log 의 promotion_copy 줄과 같은 값이다.
+-- 오래된 DB 에서도 이 묶음만 다시 돌릴 수 있게 쓴다. app/engine/promotion.py 의 ensure 가 이 묶음을 읽고, 이미 있는 칸은 건너뛴다.
+-- [promotion_bridge:begin]
+ALTER TABLE promotion ADD COLUMN copied_from INTEGER REFERENCES promotion(promo_id);   -- 복사한 원본 프로모션
+-- [promotion_bridge:end]
+
+-- ---------------------------------------------------------------------------
+-- 프로모션 추가안 (파트 D, 11월 17일 2차 변경). app/engine/promotion.py 가 쓴다. 기존 CREATE 문은 그대로 두고 덧붙이기만 한다.
+-- alt_chains_json: 결합 either 에 더하는 달성 길의 JSON 목록. 항목은
+--   {key, label, windows: {창 순번: 최저 기준}, requires_missed: [창 순번], boost, tier_no} 다.
+--   requires_missed 의 창을 채우지 못한 사람만 대상이고 windows 의 창을 모두 채우면 달성이다. 가중 인정을 함께 쓰는 것은 D-96 가정이다.
+-- 칸이 비면 예전 동작 그대로다. 규칙은 app/engine/promotion.py 머리말의 '추가안' 이다.
+-- 오래된 DB 에서도 이 묶음만 다시 돌릴 수 있게 쓴다. app/engine/promotion.py 의 ensure 가 이 묶음을 읽고, 이미 있는 칸은 건너뛴다.
+-- [promotion_alt:begin]
+ALTER TABLE promotion ADD COLUMN alt_chains_json TEXT;              -- 추가안 목록
+-- [promotion_alt:end]

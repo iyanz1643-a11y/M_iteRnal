@@ -43,6 +43,8 @@ ACTION_KO = {
     "promotion_confirm": "프로모션 결과 확정",
     "promotion_revoke": "프로모션 확정 무름",
     "promotion_inst13": "프로모션 13회차 판정 확정",
+    "promotion_screen": "프로모션 화면 칸 고침",
+    "promotion_reward_choice": "프로모션 보상 선택 기록",
     "org_award_create": "조직 부문 시상 만듦",
     "org_award_update": "조직 부문 시상 고침",
     "org_award_active": "조직 부문 시상 다시 엶",
@@ -134,7 +136,8 @@ PROMO_FIELD_KO = {
     "name": "이름", "kind": "유형", "insurer_name": "보험사", "sector": "업권", "categories": "구분", "metric": "기준 실적",
     "date_basis": "기준일", "per_contract_cap": "건당 한도", "combine_rule": "결합 규칙", "pay_timing": "지급 시점",
     "target_note": "대상 상품", "caution": "유의사항", "windows": "기간 창", "tiers": "구간",
-    "window_tiers": "창별 구간표", "inst13_required": "13회차 유지 조건",
+    "window_tiers": "창별 구간표", "inst13_required": "13회차 유지 조건", "rules": "조건 확장",
+    "top_org_reward": "최다 달성 조직 보상", "reward_choices": "고르는 보상",
 }
 _ORIGINAL_KEY = re.compile(r"(tier|rate)(\d+)")
 OP_KO = {"approve": "요청 승인", "reject": "요청 반려", "grant": "권한 켜기", "revoke": "권한 끄기", "request": "권한 요청"}
@@ -237,7 +240,7 @@ def target_ko(action: str, target, names: _Names) -> str:
             if name is None:
                 return t
             out = f"프로모션: {name}"
-            if action in ("promotion_confirm", "promotion_inst13"):          # 'pid:N명'. 확정하거나 남긴 사람 수
+            if action in ("promotion_confirm", "promotion_inst13", "promotion_reward_choice"):   # 'pid:N명'. 확정하거나 남기거나 기록한 사람 수
                 return out + (f" · {fields}" if fields else "")
             if action == "promotion_revoke":                                  # 'pid:confirm_id'. 사유는 메인 관리자 화면에만 있고 기록에는 길이만 있다
                 return out + (f" · 확정 {fields}번" if fields.isdigit() else "")

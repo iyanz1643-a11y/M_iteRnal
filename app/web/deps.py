@@ -20,7 +20,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=HERE / "templates")
 templates.env.filters["won"] = lambda v: f"{int(v):,}" if v is not None else "-"
 templates.env.filters["n"] = lambda v: f"{(v or 0):g}"
-templates.env.filters["md"] = lambda d: f"{int(d[5:7])}월 {int(d[8:10])}일" if d else ""
+templates.env.filters["md"] = lambda d: (lambda x: f"{int(x[5:7])}월 {int(x[8:10])}일")(d.isoformat() if hasattr(d, "isoformat") else d) if d else ""
 templates.env.filters["when"] = lambda t: f"{int(t[5:7])}월 {int(t[8:10])}일 {int(t[11:13])}시 {t[14:16]}분" if t and len(t) >= 16 else ""
 templates.env.filters["ymko"] = lambda ym: f"{ym[:4]}년 {int(ym[4:6])}월" if ym and len(ym) >= 6 else ""
 
@@ -229,12 +229,21 @@ def _period_text(p):
 def _cards(con, ctx, include_unpublished=False):
     """프로모션 카드. 홈과 프로모션 화면이 함께 쓴다."""
     ref = pm.ref_date(ctx["ym"])
+    return promo_cards(con, pm.listing(con, ctx["ym"], ctx["role"], include_unpublished), lambda p: ref), ref
+
+
+def promo_cards(con, promos, ref_of) -> list:
+    """프로모션 카드 꼴. ref_of(p) 가 카드마다 기준일을 준다. 고친 판이 있으면 revised 에 그 수를 둔다(카드의 '변경' 표시)."""
+    from app.web import promo_extra  # promo_extra 는 화면 칸 모듈이라 쓸 때만 부른다
+    revised = promo_extra.revised_counts(con, [p["promo_id"] for p in promos])
     out = []
-    for p in pm.listing(con, ctx["ym"], ctx["role"], include_unpublished):
+    for p in promos:
+        ref = ref_of(p)
         due, due_class = pm.due_label(p, ref)
         f, t = date.fromisoformat(p["date_from"]), date.fromisoformat(p["date_to"])
         phase = "upcoming" if ref < f else ("ended" if ref > t else "active")
-        out.append({**p, "due": due, "due_class": due_class, "phase": phase, "head": pm.headline(p), "period_text": _period_text(p)})
+        out.append({**p, "due": due, "due_class": due_class, "phase": phase, "head": pm.headline(p), "period_text": _period_text(p),
+                    "ref": ref, "revised": revised.get(p["promo_id"], 0)})
     order = {"active": 0, "upcoming": 1, "ended": 2}
     out.sort(key=lambda c: (order[c["phase"]], c["date_to"], c["promo_id"]))
-    return out, ref
+    return out

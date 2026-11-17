@@ -1,0 +1,62 @@
+# 이터널 인별업적순위 엑셀 → 사람별 월 실적 (agent_period_perf). 대조용 미리보기 DB 에 쓴다.
+# 2026-11-17 드라이브의 실제 파일 넷의 머리글로 만들었다. 적재기는 app/loader/trial_perf.py, 만드는 스크립트는 scripts/build_trial_db.py 다.
+#
+# 파일의 꼴
+# - 시트는 '인별업적순위' 하나다. 머리글이 두 줄이다. 1행은 사람 칸과 묶음(누적, 평균), 2행은 묶음의 칸이다.
+# - 파일 안에 기간이 없다. 어느 파일이 몇 월인지는 data/real/trial_months.yaml 로 받는다.
+# - 실제 파일 넷은 모든 사람의 누적과 평균이 같았다. 그래서 한 달 파일로 본다. 다르면 여러 달 파일이라 막는다.
+# - 합계 행이 없었다. 사원번호와 사원명이 빈 행이 오면 사람으로 넣지 않는다.
+# - 사원명은 설계사를 만들고 조직장 이름과 맞춰 보는 데만 쓴다. 실적 표와 원본 행(raw_row)에는 남기지 않는다.
+#
+# 조직 칸의 뜻 (2026-11-17 대표님 확인). 파일 칸 이름과 실제 계층이 한 단계씩 어긋난다.
+#   본사 = 회사, 본부 = 직할본부, 지점 = 총괄본부(이터널), 센터 = 예하 본부, 팀 = 지점
+# 그래서 표준 이름은 실제 뜻으로 붙인다. 실적 표의 org_general, org_hq, org_branch 는 인별실적 매핑과 같은 뜻(총괄, 본부, 지점)이 된다.
+# 조직 마디의 계층 코드(org_levels)는 파일 칸 자리를 따른다. config/org_levels.yaml 의 contract 짝, config/org_labels.yaml 의 표시 이름과 같은 경로가 된다.
+source: eternal
+data_type: rank_perf
+versions:
+  - version: 1
+    effective_from: "202601"
+    file:
+      sheet: "인별업적순위"
+      header_rows: 2
+      name_glob: "*인별업적순위*.xlsx"
+    drop_keywords: ["주민", "생년월일", "계좌", "은행", "예금주", "소득", "이행보증", "예치금", "4대보험", "보험업계고유번호",
+                    "핸드폰", "휴대폰", "전화", "이메일", "주소", "우편번호"]
+    person:
+      "사원번호": employee_no
+      "사원명": name            # 설계사 만들기와 조직장 맞춰 보기에만 쓴다
+      "본사": org_company       # 회사
+      "본부": org_division      # 직할본부
+      "지점": org_general       # 실제로는 총괄본부
+      "센터": org_hq            # 실제로는 예하 본부
+      "팀": org_branch          # 실제로는 지점
+    person_required: [employee_no, name, org_company, org_division, org_general, org_hq, org_branch]
+    ignore: ["순위"]
+    groups:
+      total:
+        match: "^누적$"
+        required: true
+        subs:
+          "건수": total_count
+          "월납보험료": total_monthly_premium_amt
+          "인정보험료": total_converted_premium_amt   # 실적 표에 칸이 없어 원본 행에만 남는다
+          "원수사성적": total_insurer_perf_amt
+      avg:
+        match: "^평균$"
+        required: true
+        subs:
+          "건수": avg_count
+          "월납보험료": avg_monthly_premium_amt
+          "인정보험료": avg_converted_premium_amt
+          "원수사성적": avg_insurer_perf_amt
+    # 보험사 묶음이 없는 양식이다. 위 묶음이 아닌 묶음이 오면 머리글이 바뀐 것으로 보고 막는다.
+    insurer_subs: {}
+    known_insurers: []
+    # 조직 칸과 조직 마디 계층 코드의 짝. 위에서 아래 순서다. 빈 칸은 그 계층이 없는 것으로 보고 건너뛴다.
+    org_levels:
+      org_company: ga
+      org_division: hq
+      org_general: branch
+      org_hq: center
+      org_branch: team

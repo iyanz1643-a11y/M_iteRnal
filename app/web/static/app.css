@@ -295,7 +295,7 @@ form.wide{display:grid;gap:16px;max-width:none}
 label.f{display:grid;gap:6px;min-width:0;font-size:var(--t-foot);font-weight:600;color:var(--quiet)}
 label.f select,label.f input,label.f textarea{font-weight:400}
 input[type=file]{display:block;width:100%;max-width:100%;min-width:0;min-height:48px;font:inherit;font-size:var(--t-callout);color:var(--ink);overflow:hidden;text-overflow:ellipsis}
-input[type=date],input[type=number],select,textarea{width:100%;min-height:48px;padding:0 12px;border:none;border-radius:10px;font:inherit;font-size:var(--t-callout);background:var(--fill);color:var(--ink)}
+input[type=date],input[type=month],input[type=number],select,textarea{width:100%;min-height:48px;padding:0 12px;border:none;border-radius:10px;font:inherit;font-size:var(--t-callout);background:var(--fill);color:var(--ink)}
 input[type=text].sm,input[type=password].sm,input[type=search].sm,input[type=email].sm,input[type=tel].sm,input[type=url].sm{height:48px;border-radius:12px;font-size:var(--t-callout)}
 textarea{padding:12px 14px;min-height:88px;resize:vertical}
 .checks{display:flex;gap:8px;flex-wrap:wrap}
@@ -684,3 +684,51 @@ a.card.prog.on{outline:2px solid var(--blue);outline-offset:-2px}
 .pp-list{width:100%}
 .pp-people .pp-table{padding:0 0 8px}
 .pp-mine .mid{white-space:nowrap}
+
+/* 조직별 진척 (/promo/progress?view=org). 경로, 최다 달성 조직, 문턱 카드, 합계 줄 */
+.crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;margin:18px 0 0;font-size:var(--t-sub);color:var(--quiet)}
+.crumbs a{color:var(--blue);font-weight:500;min-height:48px;display:inline-flex;align-items:center}
+.crumbs b{color:var(--ink);font-weight:600}
+.crumbs .crumb-up{margin-left:auto;font-size:var(--t-cap)}
+.org-table td a{color:inherit;text-decoration:none}
+.org-table td a:hover{color:var(--blue)}
+.org-table tr.sum td{border-top:1px solid var(--line);font-weight:600}
+.gate-track{margin:10px 0 6px}
+.top-org .mid{word-break:keep-all}
+.paths{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:14px}
+.paths .path{background:var(--fill);border-radius:14px;padding:12px 14px}
+.paths .path.ok{box-shadow:inset 0 0 0 2px var(--fill-green)}
+.choice-table select{min-width:96px;max-width:100%}
+.org-table th .th-sub{display:block;font-size:var(--t-cap);font-weight:500;color:var(--quiet);margin-top:2px}
+.org-table td.soft{color:var(--faint)}
+.chip.tiny{font-size:11px;padding:1px 6px;margin-left:4px;vertical-align:middle}
+.org-detail summary{cursor:pointer;min-height:48px;display:flex;align-items:center;font-weight:600}
+.org-detail .tablecard{padding:0;margin-top:8px}
+.versions .ver{padding:10px 0;border-top:1px solid var(--line)}
+.versions .ver:first-of-type{border-top:0}
+.phase-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:14px}
+.phase-list .phase{background:var(--fill);border-radius:14px;padding:12px 14px;min-width:0}
+.phase-list .phase.ok{box-shadow:inset 0 0 0 2px var(--fill-green)}
+.phase-list .phase.future{opacity:.7}
+.phase-list .ph-head{display:flex;justify-content:space-between;align-items:center;gap:6px}
+.phase-list .ph-vals{display:flex;flex-wrap:wrap;gap:4px 10px;margin-top:6px;font-size:var(--t-sub)}
+.boost-note{font-weight:600;color:var(--ink)}
+.org-table tr.grp th{font-size:var(--t-cap);color:var(--quiet);border-bottom:0;padding-bottom:0}
+.org-table tr.grp th.grp-h{text-align:center;border-bottom:2px solid var(--line)}
+.org-table a.cnt,.org-detail a.cnt{display:inline-flex;align-items:center;justify-content:flex-end;min-height:48px;min-width:48px;color:var(--blue);font-weight:600;text-decoration:none}
+.roster-table td .sm-sub{display:none}
+@media (max-width:760px){.roster-table td .sm-sub{display:flex}}
+[data-rules] .chip{white-space:normal;max-width:100%;height:auto;min-height:24px;line-height:1.35;padding-top:3px;padding-bottom:3px;text-align:left}
+/* 조직별 표를 휴대폰 폭에 맞춘다. 달마다 대상자, 합산, 최종 달성이 한눈에 보이게 칸을 좁히고 나머지 숫자는 '자세히' 로 보낸다 */
+@media (max-width:760px){
+  .org-table{padding-left:12px;padding-right:12px}
+  .org-table th,.org-table td{white-space:normal;padding:8px 2px;font-size:13px}
+  .org-table td.num,.org-table th.num{padding-left:2px;padding-right:2px}
+  .org-table th .th-sub{font-size:11px}
+  .org-table td.strong{font-size:14px;word-break:keep-all}
+  .org-table td.strong .chip,.org-table .org-more span:not([data-alt-line]){display:none}
+  .org-table .org-more [data-alt-line]{font-size:11px;font-weight:400}
+  .org-table .chip.tiny{display:block;margin:0 0 2px auto;width:max-content;font-size:10px;padding:0 4px}
+  .org-table a.cnt{min-width:44px;justify-content:flex-end}
+  .org-table td.soft{font-size:11px}
+}

@@ -717,7 +717,9 @@ def test_new_posts_refuse_without_csrf_and_for_other_roles(env):
 def test_confirmed_results_stay_on_every_role_screen(env):
     """확정한 뒤 원장이 바뀌어도 메인 관리자, 관리자, 설계사의 지난 프로모션 화면 값은 확정한 값이다. 원안을 고쳐도 그대로다."""
     con = env["con"]
-    p = next(x for x in pm.ended(con, ref=date.today()) if x["kind"] != "rate")
+    # 지점장 범위 안 설계사의 실적이 있는 끝난 프로모션을 고른다. 이터널 샘플(app/samples_promo.py)의 프로모션은 그 사람들의 실적이 없다
+    p = next(x for x in pm.ended(con, ref=date.today()) if x["kind"] != "rate"
+             and any(r["value"] > 0 for r in pm.progress(con, x, env["inside"], date.today()).values()))
     pid, ym = p["promo_id"], p["period_ym"]
     admin = login(env, "admin")
     assert admin.post("/promo/archive", data={"action": "confirm", "promo_id": str(pid), "ym": ym, "agree": "yes"}).status_code == 303

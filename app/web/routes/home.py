@@ -19,6 +19,7 @@ from app.web import menu, org_values
 from app.web.deps import _cards, _last_load, _perf, _q, get_con, guard, page
 from app.web.routes import card, me
 from app.web.routes import edu as edu_routes
+from app.web.routes import promo as promo_routes
 
 router = APIRouter()
 
@@ -110,6 +111,9 @@ def home(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
     if role == "manager" and cards_on:
         st = me.card_state(con, ctx)                             # 권한이 없고 대기 중이거나 반려된 요청도 없을 때만 한 줄 띄운다
         data["grant_hint"] = bool(st and st["state"] == "none")
+    if role == "main":                                           # 딸린 시책의 조직 달성 인원 문턱. 숫자만이고 사람 이름은 없다
+        gcards, _ = promo_routes.progress_cards(con, ctx)          # 달성 현황과 같은 기준일. 여러 달에 걸친 시책은 오늘 기준
+        data["gates"] = promo_routes._gates(con, gcards)
     if role == "main":
         one = lambda sql, p=(): con.execute(sql, p).fetchone()[0]
         data["ops"] = {
