@@ -6,20 +6,21 @@
 <p class="lede">{{ sel.name }}의 개인 달성 현황입니다. 소속은 {{ who.org or '-' }}입니다. 달별 실적과 조건별 상태, 이 프로모션에 센 계약을 봅니다.{% if not show_amount %} 시상 금액은 보이지 않습니다.{% endif %}</p>
 <div class="seg" aria-label="프로모션 고르기">{% for c in cards %}<a class="{{ 'on' if c.promo_id == sel.promo_id }}" href="{{ base }}&p={{ c.promo_id }}{{ org_q }}&person={{ who.agent_id }}">{{ c.name }}</a>{% endfor %}</div>
 
+{% if confirmed %}<p class="cap" style="margin-top:12px" data-confirmed-person="1" data-note="confirmed"><span class="chip good">확정</span> {{ confirmed.note }}{% if confirmed.at %} 확정 {{ confirmed.at|when }}.{% endif %}</p>{% endif %}
 <nav class="crumbs" aria-label="조직 경로" data-crumbs="person">{% for c in crumbs %}<a href="{{ here }}&org={{ c.path_key|urlencode }}">{{ org_title(c) }}</a><span aria-hidden="true">›</span>{% endfor %}<b>{{ who.name }}</b></nav>
 
 <div class="grid g4" style="margin-top:16px" data-person="{{ who.agent_id }}">
-  <div class="card"><div class="k">{{ '합산 ' if months|length > 1 }}{{ shape.metric_ko }}</div><div class="mid" data-person-total="{{ r.value|int }}">{{ pr.val(r.value, shape) }}</div>
+  <div class="card"><div class="k">{{ '합산 ' if months|length > 1 }}{{ shape.metric_ko }}{% if confirmed %} <span class="chip good tiny" data-confirmed="1">확정</span>{% endif %}</div><div class="mid" data-person-total="{{ r.value|int }}">{{ pr.val(r.value, shape) }}</div>
     <div class="cap">{% if sum_row and sum_row.left %}합산 {{ pr.val(sum_row.target, shape) }}까지 {{ pr.val(sum_row.left, shape) }} 남았습니다{% elif sum_row and sum_row.met %}합산 {{ pr.val(sum_row.target, shape) }}을 채웠습니다{% elif sum_row %}합산 기준은 {{ pr.val(sum_row.target, shape) }}입니다{% else %}{{ sel.period_text }}{% endif %}</div></div>
   <div class="card"><div class="k">상태</div><div class="mid"><span class="chip {{ {'met': 'good', 'open': 'blue', 'miss': 'bad'}.get(status, '') }}" data-person-status="{{ status }}">{{ status_ko }}</span></div>
-    <div class="cap">{% if status == 'met' %}조건을 채웠습니다. 확정은 보험사 정산을 따릅니다{% elif status == 'miss' %}끝난 달의 조건을 채우지 못했습니다{% elif status == 'not_target' %}이 시책의 대상 직급이 아닙니다{% else %}기간이 남아 있습니다{% endif %}</div></div>
+    <div class="cap">{% if absent %}{{ absent_note }}{% elif confirmed and status == 'met' %}조건을 채운 것으로 확정했습니다. 지급은 보험사 정산을 따릅니다{% elif confirmed and status == 'miss' %}조건을 채우지 못한 것으로 확정했습니다{% elif status == 'met' %}조건을 채웠습니다. 확정은 보험사 정산을 따릅니다{% elif status == 'miss' %}끝난 달의 조건을 채우지 못했습니다{% elif status == 'not_target' %}이 시책의 대상 직급이 아닙니다{% else %}기간이 남아 있습니다{% endif %}</div></div>
   <div class="card"><div class="k"><span class="dot warn"></span>다음에 채울 것</div>
     {% if todo %}<div class="mid" data-person-gap="{{ todo[0].value|int }}">{{ pr.val(todo[0].value, shape) }}</div>
     <div class="cap" data-person-todo="{{ todo|length }}">{% for x in todo %}{{ x.label }} {{ pr.val(x.value, shape)|trim }}{% if x.note %} · {{ x.note }}{% endif %}{{ ', ' if not loop.last }}{% endfor %}{% if next_reward %} · 다음 구간 보상 {{ next_reward }}{% endif %}</div>
-    {% else %}<div class="mid soft">없음</div><div class="cap">{% if status == 'met' %}더 채울 구간이 없습니다{% elif status == 'miss' %}남은 길이 없습니다{% elif status == 'not_target' %}대상이 아닙니다{% else %}남은 값이 없습니다{% endif %}</div>{% endif %}</div>
-  {% if show_amount %}<div class="card" data-person-award="1"><div class="k">예상 시상 · 메인 관리자만 봅니다</div>
-    {% if amount.amount is not none %}<div class="mid">예상 {{ amount.amount|won }}<span class="unit">원</span></div>{% elif amount.reward %}<div class="mid word" style="white-space:normal">{{ amount.reward }}</div>{% else %}<div class="mid soft">아직 없음</div>{% endif %}
-    <div class="cap">예상이며 확정은 보험사 정산을 따릅니다</div></div>{% endif %}
+    {% else %}<div class="mid soft">없음</div><div class="cap">{% if confirmed %}확정한 프로모션입니다{% elif status == 'met' %}더 채울 구간이 없습니다{% elif status == 'miss' %}남은 길이 없습니다{% elif status == 'not_target' %}대상이 아닙니다{% else %}남은 값이 없습니다{% endif %}</div>{% endif %}</div>
+  {% if show_amount %}<div class="card" data-person-award="1"><div class="k">{{ '확정' if confirmed else '예상' }} 시상 · 메인 관리자만 봅니다</div>
+    {% if amount.amount is not none %}<div class="mid">{{ '확정' if confirmed else '예상' }} {{ amount.amount|won }}<span class="unit">원</span></div>{% elif amount.reward %}<div class="mid word" style="white-space:normal">{{ amount.reward }}</div>{% else %}<div class="mid soft">{{ '없음' if confirmed else '아직 없음' }}</div>{% endif %}
+    <div class="cap">{{ '확정한 값이며 지급은 보험사 정산을 따릅니다' if confirmed else '예상이며 확정은 보험사 정산을 따릅니다' }}</div></div>{% endif %}
 </div>
 
 <p class="cap" style="margin-top:12px" data-metric-note="1">{{ metric_note }}{% if attached %} 딸린 시책이라 실적과 조건은 부모 프로모션 {{ shape.name }}의 것입니다.{% endif %}</p>
@@ -43,6 +44,9 @@
 <td>{% if sum_row %}<span class="chip {{ 'good' if sum_row.met else ('bad' if status == 'miss' else 'blue') }}">{{ '달성' if sum_row.met else ('미달성' if status == 'miss' else '진행 중') }}</span>{% else %}-{% endif %}</td></tr>
 </table></div>
 <p class="cap">실적은 그 달 기준에 대는 값입니다. 가중 인정이 들면 인정한 값이고 '원래 값' 이 합산에 쓰는 값입니다. 합산은 원래 값을 더한 것입니다.{% if boost_text %} {{ boost_text }}{% endif %}</p>
+{% elif window_note %}
+<h2 class="sec" id="months">달별 실적</h2>
+<div class="card" style="margin-top:12px" data-window-note="person"><div class="k"><span class="chip good">확정</span> 달별 실적을 낼 수 없습니다</div><div class="cap">{{ window_note }}{% if contract_source %} 확정할 때 센 계약은 아래 목록에 있습니다.{% else %} 확정 값에는 합산 실적, 구간, 달성 여부만 있습니다.{% endif %}</div></div>
 {% endif %}
 
 {% if each or sum_row or alt %}
@@ -61,20 +65,23 @@
 {% if paired_text %}<p class="cap" style="margin-top:10px;font-weight:600">{{ paired_text }}</p>{% endif %}
 {% endif %}
 
-<h2 class="sec" id="contracts">이 프로모션에 센 계약 {{ contracts|length }}건</h2>
+<h2 class="sec" id="contracts">이 프로모션에 센 계약{% if contract_source %} {{ contracts_n }}건{% endif %}</h2>
 {% if contracts %}<div class="card tablecard people-table md-sub" style="margin-top:12px" data-person-contracts="{{ contracts|length }}"><table>
 <tr><th>기준일</th><th class="hide-sm hide-md">보험사</th><th>상품</th><th class="num hide-sm hide-md">보험료</th><th class="num hide-sm hide-md">인정보험료</th><th class="num">센 값</th><th class="hide-sm hide-md">상태</th></tr>
-{% for c in contracts %}<tr><td>{{ c.date|md }}<div class="sm-sub"><span>{{ c.window }} · {{ c.status_ko }}</span></div></td><td class="hide-sm hide-md">{{ c.insurer }}</td>
+{% for c in contracts %}<tr{% if c.after_ref %} data-after-ref="1"{% endif %}><td>{{ c.date|md if c.date else '-' }}{% if c.after_ref %}<div><span class="chip warn tiny">기준일 뒤 계약</span></div>{% endif %}<div class="sm-sub"><span>{{ c.window }} · {{ c.status_ko }}</span></div></td><td class="hide-sm hide-md">{{ c.insurer }}</td>
 <td class="strong word">{{ c.product }}<div class="sm-sub"><span>{{ c.insurer }}</span><span>보험료 {{ c.premium|won }}원 · 인정보험료 {{ c.converted|won }}원</span></div></td>
 <td class="num hide-sm hide-md">{{ c.premium|won }}원</td><td class="num hide-sm hide-md">{{ c.converted|won }}원</td>
-<td class="num" data-counted="{{ c.value|int }}"><b>{{ pr.val(c.value, shape) }}</b>{% if c.value_each is not none %}<div class="cell-amt">달 기준에는 {{ pr.val(c.value_each, shape)|trim }}</div>{% endif %}</td>
-<td class="hide-sm hide-md"><span class="chip">{{ c.status_ko }}</span></td></tr>{% endfor %}
+<td class="num" data-counted="{{ c.value|int }}"><b>{{ pr.val(c.value, shape) }}</b>{% if c.value_each is not none %}<div class="cell-amt">달 기준에는 {{ pr.val(c.value_each, shape)|trim }}</div>{% elif c.boosted %}<div class="cell-amt">가중 인정</div>{% endif %}</td>
+<td class="hide-sm hide-md"><span class="chip{{ ' warn' if confirmed and c.status in ('withdrawn', 'declined') }}" data-contract-status="{{ c.status }}">{{ c.status_ko }}</span></td></tr>{% endfor %}
 </table></div>
-{% else %}<div class="card" style="margin-top:12px"><div class="k">센 계약이 없습니다</div><div class="cap">기간 안에 이 프로모션의 조건에 드는 계약이 없습니다.</div></div>{% endif %}
-<p class="cap">엔진이 이 프로모션에 센 계약만 싣습니다. 철회한 계약과 대상이 아닌 상품은 빠져 있습니다. 센 값은 합산에 쓰는 {{ shape.metric_ko }}입니다. 고객 이름과 증권번호는 싣지 않습니다.</p>
+{% elif confirmed and not contract_source %}<div class="card" style="margin-top:12px" data-contracts-none="1"><div class="k">센 계약을 낼 수 없습니다</div><div class="cap">센 계약을 남기지 않은 예전 확정입니다. 확정 값에는 합산 실적, 구간, 달성 여부만 있습니다.</div></div>
+{% else %}<div class="card" style="margin-top:12px"><div class="k">센 계약이 없습니다</div><div class="cap">{% if confirmed %}확정할 때 이 프로모션에 센 계약이 없습니다.{% else %}기간 안에 이 프로모션의 조건에 드는 계약이 없습니다.{% endif %}</div></div>{% endif %}
+{% if confirmed and not contract_source %}
+{% elif confirmed %}<p class="cap" data-note="contracts">{{ contract_note }} 센 값은 합산에 쓰는 {{ shape.metric_ko }}입니다. 고객 이름과 증권번호는 싣지 않습니다.</p>
+{% else %}<p class="cap" data-note="contracts">엔진이 이 프로모션에 센 계약만 싣습니다. 철회한 계약과 대상이 아닌 상품은 빠져 있습니다. 센 값은 합산에 쓰는 {{ shape.metric_ko }}입니다. 고객 이름과 증권번호는 싣지 않습니다.{% if contracts|selectattr('after_ref')|list %} 기준일 뒤 날짜의 계약도 달성 현황이 세므로 싣고 '기준일 뒤 계약' 으로 표시했습니다.{% endif %}</p>{% endif %}
 {% if unnamed %}<p class="cap">상품 이름이 비어 세지 않은 계약이 {{ unnamed }}건 있습니다. 보험사 원장에서 상품을 확인하세요.</p>{% endif %}
 
-{% if basis %}<p class="cap" data-note="basis">{{ basis_note(shape, {'basis': basis}, ref) }}</p>{% endif %}
-<p class="cap">{{ pm.ESTIMATE_NOTE }} {{ assumption }}</p>
+{% if basis %}<p class="cap" data-note="basis">{{ basis_note(shape, {'basis': basis}, none if confirmed else ref) }}</p>{% endif %}
+<p class="cap">{{ pm.CONFIRMED_NOTE if confirmed else pm.ESTIMATE_NOTE }} {{ assumption }}</p>
 {{ ui.ref_note() }}
 {% endblock %}

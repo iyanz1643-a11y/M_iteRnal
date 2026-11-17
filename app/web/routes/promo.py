@@ -21,7 +21,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app import db
-from app.engine import classify
 from app.engine import org_award as oa
 from app.engine import promotion as pm
 from app.web import auth, awards, org_labels, org_values, promo_extra
@@ -83,7 +82,8 @@ CONFIRMED_VIEW_NOTE = "메인 관리자가 확정한 결과입니다. 확정한 
 
 def _confirmed_team_rows(con, ctx, sel, head, only=None):
     """확정한 프로모션의 사람별 줄. 다시 계산하지 않고 엔진이 남긴 확정 값(pm.final_results)을 옮긴다. 지난 프로모션 화면과 같은 숫자다.
-    확정 값에는 창별 실적과 다음 구간이 없어 그 칸은 비운다. 대상은 확정할 때의 재직자 가운데 범위 안 사람이다."""
+    확정 값에는 창별 실적과 다음 구간이 없어 그 칸은 비운다. 대상은 확정할 때의 재직자 가운데 범위 안 사람이다.
+    확정한 뒤에 퇴사한 사람도 줄이 있고 gone 이 참이다. 개인 화면은 재직자만 열리므로 조직별 보기의 사람 표가 그 줄에 주소를 붙이지 않는다."""
     scope = {a["agent_id"]: a for a in _scope_agents(con, ctx, with_left=True)}
     keep = None if only is None else set(only)
     ids = [a for a in scope if keep is None or a in keep]
@@ -94,7 +94,7 @@ def _confirmed_team_rows(con, ctx, sel, head, only=None):
         tier = (tiers.get(x["tier_no"]) or {"tier_no": x["tier_no"]}) if x["tier_no"] else None
         r = {"value": x["value"], "tier": tier, "next": None, "reward": x["reward"], "amount": x["amount"], "broken": False, "capped": False,
              "status": "achieved" if x["outcome"] == "achieved" else "missed", "windows": [], "basis": fin["basis"], "confirmed": True}
-        rows.append({**scope[x["agent_id"]], "left": False, "r": r})
+        rows.append({**scope[x["agent_id"]], "left": False, "gone": bool(scope[x["agent_id"]]["left"]), "r": r})   # gone: 확정한 뒤에 퇴사했다
     rows.sort(key=lambda x: -x["r"]["value"])
     summary = {"near_text": org_values.pct_text([]), "n": len(rows), "achieved": fin["summary"]["achieved"], "near": 0, "missed": 0, "n_left": 0, "value_left": 0,
                "top": max((x["r"]["value"] for x in rows), default=0),
@@ -419,11 +419,22 @@ def amount_text(v, p) -> str | None:
     return f"{sign}{man:,}.{frac}만원" if frac and man < 1_000 else f"{sign}{man:,}만원"
 
 
-def metric_note(shape, ref) -> str:
-    """표 위에 두는 지표와 기준 설명. '실적은 인정보험료 기준입니다' 와 기준일. shape 는 창을 읽는 프로모션이다(딸린 시책이면 부모)."""
+def metric_note(shape, ref, confirmed=False) -> str:
+    """표 위에 두는 지표와 기준 설명. '실적은 인정보험료 기준입니다' 와 기준일. shape 는 창을 읽는 프로모션이다(딸린 시책이면 부모).
+    confirmed 가 참이면 다시 세지 않는 확정 값이라 그렇게 적는다. 이때 ref 는 확정의 계산 기준일이다."""
     basis = pm.BASIS_KO.get(shape["date_basis"], shape["date_basis"])
     count = pm.COUNT_BASIS_KO.get(pm._r(shape)["count_basis"], "")
+    if confirmed:
+        return f"실적은 {shape['metric_ko']} 기준입니다. 기준일은 {basis}이고 {count}으로 {ref.month}월 {ref.day}일에 확정한 값입니다."
     return f"실적은 {shape['metric_ko']} 기준입니다. 기준일은 {basis}이고 {count}으로 {ref.month}월 {ref.day}일까지 셉니다."
+
+
+def confirm_ref(head, ref) -> date:
+    """확정의 계산 기준일. 확정 줄(pm.confirmation 또는 org_progress 의 confirm)의 ref_date 이고 읽지 못하면 화면의 기준일이다."""
+    try:
+        return date.fromisoformat(str((head or {}).get("ref_date"))[:10])
+    except ValueError:
+        return ref
 
 
 def org_phases(data, sel, ref, shape=None) -> list:
@@ -505,7 +516,6 @@ def org_phases(data, sel, ref, shape=None) -> list:
     for r in [*data["rows"], tot]:
         r["cells"] = cells(r)
         r["sums"], r["plains"] = sums(r)
-        r["n_missed"] = r["n_target"] - r["n_achieved"]             # 미달성 인원. 엔진이 따로 내지 않아 대상에서 최종 달성을 뺀다. 명단 열쇠 missed 와 같은 수다
         r["alt_line"] = " · ".join(                                  # 휴대폰에서 조건 1-2 를 둘째 줄로. 금액은 인원 뒤에 붙인다
             f"{cols[i]['short']} {r['cells'][i] or '-'}" + (f" {amount_text(r['sums'][i], shape)}" if r["sums"][i] is not None else "")
             for i in alt_ix)
@@ -523,6 +533,21 @@ def _short(v, p) -> str:
 # 조직별 표의 인원 숫자마다 명단 열쇠가 있다. 명단은 그 줄(row, 비면 합계)의 대상자(엔진 org_progress 의 agent_ids) 가운데
 # 엔진이 사람마다 낸 결과(pm.progress)에서 엔진이 인원을 셀 때와 같은 조건을 채운 사람이다. 숫자와 명단 인원 수가 같다(시험).
 # 범위 안 설계사만 싣고, 금액은 싣지 않는다. 실적과 남은 금액은 팀원 달성 현황과 같은 규칙이다.
+# 확정한 프로모션이면 조직 표가 확정 값이므로(org_progress 의 confirmed) 명단과 개인 화면도 다시 세지 않고 pm.confirmed_progress 를 옮긴다.
+# 확정 값의 자세함(detail)이 full 이 아니면 엔진이 창별 인원을 내지 않는다. 그 칸의 명단과 사람별 달 칸은 비우고 안내한다.
+NO_WINDOW_NOTE = "확정 때의 창별 값이 남아 있지 않습니다."
+NO_WINDOW_JUDGE_NOTE = "확정 때의 창별 판정이 남아 있지 않습니다."
+NO_COND_NOTE = "확정 때의 조건별 판정이 남아 있지 않습니다."
+NOT_IN_CONFIRM = "확정할 때 대상이 아니었습니다."
+
+
+def window_note(detail, n_windows=2) -> str | None:
+    """확정 값에서 창별 값을 낼 수 없을 때의 안내. 확정한 프로모션에서만 부른다. 낼 수 있으면(full 이거나 창이 하나) None 이다.
+    detail 은 엔진의 확정 값 자세함이다. org_progress 는 full, values, none 을, confirmed_progress 는 full, values, None 을 낸다.
+    values 는 센 계약의 창별 합계는 남아 있고 창별 판정만 없다. 조직 표의 달 칸에 합계가 보이고 개인 화면에 센 계약이 보이므로 말을 달리한다."""
+    if detail == "full" or n_windows < 2:
+        return None
+    return NO_WINDOW_JUDGE_NOTE if detail == "values" else NO_WINDOW_NOTE
 WHO_KO = {"target": "대상", "active": "가동", "near": "구간 근접", "inactive": "미가동", "final": "최종 달성", "missed": "미달성",
           "sum": "합산 달성", "chain": "연속 유지 중", "alt_el": "조건 1-2 대상"}
 STATUS_LIST_KO = {"met": "달성", "open": "진행 중", "miss": "미달성", "future": "시작 전", "not_target": "대상 아님"}
@@ -563,7 +588,8 @@ def cell_who(col_key: str) -> str | None:
 
 
 def _who_rule(sel, data, who, pcts):
-    """(제목, 조건 함수(agent_id, 결과), 볼 값 함수). 엔진이 org_progress 에서 세는 조건과 같다. 모르는 열쇠면 None."""
+    """(제목, 조건 함수(agent_id, 결과), 볼 값 함수). 엔진이 org_progress 에서 세는 조건과 같다. 모르는 열쇠면 None.
+    확정 값이라 엔진이 그 칸의 인원을 내지 않았으면(None) 조건 함수와 볼 값 함수가 None 이다. 화면에서 대신 세지 않는다."""
     seqs = [w["seq"] for w in data["windows"]]
     tot = data["total"]
     phases = {ph["seq"]: ph for ph in (tot.get("phases") or [])}
@@ -575,6 +601,8 @@ def _who_rule(sel, data, who, pcts):
             return None
         floor = ph["target"]
         title = f"{data['windows'][i]['label']} 기준({_short(floor, sel)}) 채운 사람"
+        if ph.get("n_met") is None:
+            return title, None, None
         pick = lambda a, r: bool(r["windows"][i]["tier"])
         view = lambda r: (r["windows"][i]["value"], r["windows"][i].get("plain", r["windows"][i]["value"]), floor,
                           "met" if r["windows"][i]["tier"] else ("open" if ph.get("state") == "open" else "miss"))
@@ -588,6 +616,8 @@ def _who_rule(sel, data, who, pcts):
         if j is None or alt["phases"][j].get("state") == "future":
             return None
         ph = alt["phases"][j]
+        if ph.get("n_met") is None:
+            return f"조건 1-2 {ph['label']} 기준({_short(ph['min_value'], sel)}) 채운 사람", None, None
 
         def alt_of(r):
             alts = (r.get("paths") or {}).get("alts") or []
@@ -601,12 +631,16 @@ def _who_rule(sel, data, who, pcts):
         alt = tot.get("alt")
         if not alt:
             return None
+        if alt.get("n_eligible") is None:
+            return WHO_KO[who], None, None
         pick = lambda a, r: any(x["key"] == alt["key"] and x["eligible"] for x in ((r.get("paths") or {}).get("alts") or []))
         return WHO_KO[who], pick, final_view
     if who == "sum":
         target = tot.get("sum_target")
         if not target:
             return None
+        if tot.get("n_sum") is None:
+            return f"합산 {_short(target, sel)} 채운 사람", None, None
         return (f"합산 {_short(target, sel)} 채운 사람", lambda a, r: r["value"] >= target,
                 lambda r: (r["value"], None, target, "met" if r["value"] >= target else "open"))
     rules = {"target": lambda a, r: True, "active": lambda a, r: r["value"] > 0, "inactive": lambda a, r: not r["value"] > 0,
@@ -624,7 +658,11 @@ def who_roster(con, ctx, sel, ref, data, phases, who, row_key, sort=None):
     """명단 하나. row_key 가 표의 줄(path_key)이면 그 줄만, 비거나 all 이면 모든 줄이다. 없는 열쇠나 줄이면 None.
     사람마다 달(창)별 실적 months 와 합산 실적 total, 합산 기준까지 남은 값 sum_left 를 함께 싣는다. 모두 엔진의 사람별 결과
     (pm.progress 의 windows[].value, plain, value)를 옮긴 것이고 남은 값만 기준에서 합산 실적을 뺀다. 시작 전 달은 값을 싣지 않는다.
-    sort 가 sum 이면 합산 실적이 큰 순, 아니면 누른 칸의 실적이 큰 순이다. 시상 금액은 싣지 않는다."""
+    sort 가 sum 이면 합산 실적이 큰 순, 아니면 누른 칸의 실적이 큰 순이다. 시상 금액은 싣지 않는다.
+    확정한 프로모션이면(data 의 confirmed) 다시 세지 않고 pm.confirmed_progress 를 옮긴다. 조직 표와 같은 확정 값이다. 대상은 엔진이 낸
+    확정 때의 재직자라 그 뒤에 퇴사한 범위 안 사람도 싣고 gone 으로 표시한다. 팀원 달성 현황의 확정 줄과 같은 사람이다.
+    확정 값의 자세함이 full 이 아니면 달 칸을 싣지 않고 window_note 로 안내한다. 엔진이 인원을 내지 않은 칸의 명단은 unavailable 에
+    안내만 싣고 사람은 싣지 않는다."""
     sort = sort if sort in SORT_KO else "cell"
     rows = data["rows"] if row_key in (None, "", "all") else [r for r in data["rows"] if r["path_key"] == row_key and not r["direct"]] or \
         [r for r in data["rows"] if r["path_key"] == row_key]
@@ -636,9 +674,15 @@ def who_roster(con, ctx, sel, ref, data, phases, who, row_key, sort=None):
     if rule is None:
         return None
     title, pick, view = rule
-    res = pm.progress(con, sel, ids, ref)
-    scope = {a["agent_id"]: a for a in _scope_agents(con, ctx)}         # 범위 안 사람만. org_progress 도 같은 목록으로 셌다
-    multi = len(data["windows"]) > 1
+    frozen = bool(data.get("confirmed"))                                # 확정한 프로모션. 조직 표가 확정 값이다
+    note = window_note(data.get("detail"), len(data["windows"])) if frozen else None
+    if pick is None:                                                    # 엔진이 인원을 내지 않은 칸. 화면에서 대신 세지 않는다
+        return {"who": who, "title": title, "row": row_key or "all", "n": 0, "groups": [], "summary": [], "confirmed": frozen,
+                "unavailable": (note or NO_WINDOW_NOTE) if who.startswith(("w", "alt_w")) else NO_COND_NOTE, "window_note": None, "estimate_note": data["estimate_note"], "windows": [], "on_seq": None,
+                "sum_target": None, "sum_target_text": None, "sort": sort, "sorts": SORT_KO, "sortable": False, "marks": False, "has_plain": False}
+    res = (pm.confirmed_progress(con, sel, ids) or {}) if frozen else pm.progress(con, sel, ids, ref)
+    scope = {a["agent_id"]: a for a in _scope_agents(con, ctx, with_left=frozen)}   # 범위 안 사람만. org_progress 도 같은 목록으로 셌다
+    multi = len(data["windows"]) > 1 and not note                       # 창별 값이 없는 확정 값이면 달 칸을 그리지 않는다
     shape = pm._parent(con, sel) or sel                                 # 합산 기준은 창을 읽는 프로모션의 것이다
     target, floors = sum_target(shape, data), has_floors(data)
     on_seq = int(who[1:]) if who.startswith("w") and who[1:].isdigit() else (int(who[5:]) if who.startswith("alt_w") and who[5:].isdigit() else None)
@@ -646,12 +690,12 @@ def who_roster(con, ctx, sel, ref, data, phases, who, row_key, sort=None):
     for r in rows:
         people = []
         for a in r["agent_ids"]:
-            if a not in scope or not pick(a, res[a]):
+            if a not in scope or a not in res or not pick(a, res[a]):
                 continue
             value, plain, floor, st = view(res[a])
             left = max(floor - value, 0) if floor is not None and st != "met" else None
             total = res[a]["value"]
-            people.append({"agent_id": a, "code": scope[a]["code"], "name": scope[a]["name"], "branch": scope[a]["org"] or "-",
+            people.append({"agent_id": a, "code": scope[a]["code"], "name": scope[a]["name"], "branch": scope[a]["org"] or "-", "gone": bool(scope[a]["left"]),
                            "value": value, "plain": plain if plain is not None and plain != value else None, "floor": floor, "left": left,
                            "status": st, "status_ko": STATUS_LIST_KO[st], "months": person_months(res[a], multi, floors), "total": total,
                            "sum_left": sum_left(target, res[a])})
@@ -659,7 +703,8 @@ def who_roster(con, ctx, sel, ref, data, phases, who, row_key, sort=None):
         n += len(people)
         groups.append({"title": "바로 소속" if r["direct"] else org_labels.title(r), "path_key": r["path_key"], "people": people})
     return {"who": who, "title": title, "row": row_key or "all", "n": n, "groups": [g for g in groups if g["people"]],
-            "summary": [(g["title"], len(g["people"])) for g in groups if g["people"]], "estimate_note": pm.ESTIMATE_NOTE,
+            "summary": [(g["title"], len(g["people"])) for g in groups if g["people"]], "estimate_note": data["estimate_note"],
+            "confirmed": frozen, "unavailable": None, "window_note": note,
             "windows": [{"seq": w["seq"], "label": w["label"]} for w in data["windows"]] if multi else [], "on_seq": on_seq,
             "sum_target": target, "sum_target_text": _short(target, shape) if target else None, "sort": sort, "sorts": SORT_KO,
             "sortable": on_seq is not None, "marks": multi and floors,    # 누른 칸이 달 칸일 때만 두 순서가 다르다
@@ -691,7 +736,7 @@ def people_view(sel, data, people, f, href, shape=None) -> dict:
         r = x["r"]
         st = final_status(sel, r)
         x.update(months=person_months(r, multi, floors), total=r["value"], sum_left=sum_left(target, r),
-                 status=st, status_ko=STATUS_LIST_KO[st], met=st == "met", href=f"{href}&person={x['agent_id']}")
+                 status=st, status_ko=STATUS_LIST_KO[st], met=st == "met", href=None if x.get("gone") else f"{href}&person={x['agent_id']}")
     counts = {"all": len(people), "met": sum(1 for x in people if x["met"]), "miss": sum(1 for x in people if not x["met"])}
     shown = [x for x in people if f == "all" or (f == "met") == x["met"]]
     return {"f": f, "filters": PEOPLE_FILTER_KO, "counts": counts, "rows": [x for x in shown if x["total"] or x["met"]],
@@ -700,31 +745,16 @@ def people_view(sel, data, people, f, href, shape=None) -> dict:
             "has_plain": any(m["plain"] is not None for x in people for m in x["months"])}
 
 
-def counted_contracts(con, shape, agent_id) -> list:
-    """한 사람의 계약 가운데 엔진이 이 프로모션에 센 것. 거르기는 엔진의 pm._counted 를 그대로 부르고 화면에서 다시 거르지 않는다.
-    엔진에 사람별 계약 목록을 내는 공개 함수가 아직 없어 progress() 가 쓰는 함수를 부른다. 줄마다 기준일과 센 값은 엔진 값이고,
-    보험사, 상품명, 보험료, 인정보험료, 상태는 계약 원장에서 읽는다. 고객 이름과 증권번호는 싣지 않는다."""
-    rows, _unnamed = pm._counted(con, shape, [agent_id])
-    if not rows:
-        return []
-    ids = sorted({x["contract_id"] for x in rows})
-    q = ",".join("?" * len(ids))
-    info = {x["contract_id"]: x for x in con.execute(
-        f"""SELECT c.contract_id, c.status, c.premium_monthly, c.converted_premium, c.policy_count, ins.name insurer, {pm.NAME_SQL} product
-            FROM contract c {classify.JOINS} LEFT JOIN insurer ins ON ins.insurer_id=c.insurer_id
-            WHERE c.agent_id=? AND c.contract_id IN ({q})""", (agent_id, *ids))}
-    labels = {w["seq"]: w["label"] for w in shape["windows"]}
+def contract_rows(cc) -> list:
+    """개인 화면의 센 계약 줄. 엔진의 pm.counted_contracts() 가 낸 줄을 화면 글로 옮기기만 하고 다시 거르거나 세지 않는다.
+    상태 코드는 CONTRACT_STATUS_KO 로 읽는다. value_each 는 달 기준에 대는 값이 센 값과 다를 때만 남긴다.
+    after_ref 는 기준일 뒤 날짜의 계약이다. 고객 이름과 증권번호는 엔진이 싣지 않는다."""
     out = []
-    for x in rows:
-        c = info.get(x["contract_id"])
-        if not c:
-            continue
-        each = x.get("value_each", x["value"])
-        out.append({"date": x["date"], "window": labels.get(x["window_seq"], ""), "insurer": c["insurer"] or "-", "product": c["product"] or "상품명 없음",
-                    "premium": c["premium_monthly"], "converted": c["converted_premium"], "count": c["policy_count"],
-                    "value": x["value"], "value_each": each if each != x["value"] else None,
-                    "status_ko": CONTRACT_STATUS_KO.get(c["status"], c["status"])})
-    out.sort(key=lambda x: (x["date"], x["product"]))
+    for x in cc["rows"]:
+        out.append({"date": x["date"], "window": x["window_label"] or "", "insurer": x["insurer"] or "-", "product": x["product"] or "상품명 없음",
+                    "premium": x["premium"], "converted": x["converted"], "count": x["count"], "value": x["value"],
+                    "value_each": x["value_each"] if x["value_each"] != x["value"] else None, "boosted": bool(x["boosted"]),
+                    "status": x["status"], "status_ko": CONTRACT_STATUS_KO.get(x["status"], x["status"] or "-"), "after_ref": bool(x["after_ref"])})
     return out
 
 
@@ -735,6 +765,9 @@ NEXT_PATH_KO = {"each": "이번 달 기준까지", "alt": "조건 1-2의 이번 
 def _person_view(request, con, ctx, cards, head, sel, ref, org, starts, person):
     """개인 화면(person=agent_id). 조직별 보기 안의 셋째 단계다. 범위 안 설계사만 열리고 범위 밖이면 403 이다.
     달별 실적, 합산 실적, 조건별 상태, 다음에 채울 것, 엔진이 센 계약 목록을 보인다. 값은 pm.progress 의 그 사람 결과다.
+    확정한 프로모션이면 다시 세지 않고 pm.confirmed_progress 의 그 사람 결과를 보인다. 조직 표, 명단과 같은 확정 값이다.
+    확정 결과가 없는 사람(확정 뒤에 들어왔거나 딸린 시책의 대상 직급이 아니다)은 값 없이 대상이 아니었다고 안내한다.
+    센 계약은 pm.counted_contracts 가 낸다. 확정 뒤에는 확정 때 센 계약이다.
     예상 시상(금액과 보상 글)은 메인 관리자에게만 넘긴다. 관리자에게는 실적 금액까지만 넘긴다 (D-17, D-74 가정)."""
     is_main = ctx["role"] == "main"
     scope = {a["agent_id"]: a for a in _scope_agents(con, ctx)}
@@ -745,7 +778,20 @@ def _person_view(request, con, ctx, cards, head, sel, ref, org, starts, person):
         raise HTTPException(404, "게시된 프로모션이 없습니다.")
     who = scope[person]
     shape = pm._parent(con, sel) or sel
-    r = pm.progress(con, sel, [person], ref)[person]
+    head_c = pm.confirmation(con, sel["promo_id"])                    # 살아 있는 확정. 있으면 다시 세지 않는다
+    absent = False
+    if head_c:
+        r = (pm.confirmed_progress(con, sel, [person], head_c) or {}).get(person)
+        absent = r is None
+        if absent:
+            r = {"value": 0, "tier": None, "next": None, "reward": None, "amount": None, "status": "not_target", "broken": None, "capped": None,
+                 "windows": [], "basis": head_c.get("basis_note"), "confirmed": True, "detail": None, "unnamed": None}
+    else:
+        r = pm.progress(con, sel, [person], ref)[person]
+    confirmed = {"by": _who_name(con, head_c["confirmed_by"]) or head_c["confirmed_by"], "at": head_c["confirmed_at"],
+                 "note": CONFIRMED_VIEW_NOTE} if head_c else None
+    no_windows = window_note(r.get("detail"), len(shape["windows"])) if head_c and not absent else None
+    count_ref = confirm_ref(head_c, ref) if head_c else ref
     # 위로 가는 경로. 누른 조직이 그 사람의 소속 위에 있으면 그 조직까지, 아니면 소속 조직까지다. 범위 밖 조직은 싣지 않는다
     home = (pm._homes(con, [person], ctx["ym"]).get(person) or {}).get("org_id")
     home_row = con.execute("SELECT org_id, parent_id, name, level, path_key FROM org_unit WHERE org_id=?", (home,)).fetchone() if home else None
@@ -791,14 +837,16 @@ def _person_view(request, con, ctx, cards, head, sel, ref, org, starts, person):
         todo.append({"label": NEXT_PATH_KO.get(path, NEXT_PATH_KO["sum"]), "value": nxt["gap"], "note": None})
     next_reward = nxt.get("reward") if nxt and is_main else None        # 보상 글에는 금액이 들 수 있어 메인 관리자에게만
     amount = {"amount": r.get("amount"), "reward": r.get("reward")} if is_main else None
+    cc = pm.counted_contracts(con, sel, person, ref)                    # 딸린 시책이면 엔진이 부모의 계약을 낸다
     here = f"/promo/progress?view=org&p={sel['promo_id']}" + (f"&ym={head['ym']}" if not head["now"] else "")
     return page(request, ctx, "promo_progress_person.html", cards=cards, sel=sel, shape=shape, head=head, ref=ref.isoformat(), who=who, r=r,
                 crumbs=crumbs, months=months, sum_row=sum_row, alt=alt, each=each, each_ko=STATUS_LIST_KO.get(each),
                 has_alt=bool(pm._r(shape).get("alt_chains")), paired_text=PAIRED_TEXT.get(shape["combine_rule"]) if paired else None,
                 todo=todo, next_reward=next_reward, status=st, status_ko=STATUS_LIST_KO[st], amount=amount, show_amount=is_main,
-                contracts=counted_contracts(con, shape, person), unnamed=r.get("unnamed", 0), here=here,
+                contracts=contract_rows(cc), contracts_n=cc["n"], contract_source=cc["source"], contract_note=cc["note"],
+                unnamed=r.get("unnamed") or 0, here=here, confirmed=confirmed, absent=absent, absent_note=NOT_IN_CONFIRM, window_note=no_windows,
                 org_q=("&org=" + quote(at["path_key"])) if at and at["org_id"] in ctx["org_ids"] else "",
-                metric_note=metric_note(shape, ref), basis=r.get("basis"), attached=shape is not sel,
+                metric_note=metric_note(shape, count_ref, bool(head_c)), basis=r.get("basis"), attached=shape is not sel,
                 boost_text=boost_text(shape), assumption=PERSON_ASSUMPTION, org_title=org_labels.title)
 
 
@@ -819,6 +867,7 @@ def _org_view(request, con, ctx, cards, head, p, org_key, direct, who=None, row_
     if person is not None:
         return _person_view(request, con, ctx, cards, head, sel, ref, org if org_key else None, starts, person)
     data, crumbs, people, people_summary, top = None, [], None, None, None
+    mq = f"&ym={head['ym']}" if not head["now"] else ""              # 지난 달을 보고 있으면 아래로 내려가는 주소에도 그 달을 붙인다
     if sel and org:
         data = org_numbers(con, ctx, sel, ref, org["path_key"], keep_amounts=is_main)
         crumbs = _crumbs(con, org, starts)
@@ -833,7 +882,7 @@ def _org_view(request, con, ctx, cards, head, p, org_key, direct, who=None, row_
         for r in data["rows"]:
             r["level_ko"] = org_labels.level_name(r)                    # 화면 계층 이름. config/org_labels.yaml
             r["title"] = org_labels.title(r)
-            r["href"] = f"/promo/progress?view=org&p={sel['promo_id']}&org={quote(r['path_key'])}" + ("&direct=1" if r["direct"] else "")
+            r["href"] = f"/promo/progress?view=org&p={sel['promo_id']}{mq}&org={quote(r['path_key'])}" + ("&direct=1" if r["direct"] else "")
         data["kids"] = kids
         screen = promo_extra.screen(sel)
         if is_main and screen["top_org_reward"]:                  # 최다 달성 조직은 메인 관리자에게만. 맨 위 조직의 바로 아래끼리 견준다
@@ -856,19 +905,22 @@ def _org_view(request, con, ctx, cards, head, p, org_key, direct, who=None, row_
     if sel:
         sel["versions"] = promo_extra.versions(con, sel)
         sel["chain_text"] = chain_text(shape)
-    mq = f"&ym={head['ym']}" if not head["now"] else ""
     here = (f"/promo/progress?view=org&p={sel['promo_id']}{mq}&org={quote(org['path_key'])}" + ("&direct=1" if direct else "")) if sel and org else ""
     pv = people_view(sel, data, people, f, here, shape) if people is not None else None
-    head_c = pm.confirmation(con, sel["promo_id"]) if sel else None  # 확정한 프로모션. 조직 줄의 숫자는 엔진이 아직 다시 계산한 값으로 낸다
-    confirmed = {"by": _who_name(con, head_c["confirmed_by"]) or head_c["confirmed_by"], "at": head_c["confirmed_at"]} if head_c else None
+    # 확정한 프로모션. 조직 줄의 숫자도 엔진이 확정 값으로 낸다(org_progress 의 confirmed, confirm, detail). 명단과 사람 표도 같은 확정 값이다
+    head_c = data["confirm"] if data and data.get("confirmed") else None
+    confirmed = {"by": _who_name(con, head_c["confirmed_by"]) or head_c["confirmed_by"], "at": head_c["confirmed_at"], "note": CONFIRMED_VIEW_NOTE,
+                 "window_note": window_note(data.get("detail"), len(data["windows"]))} if head_c else None
+    count_ref = confirm_ref(head_c, ref) if head_c else ref
     if roster:
         for g in roster["groups"]:
-            for x in g["people"]:
-                x["href"] = f"{here}&person={x['agent_id']}"
+            for x in g["people"]:                                    # 확정 뒤에 퇴사한 사람은 개인 화면이 열리지 않아 주소를 붙이지 않는다
+                x["href"] = None if x["gone"] else f"{here}&person={x['agent_id']}"
     return page(request, ctx, "promo_progress_org.html", pv=pv, confirmed=confirmed, cards=cards, sel=sel, org=org, data=data, crumbs=crumbs, starts=starts, people=people,
                 summary=people_summary, direct=direct, top=top, gates=gates, ref=ref.isoformat(), show_amount=is_main, head=head,
                 phases=phases, roster=roster, who=who, row_key=row_key, cell_who=cell_who, shape=shape,
-                man=(lambda v: amount_text(v, shape)), metric_note=metric_note(shape, ref) if shape else "",
+                man=(lambda v: amount_text(v, shape)), metric_note=metric_note(shape, count_ref, bool(head_c)) if shape else "",
+                word="확정" if head_c else "예상",
                 root_path=_q(con, "SELECT path_key FROM org_unit WHERE parent_id IS NULL ORDER BY org_id LIMIT 1")[0]["path_key"] if is_main else None,
                 assumption=ORG_ASSUMPTION, org_level=org_labels.level_name, org_title=org_labels.title)
 

@@ -26,15 +26,14 @@
 {% if root_path and crumbs and crumbs[0].path_key != root_path %}<a class="crumb-up" href="{{ base }}&org={{ root_path|urlencode }}">맨 위 조직부터</a>{% endif %}</nav>
 
 {% set t = data.total %}
-{% if confirmed %}<div class="card" style="margin-top:16px" data-confirmed-org="1"><div class="k"><span class="chip good">확정</span> 결과를 확정한 프로모션입니다</div>
-  <div class="cap">사람별 표는 확정한 값입니다. 조직 줄의 인원과 실적 합계는 지금 계약으로 다시 센 값이라 확정한 뒤 계약이 바뀌었으면 확정 값과 다를 수 있습니다. 확정 값은 지난 프로모션 화면이 기준입니다.{% if confirmed.at %} 확정 {{ confirmed.at|when }}.{% endif %}</div></div>{% endif %}
+{% if confirmed %}<p class="cap" style="margin-top:16px" data-confirmed-org="1" data-note="confirmed"><span class="chip good">확정</span> {{ confirmed.note }}{% if confirmed.at %} 확정 {{ confirmed.at|when }}.{% endif %}</p>{% endif %}
 {% set sum_col = phases|selectattr('key', 'equalto', 'sum')|first %}
-<div class="grid g4" style="margin-top:16px" data-totals="1">
-  <div class="card"><div class="k">전체 {{ shape.metric_ko }} 합계</div><div class="mid" data-total-value="{{ t.value|int }}">{{ pr.val(t.value, shape) }}</div><div class="cap">대상 {{ t.n_target }}명 · 가동 {{ t.n_active }}명 · 미가동 {{ t.n_inactive }}명{% if t.n_left %} · 퇴사 {{ t.n_left }}명의 퇴사 전 실적 포함{% endif %}</div></div>
+<div class="grid {{ 'g4' if sum_col or not confirmed else 'g3' }}" style="margin-top:16px" data-totals="1">
+  <div class="card"><div class="k">전체 {{ shape.metric_ko }} 합계{% if confirmed %} <span class="chip good tiny" data-confirmed="1">확정</span>{% endif %}</div><div class="mid" data-total-value="{{ t.value|int }}">{{ pr.val(t.value, shape) }}</div><div class="cap">대상 {{ t.n_target }}명 · 가동 {{ t.n_active }}명 · 미가동 {{ t.n_inactive }}명{% if t.n_left %} · 퇴사 {{ t.n_left }}명의 퇴사 전 실적 포함{% endif %}</div></div>
   {% if sum_col %}<div class="card"><div class="k"><span class="dot"></span>합산 달성</div><div class="mid" data-total-sum="{{ t.n_sum }}">{{ t.n_sum }}<span class="unit">명</span></div><div class="cap">합산 {{ sum_col.pre }}</div></div>
-  {% else %}<div class="card"><div class="k"><span class="dot warn"></span>구간 근접</div><div class="mid">{{ t.n_near }}<span class="unit">명</span></div><div class="cap">다음 구간까지 {{ data.near_pcts|join(', ') }}% 이내</div></div>{% endif %}
+  {% elif not confirmed %}<div class="card" data-near-card="1"><div class="k"><span class="dot warn"></span>구간 근접</div><div class="mid">{{ t.n_near }}<span class="unit">명</span></div><div class="cap">다음 구간까지 {{ data.near_pcts|join(', ') }}% 이내</div></div>{% endif %}
   <div class="card"><div class="k"><span class="dot"></span>최종 달성</div><div class="mid" data-total-achieved="{{ t.n_achieved }}">{{ t.n_achieved }}<span class="unit">명</span></div><div class="cap">달성률 {{ ((t.achieve_rate or 0) * 100)|round(1) }}%</div></div>
-  <div class="card"><div class="k"><span class="dot warn"></span>미달성</div><div class="mid" data-total-missed="{{ t.n_missed }}">{{ t.n_missed }}<span class="unit">명</span></div><div class="cap">진행 중인 사람 포함 · 구간 근접 {{ t.n_near }}명</div></div>
+  <div class="card"><div class="k"><span class="dot warn"></span>미달성</div><div class="mid" data-total-missed="{{ t.n_missed }}">{{ t.n_missed }}<span class="unit">명</span></div><div class="cap" data-total-lost="{{ t.n_lost }}" data-total-open="{{ t.n_open }}">무효 {{ t.n_lost }}명 · 진행 중 {{ t.n_open }}명{% if not confirmed %} · 구간 근접 {{ t.n_near }}명{% endif %}</div></div>
 </div>
 
 {% set here_q = base ~ '&org=' ~ (org.path_key|urlencode) ~ ('&direct=1' if direct else '') %}
@@ -43,62 +42,65 @@
 {% macro cell(r, i, rowk, hq) %}{% set c = phases[i] %}{% set v = r.cells[i] %}{% set sv = r.sums[i] %}
 <td class="num {{ 'soft' if v == '시작 전' }}{{ ' hide-sm alt-col' if c.group == 'alt' }}{{ ' sum-col' if c.key == 'sum' }}" data-cell="{{ c.key }}"{% if sv is not none %} data-amt="{{ sv|int }}"{% endif %}>
 {%- if c.key == 'sum' %}{{ money(sv, 'cell-big') }}<div class="cell-line"><span class="cell-pre">{{ c.pre }}</span> {{ cnt(v, cell_who(c.key), rowk, hq) }}</div>
-{%- elif c.key == 'final' %}{{ cnt(v, cell_who(c.key), rowk, hq) }}{{ money(sv) }}<div class="cell-line"><span class="cell-pre">미달성</span> {{ cnt(r.n_missed|string ~ '명', 'missed', rowk, hq) }}</div>
+{%- elif c.key == 'final' %}{{ cnt(v, cell_who(c.key), rowk, hq) }}{{ money(sv) }}<div class="cell-line"><span class="cell-pre">미달성</span> {{ cnt(r.n_missed|string ~ '명', 'missed', rowk, hq) }}</div><div class="cell-line" data-lost="{{ r.n_lost }}" data-open="{{ r.n_open }}"><span class="cell-pre">무효 {{ r.n_lost }}명</span><span class="cell-pre">· 진행 중 {{ r.n_open }}명</span></div>
 {%- else %}{{ cnt(v, cell_who(c.key), rowk, hq) }}{{ money(sv) }}{% if r.plains[i] is not none %}<div class="cell-amt hide-sm" data-plain="{{ r.plains[i]|int }}">원래 {{ man(r.plains[i]) }}</div>{% endif %}{% endif %}</td>{% endmacro %}
 
 {% if people is none or direct or data.kids %}{% set amt = data.amounts if data.amounts is defined else none %}
 {% if sel.chain_text %}<p class="cap" style="margin-top:16px;font-weight:600" data-chain="1">{{ sel.chain_text }}</p>{% endif %}
 {% if data.rows %}
-<p class="cap" style="margin-top:12px" data-metric-note="1">{{ metric_note }} 칸마다 인원 아래에 그 조직의 실적 합계를 적었습니다. 금액은 예상이고 만원 단위로 줄여 보이며 그 아래 자리는 버립니다.{% if t.plains|select('ne', none)|list %} 가중 인정이 든 달은 인정한 값을 먼저 적고 '원래' 에 합산에 쓰는 값을 적었습니다.{% endif %}</p>
+<p class="cap" style="margin-top:12px" data-metric-note="1">{{ metric_note }} 칸마다 인원 아래에 그 조직의 실적 합계를 적었습니다. 금액은 {{ '확정한 값' if confirmed else '예상' }}이고 만원 단위로 줄여 보이며 그 아래 자리는 버립니다.{% if confirmed and confirmed.window_note and phases|selectattr('group', 'equalto', 'main')|list %} <span data-window-note="1">{{ confirmed.window_note }}{% if data.detail == 'values' %} 달 칸에는 실적 합계만 보입니다.{% endif %}</span>{% endif %}{% if t.plains|select('ne', none)|list %} 가중 인정이 든 달은 인정한 값을 먼저 적고 '원래' 에 합산에 쓰는 값을 적었습니다.{% endif %}</p>
 <div class="card tablecard org-table" style="margin-top:16px" data-org-rows="1"><table>
 {% set glabels = phases|map(attribute='group_label')|select|list %}
 {% if glabels %}<tr class="grp" data-groups="1"><th></th>{% for c in phases if c.gspan %}<th class="num grp-h{{ ' hide-sm alt-col' if c.group == 'alt' }}" colspan="{{ c.gspan }}">{{ c.group_label }}</th>{% endfor %}{% if data.amounts is defined and data.amounts %}<th class="hide-sm hide-md"></th>{% endif %}</tr>{% endif %}
 <tr><th>{{ data.kids[0].level_ko if data.kids else '조직' }}</th>{% for c in phases %}<th class="num{{ ' hide-sm alt-col' if c.group == 'alt' }}{{ ' sum-col' if c.key == 'sum' }}" data-col="{{ c.key }}">{{ c.label }}{% if c.sub %}<span class="th-sub">{{ c.sub }}{% if c.state == 'open' %} · 진행 중{% endif %}</span>{% endif %}</th>{% endfor %}
-{% if amt %}<th class="num hide-sm hide-md">예상 시상</th>{% endif %}</tr>
+{% if amt %}<th class="num hide-sm hide-md">{{ word }} 시상</th>{% endif %}</tr>
 {% for r in data.rows %}
 <tr class="go" data-org="{{ r.path_key }}"><td class="strong"><a class="row-name" href="{{ r.href }}">{% if r.direct %}바로 소속{% else %}{{ r.title }}{% endif %}</a> <span class="chip">{{ '사람' if r.direct else r.level_ko }}</span>
-  <div class="sm-sub org-more"><span>대상 {{ r.n_target }} · 가동 {{ r.n_active }} · 근접 {{ r.n_near }} · 미가동 {{ r.n_inactive }}</span>{% if r.alt_line %}<span class="only-sm" data-alt-line="1">조건 1-2 {{ r.alt_line }}</span>{% endif %}<span>달성률 {% if r.achieve_rate is not none %}{{ (r.achieve_rate * 100)|round(1) }}%{% else %}-{% endif %} · 순위 {% if r.rank %}{{ r.rank }}위{% else %}-{% endif %}</span></div></td>
+  <div class="sm-sub org-more"><span>대상 {{ r.n_target }} · 가동 {{ r.n_active }}{% if not confirmed %} · 근접 {{ r.n_near }}{% endif %} · 미가동 {{ r.n_inactive }}</span>{% if r.alt_line %}<span class="only-sm" data-alt-line="1">조건 1-2 {{ r.alt_line }}</span>{% endif %}<span>달성률 {% if r.achieve_rate is not none %}{{ (r.achieve_rate * 100)|round(1) }}%{% else %}-{% endif %} · 순위 {% if r.rank %}{{ r.rank }}위{% else %}-{% endif %}</span></div></td>
 {% for v in r.cells %}{{ cell(r, loop.index0, r.path_key, here_q) }}{% endfor %}
-{% if amt %}{% set a = amt.by_org.get(r.path_key) %}<td class="num hide-sm hide-md">{% if a is not none %}예상 {{ a|won }}원{% elif amt.in_kind %}여행·물품{% else %}-{% endif %}</td>{% endif %}</tr>
+{% if amt %}{% set a = amt.by_org.get(r.path_key) %}<td class="num hide-sm hide-md">{% if a is not none %}{{ word }} {{ a|won }}원{% elif amt.in_kind %}여행·물품{% else %}-{% endif %}</td>{% endif %}</tr>
 {% endfor %}
-<tr class="sum"><td class="strong"><span class="row-name">합계</span><div class="sm-sub org-more"><span>대상 {{ t.n_target }} · 가동 {{ t.n_active }} · 근접 {{ t.n_near }} · 미가동 {{ t.n_inactive }}</span>{% if t.alt_line %}<span class="only-sm" data-alt-line="1">조건 1-2 {{ t.alt_line }}</span>{% endif %}</div></td>
+<tr class="sum"><td class="strong"><span class="row-name">합계</span><div class="sm-sub org-more"><span>대상 {{ t.n_target }} · 가동 {{ t.n_active }}{% if not confirmed %} · 근접 {{ t.n_near }}{% endif %} · 미가동 {{ t.n_inactive }}</span>{% if t.alt_line %}<span class="only-sm" data-alt-line="1">조건 1-2 {{ t.alt_line }}</span>{% endif %}</div></td>
 {% for v in t.cells %}{{ cell(t, loop.index0, 'all', here_q) }}{% endfor %}
-{% if amt %}<td class="num hide-sm hide-md">{% if amt.total is not none %}예상 {{ amt.total|won }}원{% elif amt.in_kind %}여행·물품{% else %}-{% endif %}</td>{% endif %}</tr>
+{% if amt %}<td class="num hide-sm hide-md">{% if amt.total is not none %}{{ word }} {{ amt.total|won }}원{% elif amt.in_kind %}여행·물품{% else %}-{% endif %}</td>{% endif %}</tr>
 </table></div>
-<details class="card org-detail" style="margin-top:12px" data-org-detail="1"><summary>자세히 · 대상, 가동, 근접, 미가동, 달성률, 순위</summary>
+<details class="card org-detail" style="margin-top:12px" data-org-detail="1">{% set detail_keys = ('target', 'active', 'inactive') if confirmed else ('target', 'active', 'near', 'inactive') %}<summary>자세히 · 대상, 가동, {{ '' if confirmed else '근접, ' }}미가동, 달성률, 순위</summary>
 <div class="tablecard"><table>
-<tr><th>{{ data.kids[0].level_ko if data.kids else '조직' }}</th><th class="num">대상</th><th class="num">가동</th><th class="num">근접</th><th class="num">미가동</th><th class="num hide-sm">달성률</th><th class="num hide-sm">순위</th></tr>
-{% for r in data.rows %}<tr><td>{% if r.direct %}바로 소속{% else %}{{ r.title }}{% endif %}<div class="sm-sub"><span>달성률 {% if r.achieve_rate is not none %}{{ (r.achieve_rate * 100)|round(1) }}%{% else %}-{% endif %} · 순위 {% if r.rank %}{{ r.rank }}위{% else %}-{% endif %}</span></div></td>{% for k in ('target', 'active', 'near', 'inactive') %}<td class="num">{{ cnt(r['n_' ~ k]|string ~ '명', k, r.path_key, here_q) }}</td>{% endfor %}
+<tr><th>{{ data.kids[0].level_ko if data.kids else '조직' }}</th><th class="num">대상</th><th class="num">가동</th>{% if not confirmed %}<th class="num">근접</th>{% endif %}<th class="num">미가동</th><th class="num hide-sm">달성률</th><th class="num hide-sm">순위</th></tr>
+{% for r in data.rows %}<tr><td>{% if r.direct %}바로 소속{% else %}{{ r.title }}{% endif %}<div class="sm-sub"><span>달성률 {% if r.achieve_rate is not none %}{{ (r.achieve_rate * 100)|round(1) }}%{% else %}-{% endif %} · 순위 {% if r.rank %}{{ r.rank }}위{% else %}-{% endif %}</span></div></td>{% for k in detail_keys %}<td class="num">{{ cnt(r['n_' ~ k]|string ~ '명', k, r.path_key, here_q) }}</td>{% endfor %}
 <td class="num hide-sm">{% if r.achieve_rate is not none %}{{ (r.achieve_rate * 100)|round(1) }}%{% else %}-{% endif %}</td><td class="num hide-sm">{% if r.rank %}{{ r.rank }}위{% else %}-{% endif %}</td></tr>{% endfor %}
-<tr class="sum"><td>합계<div class="sm-sub"><span>달성률 {% if t.achieve_rate is not none %}{{ (t.achieve_rate * 100)|round(1) }}%{% else %}-{% endif %}</span></div></td>{% for k in ('target', 'active', 'near', 'inactive') %}<td class="num">{{ cnt(t['n_' ~ k]|string ~ '명', k, 'all', here_q) }}</td>{% endfor %}<td class="num hide-sm">{% if t.achieve_rate is not none %}{{ (t.achieve_rate * 100)|round(1) }}%{% else %}-{% endif %}</td><td class="num hide-sm">-</td></tr>
+<tr class="sum"><td>합계<div class="sm-sub"><span>달성률 {% if t.achieve_rate is not none %}{{ (t.achieve_rate * 100)|round(1) }}%{% else %}-{% endif %}</span></div></td>{% for k in detail_keys %}<td class="num">{{ cnt(t['n_' ~ k]|string ~ '명', k, 'all', here_q) }}</td>{% endfor %}<td class="num hide-sm">{% if t.achieve_rate is not none %}{{ (t.achieve_rate * 100)|round(1) }}%{% else %}-{% endif %}</td><td class="num hide-sm">-</td></tr>
 </table></div>
-<p class="cap" style="margin:8px 0 0">달성 인원 순위는 바로 아래 조직끼리 견줍니다. 구간 근접은 다음 구간까지 {{ data.near_pcts|join(', ') }}% 이내입니다.</p></details>
+<p class="cap" style="margin:8px 0 0">달성 인원 순위는 바로 아래 조직끼리 견줍니다.{% if not confirmed %} 구간 근접은 다음 구간까지 {{ data.near_pcts|join(', ') }}% 이내입니다.{% endif %}</p></details>
 {% else %}<div class="card" style="margin-top:16px"><div class="k">이 조직 아래에 범위 안 설계사가 없습니다</div></div>{% endif %}
 {% endif %}
 
 {% macro mark_word(m) %}{% if m.state == 'future' %}시작 전{% elif m.met %}달성{% elif m.state == 'open' %}진행 중{% elif m.met is not none %}미달{% endif %}{% endmacro %}
 {% macro mark_class(m) %}{{ {'done': ('good' if m.met else ('bad' if m.met is not none else '')), 'open': ('good' if m.met else 'blue')}.get(m.state, '') }}{% endmacro %}
 {% macro month_chips(months, marks) %}{# 휴대폰의 달별 줄. 달, 실적, 달성 표시를 한 칩에 #}{% for m in months %}<span class="chip tiny mk {{ mark_class(m) if marks }}" data-mark="{{ m.state }}{{ '-met' if m.met }}">{{ m.label }}{% if m.state != 'future' %} {{ man(m.value) }}{% endif %}{% if marks or m.state == 'future' %} {{ mark_word(m) }}{% endif %}</span>{% endfor %}{% endmacro %}
-{% macro person_rows(rows, v, on_seq=none, show_amt=false, attr='data-agent') %}{% for x in rows %}{% set org_name = x.org or x.branch or '-' %}<tr {{ attr }}="{{ x.code }}" data-total="{{ x.total|int }}"><td class="strong"><a href="{{ x.href }}" data-person="{{ x.agent_id }}">{{ x.name }}</a>
+{% macro person_rows(rows, v, on_seq=none, show_amt=false, attr='data-agent') %}{% for x in rows %}{% set org_name = x.org or x.branch or '-' %}<tr {{ attr }}="{{ x.code }}" data-total="{{ x.total|int }}"><td class="strong">{% if x.href %}<a href="{{ x.href }}" data-person="{{ x.agent_id }}">{{ x.name }}</a>{% else %}<span data-person-left="{{ x.agent_id }}">{{ x.name }}</span> <span class="chip tiny">퇴사</span>{% endif %}
   <div class="sm-sub"><span>{{ org_name }}</span>{% if x.months %}<span class="marks only-sm">{{ month_chips(x.months, v.marks) }}</span>{% endif %}</div></td>
 <td class="hide-sm hide-md">{{ org_name }}</td>
 {% for m in x.months %}<td class="num hide-sm{{ ' on' if m.seq == on_seq }}" data-month="{{ m.seq }}"{% if m.value is not none %} data-value="{{ m.value|int }}"{% endif %}>{% if m.state == 'future' %}<span class="soft">시작 전</span>{% else %}{{ pr.val(m.value, shape) }}{% if m.plain is not none %}<div class="cell-amt">원래 {{ pr.val(m.plain, shape) }}</div>{% endif %}{% if v.marks %}<div><span class="chip tiny mk {{ mark_class(m) }}">{{ mark_word(m) }}</span></div>{% endif %}{% endif %}</td>{% endfor %}
 <td class="num"><b>{{ pr.val(x.total, shape) }}</b>{% if v.sum_target and x.sum_left is not none %}<div class="sm-sub"><span>{% if x.sum_left %}{{ v.sum_target_text }}까지 {{ pr.val(x.sum_left, shape)|trim }}{% else %}{{ v.sum_target_text }} 채움{% endif %}</span></div>{% endif %}</td>
 {% if v.sum_target %}<td class="num hide-sm hide-md"{% if x.sum_left is not none %} data-sum-left="{{ x.sum_left|int }}"{% endif %}>{% if x.sum_left is none %}-{% elif x.sum_left %}{{ pr.val(x.sum_left, shape) }}{% else %}채움{% endif %}</td>{% endif %}
 <td><span class="chip {{ {'met': 'good', 'open': 'blue', 'miss': 'bad'}.get(x.status, '') }}">{{ x.status_ko }}</span></td>
-{% if show_amt %}<td class="num hide-sm hide-md word">{% if x.r.amount is not none %}예상 {{ x.r.amount|won }}원{% elif x.r.reward %}{{ x.r.reward }}{% else %}-{% endif %}</td>{% endif %}</tr>{% endfor %}{% endmacro %}
+{% if show_amt %}<td class="num hide-sm hide-md word">{% if x.r.amount is not none %}{{ word }} {{ x.r.amount|won }}원{% elif x.r.reward %}{{ x.r.reward }}{% else %}-{% endif %}</td>{% endif %}</tr>{% endfor %}{% endmacro %}
 {% macro person_head(title, v, on_seq=none, show_amt=false) %}<tr><th>{{ title }}</th><th class="hide-sm hide-md">지점</th>{% for w in v.windows %}<th class="num hide-sm{{ ' on' if w.seq == on_seq }}">{{ w.label }}</th>{% endfor %}
-<th class="num">{{ '합산 ' if v.windows }}{{ shape.metric_ko }}</th>{% if v.sum_target %}<th class="num hide-sm hide-md">합산 {{ v.sum_target_text }}까지</th>{% endif %}<th>상태</th>{% if show_amt %}<th class="num hide-sm hide-md">예상 시상</th>{% endif %}</tr>{% endmacro %}
+<th class="num">{{ '합산 ' if v.windows }}{{ shape.metric_ko }}</th>{% if v.sum_target %}<th class="num hide-sm hide-md">합산 {{ v.sum_target_text }}까지</th>{% endif %}<th>상태</th>{% if show_amt %}<th class="num hide-sm hide-md">{{ word }} 시상</th>{% endif %}</tr>{% endmacro %}
 
-{% if roster %}
-<h2 class="sec" id="roster" data-roster-who="{{ roster.who }}">{{ roster.title }} {{ roster.n }}명</h2>
+{% if roster and roster.unavailable %}
+<h2 class="sec" id="roster" data-roster-who="{{ roster.who }}">{{ roster.title }}</h2>
+<div class="card" style="margin-top:12px" data-roster-unavailable="1"><div class="k"><span class="chip good">확정</span> 이 명단은 낼 수 없습니다</div><div class="cap">{{ roster.unavailable }} 사람별 실적과 달성 여부는 최종 달성과 미달성 명단에서 봅니다. · <a class="tap" href="{{ here_q }}">명단 닫기</a></div></div>
+{% elif roster %}
+<h2 class="sec" id="roster" data-roster-who="{{ roster.who }}">{{ roster.title }} {{ roster.n }}명{% if roster.confirmed %} <span class="chip good tiny">확정</span>{% endif %}</h2>
 <p class="cap" data-roster-summary="1">{% for t2, n2 in roster.summary %}{{ t2 }} {{ n2 }}명{{ ', ' if not loop.last }}{% endfor %}{% if not roster.summary %}해당하는 사람이 없습니다{% endif %} · <a class="tap" href="{{ here_q }}">명단 닫기</a></p>
 {% if roster.sortable and roster.n > 1 %}<div class="seg" aria-label="명단 순서" data-roster-sort="{{ roster.sort }}">{% for k, v in roster.sorts.items() %}<a class="{{ 'on' if roster.sort == k }}" href="{{ here_q }}&who={{ roster.who }}&row={{ roster.row|urlencode }}{{ '&sort=sum' if k == 'sum' }}#roster">{{ v }}</a>{% endfor %}</div>{% endif %}
 {% for g in roster.groups %}<div class="card tablecard roster-table people-table md-sub" style="margin-top:12px" data-roster-group="{{ g.path_key }}"><table>
 {{ person_head(g.title ~ ' ' ~ g.people|length ~ '명', roster, roster.on_seq) }}
 {{ person_rows(g.people, roster, roster.on_seq, false, 'data-roster-agent') }}
 </table></div>{% endfor %}
-<p class="cap">{{ metric_note }} 실적은 예상이고 시상 금액은 싣지 않습니다. 이름을 누르면 개인 화면으로 갑니다.{% if roster.has_plain %} 가중 인정이 든 달은 인정한 값을 먼저 적고 '원래' 에 합산에 쓰는 값을 적었습니다.{% endif %} {{ roster.estimate_note }}</p>
+<p class="cap">{{ metric_note }} 실적은 {{ '확정한 값' if roster.confirmed else '예상' }}이고 시상 금액은 싣지 않습니다. 이름을 누르면 개인 화면으로 갑니다.{% if roster.has_plain %} 가중 인정이 든 달은 인정한 값을 먼저 적고 '원래' 에 합산에 쓰는 값을 적었습니다.{% endif %}{% if roster.window_note %} <span data-window-note="roster">{{ roster.window_note }}</span>{% endif %} {{ roster.estimate_note }}</p>
 {% endif %}
 
 {% if people is not none %}
@@ -116,12 +118,12 @@
 {{ person_head('성명', pv, none, false) }}
 {{ person_rows(pv.zero, pv, none, false) }}
 </table></div></details>{% endif %}
-<p class="cap">실적은 예상입니다.{% if not show_amount %} 시상 금액은 싣지 않습니다.{% endif %}{% if pv.has_plain %} 가중 인정이 든 달은 인정한 값을 먼저 적고 '원래' 에 합산에 쓰는 값을 적었습니다.{% endif %} 구간 근접은 다음 구간까지 {{ summary.near_text }} 이내입니다.</p>
+<p class="cap">실적은 {{ '확정한 값' if confirmed else '예상' }}입니다.{% if not show_amount %} 시상 금액은 싣지 않습니다.{% endif %}{% if pv.has_plain %} 가중 인정이 든 달은 인정한 값을 먼저 적고 '원래' 에 합산에 쓰는 값을 적었습니다.{% endif %}{% if not confirmed %} 구간 근접은 다음 구간까지 {{ summary.near_text }} 이내입니다.{% endif %}</p>
 {% endif %}
 
 {{ pr.versions(sel.versions) }}
 <p class="cap" data-note="org">{{ data.note }} 순위는 이 화면에서 보이는 조직끼리만 매깁니다.</p>
-<p class="cap" data-note="basis">{{ basis_note(sel, {'basis': data.basis}, ref) }}</p>
+<p class="cap" data-note="basis">{{ basis_note(sel, {'basis': data.basis}, none if confirmed else ref) }}</p>
 {% if sel.rules.count_basis == 'application' %}<p class="cap">이 프로모션은 청약 기준이라 실적 화면의 업적 집계와 다를 수 있습니다.</p>{% endif %}
 {% if data.total.unnamed %}<p class="cap">상품 이름이 비어 세지 않은 계약이 {{ data.total.unnamed }}건 있습니다. 보험사 원장에서 상품을 확인하세요.</p>{% endif %}
 <p class="cap">{{ data.estimate_note }} {{ assumption }}</p>

@@ -19,6 +19,9 @@
 | 지표 고르기 | 구간과 조건 입력에서 보험료, 인정보험료, 건수를 고르고 게시 뒤에도 바꾼다 |
 | 검증 뒤 고침 | 추가안 여러 개의 열쇠와 가중 여부와 구간 번호가 폼을 거쳐 그대로다. 퇴사자의 실적은 조직 합계에만 든다. 확정한 프로모션의 사람별 보기는 확정 값이다 |
 | 화면 다듬기 | 기간 글이 겹치지 않고, 무효가 된 사람에게 남은 금액이 없고, 딸린 시책의 표가 부모와 같은 모양이고, 틀린 날짜의 오류가 한국어다 |
+| 확정 값 | 확정한 뒤 계약을 철회로 바꿔도 조직 표, 명단, 사람 표, 개인 화면이 확정 값으로 서로 같다. 구간 근접 칸이 없고 미달성 아래에 무효와 진행 중이 있다 |
+| 확정 값의 자세함 | 창별 값을 남기지 않은 확정은 달 칸과 창별 명단을 비우고 안내한다. 최종 달성과 합계는 확정 값 그대로다 |
+| 센 계약 | 개인 화면의 계약 목록은 엔진의 counted_contracts 이고 합이 그 사람 값과 같다. 기준일 뒤 계약에는 표시가 붙는다 |
 
 자료는 run_demo 의 샘플을 임시 폴더에 새로 만든다. data/demo.db 는 건드리지 않는다.
 실패 메시지에는 사람 이름과 금액을 넣지 않는다.
@@ -878,4 +881,190 @@ def test_copy_bridge_bad_date_and_audit_label_read_in_korean(env):
     shown = audit_view.target_ko("promotion_copy", row["target"], audit_view._Names(con))
     assert audit_view.action_ko("promotion_copy") == "프로모션 다음 달 복사"
     assert shown.startswith("프로모션: 삼성화재 11~12월 연속가동 브릿지") and "원본: 삼성화재 10~11월 연속가동 브릿지" in shown and "바뀐 칸" not in shown
+    con.close()
+
+
+# ================================================================ 확정 값으로 맞춘 조직 표, 명단, 개인 화면
+PAST = "삼성화재 드림+ 지난 차수"
+COUNT_KEYS = ("n_target", "n_active", "n_achieved", "n_missed", "n_lost", "n_open", "n_near", "n_inactive", "value", "sum_value")
+
+
+def _main_body(html):
+    return html.split("<main", 1)[-1]
+
+
+def test_confirmed_org_table_roster_and_person_agree_after_withdrawal(env):
+    """확정한 뒤 계약을 철회로 바꿔도 조직 표의 숫자, 명단의 인원, 사람 표와 개인 화면의 값이 확정 값으로 서로 같다.
+    조직 표에 '확정' 표시가 붙고 구간 근접 칸과 카드, 다시 센 값이라는 안내가 없다. 미달성 아래에 무효와 진행 중 인원이 있다.
+    지난 달을 보다가 조직을 눌러도 같은 달, 같은 프로모션에 머문다. 확정 뒤에 퇴사한 사람은 숫자와 명단에 남고 개인 화면은 열리지 않는다."""
+    path = copy_db(env, "confirmed3")
+    con = db.connect(path)
+    pid = _promo(con, PAST)
+    p = pm._load(con, pid)
+    head = _bonbu_head(con)
+    main, c = login(env, "admin", path), login(env, head, path)
+    base = f"/promo/progress?view=org&p={pid}&ym=202609"
+    archive = {x["agent_id"]: x for x in main.get(f"/promo/archive?ym=202609&p={pid}").context["sel"]["rows"]}
+    hit = [a for a, x in archive.items() if x["tier_no"]]
+    before = {who: cl.get(base).context["data"] for who, cl in (("admin", main), ("head", c))}
+    assert before["admin"]["confirmed"] and before["admin"]["detail"] == "full" and before["admin"]["total"]["n_achieved"] == len(hit) >= 3
+    # 달성자 한 사람의 계약을 모두 철회로 바꾼다. 다시 세면 값이 줄어드는 것을 먼저 본다
+    gone = next(a for a in hit if a in _ctx(con, head)["agent_ids"])
+    con.execute("UPDATE contract SET status='withdrawn' WHERE agent_id=? AND contract_date BETWEEN '2026-07-19' AND '2026-09-30'", (gone,))
+    con.commit()
+    assert pm.progress(con, p, [gone], date(2026, 11, 1))[gone]["value"] < archive[gone]["value"]
+    for who, cl in (("admin", main), ("head", c)):
+        scope = set(_ctx(con, head)["agent_ids"]) if who == "head" else set(archive)
+        page = cl.get(base)
+        data, body = page.context["data"], _main_body(page.text)
+        tot = data["total"]
+        # 조직 표: 철회 뒤에도 확정 값 그대로다
+        assert data["confirmed"] and data["detail"] == "full", who
+        for x, y in zip([*data["rows"], tot], [*before[who]["rows"], before[who]["total"]]):
+            assert [x[k] for k in COUNT_KEYS] == [y[k] for k in COUNT_KEYS], who
+            assert [ph["n_met"] for ph in x["phases"]] == [ph["n_met"] for ph in y["phases"]], who
+            assert x["n_missed"] == x["n_lost"] + x["n_open"] == x["n_target"] - x["n_achieved"] and x["n_open"] == 0 and x["n_near"] == 0
+        assert tot["n_achieved"] == len([a for a in hit if a in scope]) and tot["value"] == pytest.approx(sum(archive[a]["value"] for a in scope if a in archive))
+        # 확정 표시, 지운 안내, 숨긴 구간 근접, 무효와 진행 중
+        assert 'data-confirmed-org="1"' in body and '<span class="chip good">확정</span>' in body and "메인 관리자가 확정한 결과입니다" in body
+        assert "다시 센 값" not in body and "확정 값과 다를 수 있습니다" not in body and "근접" not in body and "data-near-card" not in body
+        assert "예상 시상" not in body and (("확정 시상" in body) is (who == "admin"))
+        assert f'data-total-missed="{tot["n_missed"]}"' in body and f'data-total-lost="{tot["n_lost"]}" data-total-open="0">무효 {tot["n_lost"]}명 · 진행 중 0명' in body
+        assert [(int(a), int(b)) for a, b in re.findall(r'data-lost="(\d+)" data-open="(\d+)"', body)] == [(x["n_lost"], x["n_open"]) for x in [*data["rows"], tot]]
+        # 명단: 표의 숫자마다 인원이 같고 값이 확정 값이다
+        links = _who_links(page.text)
+        assert {k for _h, k, _r, _n in links} >= {"w1", "w2", "w3", "final", "missed", "target"} and "near" not in {k for _h, k, _r, _n in links}
+        for href, key, row, n in links:
+            assert "ym=202609" in href, key
+            r = cl.get(href.replace("&amp;", "&"))
+            roster = r.context["roster"]
+            people = [x for g in roster["groups"] for x in g["people"]]
+            assert r.status_code == 200 and roster["confirmed"] and roster["n"] == int(n) == len(people), (who, key, row)
+            assert {x["agent_id"] for x in people} <= scope and all(x["total"] == archive[x["agent_id"]]["value"] for x in people), (who, key)
+            assert "예상" not in _main_body(r.text).split('id="roster"', 1)[1].split("</table>", 1)[0]
+        final = cl.get(f"{base}&who=final&row=all").context["roster"]
+        assert {x["agent_id"] for g in final["groups"] for x in g["people"]} == {a for a in hit if a in scope}
+        assert all(len(x["months"]) == 3 and all(m["met"] for m in x["months"]) for g in final["groups"] for x in g["people"])
+        # 조직을 눌러도 같은 달, 같은 프로모션이다. 사람 표와 개인 화면도 확정 값이다
+        row = next(x for x in data["rows"] if gone in x["agent_ids"] and not x["direct"])
+        assert "ym=202609" in row["href"]
+        down = cl.get(row["href"])
+        assert down.status_code == 200 and down.context["sel"]["promo_id"] == pid and down.context["data"]["confirmed"]
+        people = down.context["people"]
+        if people is None:                                             # 본부 위에서 본 줄이면 한 단계 더 내려가 사람 표를 본다
+            sub = next(x for x in down.context["data"]["rows"] if gone in x["agent_ids"])
+            down = cl.get(sub["href"])
+            people = down.context["people"]
+        mine = {x["agent_id"]: x for x in people}
+        assert gone in mine and all(x["total"] == archive[a]["value"] and x["met"] == bool(archive[a]["tier_no"]) for a, x in mine.items())
+        some_miss = max((a for a, x in mine.items() if not x["met"]), key=lambda a: mine[a]["total"])   # 실적이 있는 미달성자가 있으면 그 사람
+        for a in (gone, some_miss):
+            person = cl.get(mine[a]["href"])
+            ctx, text = person.context, _main_body(person.text)
+            assert person.status_code == 200 and ctx["sel"]["promo_id"] == pid and ctx["confirmed"] and ctx["r"]["confirmed"], (who, a == gone)
+            assert ctx["r"]["value"] == archive[a]["value"] and ctx["status"] == ("met" if a == gone else "miss") and ctx["todo"] == []
+            assert f'data-person-total="{int(archive[a]["value"])}"' in text and 'data-confirmed-person="1"' in text and "예상" not in text
+            assert [m["value"] for m in ctx["months"]] == [w["value"] for w in ctx["r"]["windows"]] and len(ctx["months"]) == 3
+            # 계약 목록은 확정 때 센 계약이고 합이 확정 값이다. 철회한 계약도 남아 지금 상태로 보인다
+            assert ctx["contract_source"] == "confirm" and sum(k["value"] for k in ctx["contracts"]) == pytest.approx(archive[a]["value"])
+            assert all(not k["after_ref"] for k in ctx["contracts"]) and "기준일 뒤 계약" not in text
+            if a == gone:
+                assert ctx["contracts"] and {k["status"] for k in ctx["contracts"]} == {"withdrawn"} and 'data-contract-status="withdrawn">철회<' in text
+            assert (ctx["amount"] is None) is (who == "head")
+            if who == "admin":
+                assert ctx["amount"] == {"amount": archive[a]["amount"], "reward": archive[a]["reward"]} and "확정 시상" in text
+    # 확정한 뒤에 퇴사한 사람: 숫자와 명단에는 남고(확정 때의 재직자) 개인 화면은 열리지 않는다
+    con.execute("UPDATE agent SET status='terminated', termination_date='2026-11-10' WHERE agent_id=?", (gone,))
+    con.commit()
+    after = main.get(base)
+    assert [after.context["data"]["total"][k] for k in COUNT_KEYS] == [before["admin"]["total"][k] for k in COUNT_KEYS]
+    r = main.get(f"{base}&who=final&row=all")
+    people = {x["agent_id"]: x for g in r.context["roster"]["groups"] for x in g["people"]}
+    assert r.context["roster"]["n"] == len(hit) and people[gone]["gone"] and people[gone]["href"] is None and f'data-person-left="{gone}"' in r.text
+    assert f'data-person="{gone}"' not in r.text and main.get(f"{base}&person={gone}").status_code == 403
+    con.close()
+
+
+@pytest.mark.parametrize("detail", ["values", "none"])
+def test_confirmed_without_window_detail_leaves_month_cells_empty(env, detail):
+    """창별 판정을 낼 수 없는 확정(규칙을 남기지 않았거나 센 계약도 남기지 않았다)은 달 칸의 인원과 창별 명단, 개인 화면의 달별 실적을 비우고 안내한다.
+    최종 달성과 합계, 사람별 값은 확정 값 그대로다."""
+    path = copy_db(env, f"confirmed-{detail}")
+    con = db.connect(path)
+    pid = _promo(con, PAST)
+    main = login(env, "admin", path)
+    base = f"/promo/progress?view=org&p={pid}&ym=202609"
+    full = main.get(base).context["data"]["total"]
+    con.execute("UPDATE promotion_confirm SET rule_json=NULL WHERE promo_id=?", (pid,))
+    if detail == "none":
+        con.execute("DELETE FROM promotion_result_contract WHERE promo_id=?", (pid,))
+    con.commit()
+    page = main.get(base)
+    data, body = page.context["data"], _main_body(page.text)
+    tot = data["total"]
+    assert page.status_code == 200 and data["confirmed"] and data["detail"] == detail
+    assert [tot[k] for k in COUNT_KEYS] == [full[k] for k in COUNT_KEYS]
+    assert tot["cells"][:3] == ["", "", ""] and tot["cells"][3] == f'{full["n_achieved"]}명'
+    assert (tot["sums"][:3] == full["sums"][:3]) is (detail == "values")          # 센 계약이 남아 있으면 달의 실적 합계는 보인다
+    note = "확정 때의 창별 값이 남아 있지 않습니다" if detail == "none" else "확정 때의 창별 판정이 남아 있지 않습니다"
+    assert 'data-window-note="1"' in body and note in body
+    assert not {k for _h, k, _r, _n in _who_links(page.text)} & {"w1", "w2", "w3"}
+    # 창별 명단은 사람 없이 안내만 나온다. 화면에서 대신 세지 않는다
+    r = main.get(f"{base}&who=w1&row=all")
+    assert r.status_code == 200 and r.context["roster"]["n"] == 0 and r.context["roster"]["groups"] == [] and note in r.context["roster"]["unavailable"]
+    assert 'data-roster-unavailable="1"' in r.text and "data-roster-agent" not in r.text
+    # 최종 달성 명단은 확정 값으로 나오고 달 칸이 없다
+    r = main.get(f"{base}&who=final&row=all")
+    roster = r.context["roster"]
+    people = [x for g in roster["groups"] for x in g["people"]]
+    assert roster["n"] == full["n_achieved"] == len(people) and roster["windows"] == [] and all(x["months"] == [] for x in people)
+    assert note in roster["window_note"] and 'data-window-note="roster"' in r.text
+    # 개인 화면: 달별 실적 대신 안내, 값과 상태는 확정 값
+    person = main.get(people[0]["href"])
+    ctx = person.context
+    assert person.status_code == 200 and ctx["months"] == [] and note in ctx["window_note"] and 'data-window-note="person"' in person.text
+    assert ctx["r"]["value"] == people[0]["total"] and ctx["status"] == "met" and "data-person-months" not in person.text
+    if detail == "values":
+        assert ctx["contract_source"] == "confirm" and sum(k["value"] for k in ctx["contracts"]) == pytest.approx(ctx["r"]["value"])
+    else:
+        assert ctx["contract_source"] is None and ctx["contracts"] == [] and 'data-contracts-none="1"' in person.text
+    con.close()
+
+
+def test_person_contract_list_is_engine_list_and_marks_contracts_after_ref(env):
+    """개인 화면의 센 계약은 엔진의 counted_contracts 를 옮긴 것이다. 센 값의 합이 그 사람 값과 같고, 창마다 달 기준에 대는 값의 합이 그 달 실적과 같다.
+    기준일 뒤 날짜의 계약에는 '기준일 뒤 계약' 표시가 붙는다. 10월 말 기준으로 보면 11월 계약이 그렇다."""
+    con = db.connect(env["db"])
+    c = login(env, "admin")
+    ref = date(2026, 10, 31)
+    checked = marked = 0
+    for name in (BOOM, "DB생명 여행시상", "DB생명 이터널 Convention 추가 시책", "삼성화재 드림+"):
+        pid = _promo(con, name)
+        p = pm._load(con, pid)
+        ids = [a for (a,) in con.execute("SELECT agent_id FROM agent WHERE internal_code LIKE 'T%' AND status='active' ORDER BY agent_id")]
+        res = pm.progress(con, p, ids, ref)
+        busy = [a for a in ids if res[a]["value"] > 0 and res[a].get("target", True)]
+        late = [a for a in busy if any(x["after_ref"] for x in pm.counted_contracts(con, p, a, ref)["rows"])]
+        for a in busy[:3] + late[:2]:
+            page = c.get(f"/promo/progress?view=org&p={pid}&ym=202610&person={a}")
+            assert page.status_code == 200 and page.context["ref"] == ref.isoformat() and page.context["confirmed"] is None, name
+            ctx, text = page.context, _main_body(page.text)
+            want = pm.counted_contracts(con, p, a, ref)
+            shown = ctx["contracts"]
+            assert ctx["contract_source"] == "ledger" and ctx["contracts_n"] == want["n"] and len(shown) == len(want["rows"]), name
+            assert [(k["date"], k["value"], k["status"], k["after_ref"]) for k in shown] == [(k["date"], k["value"], k["status"], k["after_ref"]) for k in want["rows"]]
+            assert sum(k["value"] for k in shown) == pytest.approx(ctx["r"]["value"]) == pytest.approx(res[a]["value"]), name
+            assert f'data-person-total="{int(ctx["r"]["value"])}"' in text and f'이 프로모션에 센 계약 {want["n"]}건' in text
+            assert sum(int(v) for v in re.findall(r'data-counted="(-?\d+)"', text)) == pytest.approx(ctx["r"]["value"], abs=len(shown))
+            for m in ctx["months"]:                                    # 달 기준에 대는 값. 가중 인정이 들면 value_each 다
+                if m["value"] is not None:
+                    each = sum(k["value_each"] if k["value_each"] is not None else k["value"] for k in shown if k["window"] == m["label"])
+                    assert each == pytest.approx(m["value"]), (name, m["seq"])
+            assert all(k["status_ko"] in ("청약", "정상", "실효", "해지", "만기") for k in shown), name
+            n_late = sum(1 for k in shown if k["after_ref"])
+            assert text.count('data-after-ref="1"') == n_late == text.count('<span class="chip warn tiny">기준일 뒤 계약</span>')
+            assert all(k["date"] > ref.isoformat() for k in shown if k["after_ref"]) and all(k["date"] <= ref.isoformat() for k in shown if not k["after_ref"])
+            marked += n_late
+            checked += 1
+    assert checked >= 8 and marked >= 1
     con.close()
