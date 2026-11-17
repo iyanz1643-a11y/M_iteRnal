@@ -1818,3 +1818,32 @@ CREATE TABLE IF NOT EXISTS agent_period_perf_insurer (
 CREATE VIEW IF NOT EXISTS v_agent_period_perf AS
 SELECT p.* FROM agent_period_perf p JOIN import_batch b ON b.batch_id = p.batch_id AND b.status = 'active';
 -- [person_perf:end]
+
+-- ---------------------------------------------------------------------------
+-- 프로모션 조건 확장 (파트 D, 11월 17일). app/engine/promotion.py 가 쓴다. 기존 CREATE 문은 그대로 두고 덧붙이기만 한다.
+-- 칸이 비면 예전 동작 그대로다. 규칙은 app/engine/promotion.py 머리말의 '조건 확장' 이다.
+-- count_basis: issued(성립 기준) 또는 application(청약 기준). 청약 기준은 철회, 반송, 해지를 뺀다 (D-85).
+-- boost_json: 가중 인정 {factor, month_days 또는 ranges, cap, cap_scope, applies_to}. 한도의 범위는 D-84 가정이다.
+-- product_include, product_exclude: 상품 이름 낱말의 JSON 목록. 이름이 빈 계약은 세지 않고 따로 센다 (D-86).
+-- exclude_self: 1 이면 본인·가족계약(contract.self_family) 을 뺀다 (D-87). drop_statuses: 세지 않을 상태를 쉼표로 (D-92).
+-- parent_promo_id, target_levels, gate_min_achievers, gate_org_path: 다른 프로모션 달성자에게 붙는 시책과 그 대상 직급, 조직 달성 인원 문턱 (D-88, D-89).
+-- retention_min, retention_ref, retention_basis: 13회차 유지율 문턱. 표시만 한다 (D-90).
+-- promotion_result_contract.value_each: 창 조건에 쓴 값. 가중 인정을 조건 1에만 쓰면 value 와 다르다. 비면 value 와 같다.
+-- combine_rule 에 both(조건 1과 조건 2 모두), either(둘 가운데 하나)를 더한다. 칸은 그대로다.
+-- 오래된 DB 에서도 이 묶음만 다시 돌릴 수 있게 쓴다. app/engine/promotion.py 의 ensure 가 이 묶음을 읽고, 이미 있는 칸은 건너뛴다.
+-- [promotion_rules:begin]
+ALTER TABLE promotion ADD COLUMN count_basis TEXT;                  -- issued / application. 비면 issued
+ALTER TABLE promotion ADD COLUMN boost_json TEXT;                   -- 가중 인정
+ALTER TABLE promotion ADD COLUMN product_include TEXT;              -- 대상 상품 이름 낱말 JSON 목록
+ALTER TABLE promotion ADD COLUMN product_exclude TEXT;              -- 제외 상품 이름 낱말 JSON 목록
+ALTER TABLE promotion ADD COLUMN exclude_self INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE promotion ADD COLUMN drop_statuses TEXT;                -- 세지 않을 상태를 쉼표로
+ALTER TABLE promotion ADD COLUMN parent_promo_id INTEGER REFERENCES promotion(promo_id);
+ALTER TABLE promotion ADD COLUMN target_levels TEXT;                -- 대상 커리어 직급 코드를 쉼표로
+ALTER TABLE promotion ADD COLUMN gate_min_achievers INTEGER;        -- 조직 달성 인원 문턱
+ALTER TABLE promotion ADD COLUMN gate_org_path TEXT;                -- 문턱을 셀 조직의 path_key. 비면 맨 위 조직
+ALTER TABLE promotion ADD COLUMN retention_min NUMERIC;             -- 13회차 유지율 문턱. 0.95 = 95%
+ALTER TABLE promotion ADD COLUMN retention_ref TEXT;                -- 유지율 판정 기준일 YYYY-MM-DD
+ALTER TABLE promotion ADD COLUMN retention_basis TEXT;              -- count / amount. 비면 count
+ALTER TABLE promotion_result_contract ADD COLUMN value_each NUMERIC;
+-- [promotion_rules:end]
