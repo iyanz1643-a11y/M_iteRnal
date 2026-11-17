@@ -13,6 +13,10 @@
  'org': '<path d="M4 7h9"/><path d="M19 7h1"/><path d="M4 17h1"/><path d="M11 17h9"/><circle cx="16" cy="7" r="2.5"/><circle cx="8" cy="17" r="2.5"/>',
  'review': '<path d="M12 3.2l7.5 2.8v6c0 4.4-3 7.6-7.5 8.8-4.5-1.2-7.5-4.4-7.5-8.8V6z"/><path d="M9 12l2.2 2.2L15.2 10"/>',
  'common': '<path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/>',
+ 'promo-progress': '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 8.2 10.7"/><path d="M8.5 12.3l2.4 2.4 4.6-4.9"/>',
+ 'promo-org-awards': '<circle cx="12" cy="9" r="5.5"/><path d="M9 13.8 7.5 21l4.5-2.4 4.5 2.4-1.5-7.2"/><path d="M12 6.6v4.8"/>',
+ 'data-plan': '<rect x="5" y="4.5" width="14" height="16" rx="2"/><path d="M9.5 3v3h5V3"/><path d="M8.5 11h7"/><path d="M8.5 14.5h7"/><path d="M8.5 18h4"/>',
+ 'promo-archive': '<rect x="3.5" y="4.5" width="17" height="4.5" rx="1.2"/><path d="M5 9v9.5c0 .8.7 1.5 1.5 1.5h11c.8 0 1.5-.7 1.5-1.5V9"/><path d="M10 13h4"/>',
  'more': '<circle cx="12" cy="12" r="8.8"/><circle cx="7.8" cy="12" r=".6"/><circle cx="12" cy="12" r=".6"/><circle cx="16.2" cy="12" r=".6"/>',
  'bell': '<path d="M6 16.5v-5.2a6 6 0 0 1 12 0v5.2l1.8 1.8H4.2z"/><path d="M10 20.6a2.1 2.1 0 0 0 4 0"/>',
  'notifications': '<path d="M6 16.5v-5.2a6 6 0 0 1 12 0v5.2l1.8 1.8H4.2z"/><path d="M10 20.6a2.1 2.1 0 0 0 4 0"/>',
@@ -24,6 +28,8 @@
  'person': '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/>'
 } %}
 {% macro icon(name) %}<svg class="ic ic-{{ name }}" viewBox="0 0 24 24" aria-hidden="true">{{ ICONS.get(name, ICONS['common'])|safe }}</svg>{% endmacro %}
+{#- 아래 탭의 아이콘. 탭은 항목이라 항목 id 의 아이콘이 있으면 그것을, 없으면 그 항목 묶음의 아이콘을 쓴다 -#}
+{% macro tab_icon(t) %}{{ icon(t.id if t.id in ICONS else t.group) }}{% endmacro %}
 
 {% macro ring(pct, label, size=148, stroke=14, color='var(--blue)') %}
 {% set p = [[pct, 0]|max, 100]|min %}{% set r = (size - stroke) / 2 %}{% set c = 6.2832 * r %}{% set h = size / 2 %}

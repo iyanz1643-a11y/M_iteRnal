@@ -2,7 +2,10 @@
 
 홈에 보일 카드(마감이 가까운 프로모션, 내 순위, 목표, 인정보험료 상위)는 조직별 설정 home.cards 를 따른다.
 보는 사람의 소속 조직 값이다(app/web/org_values.py). 이번 달 인정보험료, 가동률, 할 일, 운영 상태는 끌 수 없다.
-끈 카드는 화면에 그리지 않고 그 값도 읽지 않는다."""
+끈 카드는 화면에 그리지 않고 그 값도 읽지 않는다.
+
+할 일 카드가 가리키는 화면의 모듈이 꺼져 있으면(menu.yaml 의 modules, APP_MODULES_OFF) 그 카드도 만들지 않는다.
+명함 승인과 명함 승인 권한은 영업과 모바일 명함(sales), 교육 기한은 교육과 제도(edu) 모듈이다."""
 import sqlite3
 from datetime import date, datetime
 
@@ -12,7 +15,7 @@ from fastapi.responses import HTMLResponse
 from app.engine import promotion as pm
 from app.org import card_grant as cg
 from app.periods import period_key
-from app.web import org_values
+from app.web import menu, org_values
 from app.web.deps import _cards, _last_load, _perf, _q, get_con, guard, page
 from app.web.routes import card, me
 from app.web.routes import edu as edu_routes
@@ -93,17 +96,18 @@ def home(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
         data["team"] = {"n": len(team), "active": sum(1 for t in team if (t["net_count"] or 0) > 0), "left": sum(1 for t in team if t["left"]),
                         "premium": sum(t["converted_premium"] or 0 for t in team), "count": sum(t["net_count"] or 0 for t in team),
                         "top": [t for t in team if not t["left"]][:5]}
-    if role in ("manager", "main") and ctx.get("card_approver"):
+    cards_on, edu_on = menu.module_on("sales"), menu.module_on("edu")
+    if role in ("manager", "main") and ctx.get("card_approver") and cards_on:
         data["card_pending"] = card.pending_count(con, ctx)      # 권한이 있는 사람만. 키가 없으면 None. 짧은 시간 제한과 잠깐 담아 둔 목록을 쓴다
-    if role == "main":
+    if role == "main" and cards_on:
         try:                                                     # 조직장과 대리 화면의 권한 요청 표와 같은 목록에서 센다
             data["grant_requests"] = len(cg.pending_requests(con))
         except sqlite3.OperationalError:                         # 표가 없는 오래된 DB
             con.rollback()
             data["grant_requests"] = 0
-    if role in ("agent", "manager"):                             # 교육 기한 임박. 설계사는 본인, 관리자는 범위 안. 엔진의 due_soon 을 센다
+    if role in ("agent", "manager") and edu_on:                  # 교육 기한 임박. 설계사는 본인, 관리자는 범위 안. 엔진의 due_soon 을 센다
         data["edu_soon"] = edu_routes.due_soon_count(con, ctx)
-    if role == "manager":
+    if role == "manager" and cards_on:
         st = me.card_state(con, ctx)                             # 권한이 없고 대기 중이거나 반려된 요청도 없을 때만 한 줄 띄운다
         data["grant_hint"] = bool(st and st["state"] == "none")
     if role == "main":

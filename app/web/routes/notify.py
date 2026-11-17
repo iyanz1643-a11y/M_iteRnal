@@ -97,7 +97,7 @@ def mark_read(con, user_id, keys) -> int:
 def _link(ctx, path, query=""):
     """그 사람에게 열린 화면이면 주소를, 아니면 None 을 준다. 알림의 링크도 메뉴와 같은 규칙을 따른다."""
     it = menu.find(path)
-    return (path + query) if it and menu.allowed(it, ctx) else None
+    return (path + query) if it and menu.visible(it, ctx) else None       # 꺼진 모듈의 화면으로는 잇지 않는다
 
 
 def _note(kind, key, title, body, at, link=None):

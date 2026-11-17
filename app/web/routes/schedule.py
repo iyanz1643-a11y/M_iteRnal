@@ -33,7 +33,7 @@ KIND_KO = {"promo_start": "프로모션 시작", "promo_end": "프로모션 마�
 
 def _link(ctx, path, query=""):
     it = menu.find(path)
-    return (path + query) if it and menu.allowed(it, ctx) else None
+    return (path + query) if it and menu.visible(it, ctx) else None       # 꺼진 모듈의 화면으로는 잇지 않는다
 
 
 def _scope_ids(con, ctx) -> list:

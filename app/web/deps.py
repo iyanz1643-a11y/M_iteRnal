@@ -58,6 +58,7 @@ def basis_note(p: dict, r: dict | None, ref) -> str:
 
 templates.env.globals["basis_note"] = basis_note
 templates.env.globals["group_entry"] = menu.entry
+templates.env.globals["path_on"] = menu.path_on           # 다른 화면을 가리키는 링크를 그 모듈이 꺼져 있으면 감출 때 쓴다
 
 
 def get_con():
@@ -104,9 +105,14 @@ def clear_login(request: Request) -> None:
 
 
 def guard(request: Request, ctx: dict = Depends(current), con=Depends(get_con)) -> dict:
-    """요청한 주소가 메뉴에 있고 그 역할에게 열려 있는지 본다. 화면이 아니라 여기서 막는다."""
+    """요청한 주소가 메뉴에 있고 그 역할에게 열려 있는지 본다. 화면이 아니라 여기서 막는다.
+
+    꺼진 모듈의 화면은 이 배포에 없는 화면으로 보고 404 를 낸다. 모듈 판정은 menu.item_on 한 곳이다.
+    """
     item = menu.find(request.url.path)
     if item is None:
+        raise HTTPException(404, "없는 화면입니다.")
+    if not menu.item_on(item):                          # 꺼진 모듈. APP_MODULES_OFF 와 menu.yaml 의 modules
         raise HTTPException(404, "없는 화면입니다.")
     if not menu.allowed(item, ctx):                     # 역할과, 항목에 requires 가 있으면 그 권한 플래그까지 본다
         auth.log(con, ctx["login_id"], "access_denied", request.url.path)
@@ -159,9 +165,10 @@ def page(request, ctx, name, status_code=200, **kw):
     Cache-Control: no-store 를 붙여 브라우저와 중간 캐시가 화면을 남기지 않게 한다. 공용 기기에서 뒤로 가기나 캐시로
     다른 사람의 실적이 보이지 않게 하려는 것이다. 로그인 화면과 정적 파일은 여기를 지나지 않는다.
     """
-    cfg = menu.load()
+    groups = menu.for_ctx(ctx)
+    tabs = menu.tabs_for(ctx, groups)
     resp = templates.TemplateResponse(request, name, status_code=status_code, context={
-        "ctx": ctx, "groups": menu.for_ctx(ctx), "mobile_tabs": cfg["mobile_tabs"].get(ctx["role"], []), "item": ctx.get("item"),
+        "ctx": ctx, "groups": groups, "tabs": tabs, "tab_on": menu.tab_of(ctx.get("item"), tabs), "item": ctx.get("item"),
         "path": request.url.path, "SCOPES": menu.SCOPES, "PHASES": menu.PHASES, "STATUS": menu.STATUS,
         "LEVEL_KO": auth.LEVEL_KO, "HEAD_KO": auth.HEAD_KO, "pm": pm, **kw})
     resp.headers["Cache-Control"] = NO_STORE

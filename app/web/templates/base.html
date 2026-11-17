@@ -5,18 +5,19 @@
 <body class="app">
 {#- 화면 틀. iOS 앱 형식이다. docs/12_디자인.md
     - 1001픽셀 이상: 왼쪽 사이드바(nav.nav-groups)에 모든 묶음과 항목. 아래 탭과 더보기는 없다.
-    - 1000픽셀 이하: 아래 탭 막대(nav.tabbar)에 역할별 네 칸과 더보기. 더보기(#sheet)는 탭에 없는 묶음을 설정 앱 모양으로 나열한다.
+    - 1000픽셀 이하: 아래 탭 막대(nav.tabbar)에 역할별 네 칸과 더보기. 탭은 묶음이 아니라 항목이다(menu.tabs_for).
+      더보기(#sheet)는 탭에 없는 항목을 묶음별로 설정 앱 모양으로 나열한다. 탭에 있는 항목만 빼고 묶음은 남긴다.
+    - 뒤로 단추: 탭 화면에서는 없다. 탭이 있는 묶음의 다른 화면이면 그 탭으로, 아니면 더보기의 그 묶음 구획으로 간다.
     - 위 막대는 처음에는 투명하고, 큰 제목이 막대 밑으로 지나가면 흐린 바탕과 가운데 작은 제목이 나타난다.
-    메뉴는 모두 menu.for_ctx 가 그 사람에게 보이는 것만 준 groups 에서 그린다. 권한은 guard 가 막는다. -#}
+    메뉴는 모두 menu.for_ctx 가 그 사람에게 보이는 것만 준 groups 에서 그린다. 꺼진 모듈의 항목은 이미 빠져 있다. 권한은 guard 가 막는다. -#}
 {% set nb = notif_badge(ctx) if notif_badge is defined else 0 %}
 {% set cur = (groups|selectattr('id', 'equalto', item.group)|list|first) if item else none %}
-{% set tabs = [] %}{% for gid in mobile_tabs %}{% for g in groups if g.id == gid and tabs|length < 4 %}{% set _ = tabs.append(g) %}{% endfor %}{% endfor %}
 {% set tab_ids = tabs|map(attribute='id')|list %}
 {% set common = (groups|selectattr('id', 'equalto', 'common')|list|first) %}
 {% set where %}{{ ctx.role_ko }}{% if ctx.heads %} · {% for h in ctx.heads %}{{ h.name }} {{ HEAD_KO.get(h.role, '조직장') }}{% if not loop.last %}, {% endif %}{% endfor %}{% elif ctx.home_org %} · {{ ctx.home_org.name }}{% endif %}{% endset %}
 {% macro me_cell(cls) %}<a class="{{ cls }}{{ ' on' if path == '/me' }}" href="/me"><span class="avatar" aria-hidden="true">{{ ctx.name[:1] }}</span>
   <span class="me-text"><span class="me-name">{{ ctx.name }}</span><span class="me-sub">{{ where }}</span></span>{{ ui.icon('chev') }}</a>{% endmacro %}
-{% macro common_rows(cls) %}{% if common %}{% for it in common['items'] if it.id != 'me' %}<a class="{{ cls }}{{ ' on' if it.path == path }}" href="{{ it.path }}">{{ ui.icon(it.id) }}<span class="row-t">{{ it.name }}</span>
+{% macro common_rows(cls, skip=()) %}{% if common %}{% for it in common['items'] if it.id != 'me' and it.id not in skip %}<a class="{{ cls }}{{ ' on' if it.path == path }}" href="{{ it.path }}">{{ ui.icon(it.id) }}<span class="row-t">{{ it.name }}</span>
   {%- if it.id == 'notifications' and nb %}<span class="count" aria-label="안 읽은 알림 {{ nb }}건">{{ nb if nb < 100 else '99+' }}</span>{% endif %}{{ ui.icon('chev') }}</a>{% endfor %}{% endif %}{% endmacro %}
 
 <nav class="nav-groups" aria-label="주 메뉴">
@@ -35,8 +36,8 @@
 
 <header class="nav">
   <div class="nav-left">
-  {%- if cur and cur.id in tab_ids %}{% if path != group_entry(cur) %}<a class="back" href="{{ group_entry(cur) }}">{{ ui.icon('back') }}<span>{{ cur.name }}</span></a>{% endif %}
-  {%- elif cur %}<button class="back" type="button" data-sheet data-sec="more-{{ cur.id }}">{{ ui.icon('back') }}<span>{{ '더보기' if cur.id == 'common' else cur.name }}</span></button>{% endif -%}
+  {%- if tab_on %}{% if tab_on.id != item.id %}<a class="back" href="{{ tab_on.path }}">{{ ui.icon('back') }}<span>{{ tab_on.label }}</span></a>{% endif %}
+  {%- elif cur and item.id not in tab_ids %}<button class="back" type="button" data-sheet data-sec="more-{{ cur.id }}">{{ ui.icon('back') }}<span>{{ '더보기' if cur.id == 'common' else cur.name }}</span></button>{% endif -%}
   </div>
   <div class="nav-title" aria-hidden="true">{{ self.title() }}</div>
   <div class="nav-right">
@@ -52,17 +53,17 @@
 {% block body %}{% endblock %}
 </main>
 <nav class="tabbar" aria-label="아래 탭">
-  {% for g in tabs %}<a class="{{ 'on' if item and item.group == g.id }}" href="{{ group_entry(g) }}">{{ ui.icon(g.id) }}<span>{{ g.name }}</span></a>{% endfor %}
-  <button class="more{{ ' on' if cur and cur.id not in tab_ids }}" type="button" data-sheet aria-controls="sheet">{{ ui.icon('more') }}<span>더보기</span></button>
+  {% for t in tabs %}<a class="{{ 'on' if tab_on and tab_on.id == t.id }}" href="{{ t.path }}">{{ ui.tab_icon(t) }}<span>{{ t.label }}</span></a>{% endfor %}
+  <button class="more{{ ' on' if item and not tab_on }}" type="button" data-sheet aria-controls="sheet">{{ ui.icon('more') }}<span>더보기</span></button>
 </nav>
 <div class="sheet" id="sheet" role="dialog" aria-label="더보기" aria-hidden="true">
   <div class="sheet-in">
   <h1 class="display">더보기</h1>
   <div class="list">{{ me_cell('row me-row') }}</div>
-  {% if common %}<div class="list" id="more-common">{{ common_rows('row') }}</div>{% endif %}
-  {% for g in groups if g.id not in tab_ids and g.id not in ('home', 'common') %}
+  {% if common and common['items']|rejectattr('id', 'in', tab_ids + ['me'])|list %}<div class="list" id="more-common">{{ common_rows('row', tab_ids) }}</div>{% endif %}
+  {% for g in groups if g.id not in ('home', 'common') %}{% set rest = g['items']|rejectattr('id', 'in', tab_ids)|list %}{% if rest %}
   <section id="more-{{ g.id }}"><h2 class="list-h">{{ g.name }}</h2>
-    <div class="list">{% for it in g['items'] %}<a class="row {{ 'on' if it.path == path }}" href="{{ it.path }}"><span class="row-t">{{ it.name }}</span>{{ ui.icon('chev') }}</a>{% endfor %}</div></section>{% endfor %}
+    <div class="list">{% for it in rest %}<a class="row {{ 'on' if it.path == path }}" href="{{ it.path }}"><span class="row-t">{{ it.name }}</span>{{ ui.icon('chev') }}</a>{% endfor %}</div></section>{% endif %}{% endfor %}
   <div class="list"><form class="out" method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button class="row danger-t" type="submit">나가기</button></form></div>
   </div>
 </div>

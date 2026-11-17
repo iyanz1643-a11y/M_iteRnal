@@ -196,14 +196,20 @@ def _role_logins(env):
     return {"main": "admin", "manager": manager, "agent": agent}
 
 
-# 아래 탭은 역할별이다. 총괄 결정과 대표님 승인으로 정한 구성이고 config/menu.yaml 의 mobile_tabs 가 원본이다.
-# 설계사: 홈, 내 진척, 프로모션, 영업. 관리자: 홈, 팀, 프로모션, 실적. 메인 관리자: 홈, 실적, 프로모션, 데이터. 네 칸 뒤에 더보기가 붙는다.
-# 탭은 묶음 안 만들어진 첫 화면으로 간다. 영업은 S4 에 내 DB 와 DB 배정과 성과를 만들어, 설계사와 관리자는 내 DB, 메인 관리자는 배정이다
+# 아래 탭은 역할별이고 항목 단위다. 기획안대로 프로모션 달성관리를 기본 상품으로 두고 탭을 프로모션 중심으로 짰다. 총괄 결정이고
+# config/menu.yaml 의 mobile_tabs 가 원본이다. 네 칸 뒤에 더보기가 붙는다. (항목 id, 탭 이름, 주소)
 TABS = {
-    "agent": [("home", "홈", "/"), ("my", "내 진척", "/my/summary"), ("promo", "프로모션", "/promo/list"), ("sales", "영업", "/sales/leads")],
-    "manager": [("home", "홈", "/"), ("team", "팀", "/team/members"), ("promo", "프로모션", "/promo/list"), ("perf", "실적", "/perf/period")],
-    "main": [("home", "홈", "/"), ("perf", "실적", "/perf/period"), ("promo", "프로모션", "/promo/list"), ("data", "데이터", "/data/contracts")],
+    "agent": [("home", "홈", "/"), ("promo-list", "프로모션", "/promo/list"), ("promo-progress", "달성 현황", "/promo/progress"),
+              ("notifications", "알림", "/notifications")],
+    "manager": [("home", "홈", "/"), ("promo-list", "프로모션", "/promo/list"), ("promo-progress", "팀 달성", "/promo/progress"),
+                ("promo-org-awards", "부문 시상", "/promo/org-awards")],
+    "main": [("home", "홈", "/"), ("promo-list", "프로모션", "/promo/list"), ("data-plan", "시상안", "/data/plan"),
+             ("promo-archive", "확정", "/promo/archive")],
 }
+# 프로모션 묶음에 모은 항목과 순서. 시상 진척, 명예의전당, 시상안, 시상안 묻고 답하기를 이 묶음으로 옮겼다
+PROMO_GROUP = ["promo-list", "promo-progress", "promo-org-awards", "my-awards", "perf-hall", "promo-compare", "promo-archive",
+               "promo-publish", "promo-tiers", "data-plan", "data-plan-qa"]
+GROUP_ORDER = ["home", "promo", "my", "perf", "team", "sales", "edu", "program", "data", "settle", "org", "review", "common"]
 SALES_ENTRY = {"agent": "/sales/leads", "manager": "/sales/leads", "main": "/sales/assign"}
 
 
@@ -212,14 +218,51 @@ def _ctx_of(env, role):
     return auth.context(env["con"], uid)
 
 
+def _tabbar(html):
+    return re.search(r'<nav class="tabbar"[^>]*>(.*?)</nav>', html, re.S).group(1)
+
+
+def _sheet(html):
+    return re.search(r'<div class="sheet" id="sheet"[^>]*>(.*)</div>\s*<script>', html, re.S).group(1)
+
+
+def _on_tab(html):
+    """켜진 탭의 주소. 더보기가 켜졌으면 'more', 아무것도 안 켜졌으면 None."""
+    bar = _tabbar(html)
+    on = re.findall(r'<a class="on" href="([^"]+)"', bar)
+    more = bool(re.search(r'<button class="more on"', bar))
+    assert len(on) + more <= 1, on
+    return on[0] if on else ("more" if more else None)
+
+
+def _back(html):
+    """위 막대의 뒤로 단추. ('tab', 주소, 이름) 또는 ('more', 구획 id, 이름) 또는 None."""
+    left = re.search(r'<div class="nav-left">(.*?)</div>', html, re.S).group(1)
+    m = re.search(r'<a class="back" href="([^"]+)">.*?<span>([^<]+)</span>', left, re.S)
+    if m:
+        return ("tab", m.group(1), m.group(2))
+    m = re.search(r'<button class="back"[^>]*data-sec="([^"]+)">.*?<span>([^<]+)</span>', left, re.S)
+    return ("more", m.group(1), m.group(2)) if m else None
+
+
+def test_menu_groups_follow_the_plan():
+    """묶음 순서와 프로모션 묶음의 항목이 기획안대로다. 경로와 역할은 옮기기 전과 같다."""
+    from app.web import menu
+    cfg = menu.load()
+    assert [g["id"] for g in cfg["groups"]] == GROUP_ORDER
+    promo = next(g for g in cfg["groups"] if g["id"] == "promo")
+    assert [it["id"] for it in promo["items"]] == PROMO_GROUP
+    assert menu.find("/my/awards")["group"] == menu.find("/perf/hall")["group"] == menu.find("/data/plan")["group"] == "promo"
+
+
 @pytest.mark.parametrize("role", ["agent", "manager", "main"])
-def test_tabbar_goes_to_first_built_screen(env, role):
+def test_tabbar_is_items_from_menu_file(env, role):
     from app.web import menu
     want = TABS[role]
-    assert menu.load()["mobile_tabs"][role] == [g for g, _, _ in want]                # 원본 파일이 정한 구성과 같다
+    assert [t["id"] for t in menu.load()["mobile_tabs"][role]] == [i for i, _, _ in want]        # 원본 파일이 정한 구성과 같다
     c = login(env, _role_logins(env)[role])
     html = c.get("/").text
-    tabbar = re.search(r'<nav class="tabbar"[^>]*>(.*?)</nav>', html, re.S).group(1)
+    tabbar = _tabbar(html)
     hrefs = re.findall(r'href="([^"]+)"', tabbar)
     assert hrefs == [h for _, _, h in want], (role, hrefs)                           # 네 칸이 이 순서로, 다른 링크 없이
     labels = re.findall(r'<a [^>]*href="[^"]+"[^>]*>.*?<span>([^<]+)</span></a>', tabbar, re.S)
@@ -227,35 +270,91 @@ def test_tabbar_goes_to_first_built_screen(env, role):
     more = re.findall(r'<button[^>]*data-sheet[^>]*>.*?<span>([^<]+)</span></button>', tabbar, re.S)
     assert more == ["더보기"], (role, more)                                          # 마지막은 늘 더보기 하나
     assert tabbar.rstrip().endswith("</button>"), role
-    groups = {g["id"]: g for g in menu.for_ctx(_ctx_of(env, role))}
-    for gid, _, h in want:                                                           # 각 칸은 그 묶음의 만들어진 첫 화면이다
-        assert gid in groups and menu.entry(groups[gid]) == h, (role, gid, h)
-    for h in hrefs:                                                                  # 아래 탭은 모두 만들어진 화면이고 그 사람에게 열린다
+    for i, _, h in want:                                                             # 각 칸은 그 항목의 주소이고 그 사람에게 열린다
         it = menu.find(h)
-        assert it and it["status"] == "built", (role, h)
+        assert it and it["id"] == i and it["status"] == "built", (role, h)
         assert c.get(h).status_code == 200, (role, h)
+    groups = {g["id"]: g for g in menu.for_ctx(_ctx_of(env, role))}
     sales = SALES_ENTRY[role]                                                        # 영업이 탭에 없어도 사이드바에서 들어간다
     assert menu.entry(groups["sales"]) == sales, role
     top = re.findall(r'href="([^"]+)"', re.search(r'<nav class="nav-groups"[^>]*>(.*?)</nav>', html, re.S).group(1))
     assert sales in top, (role, top)
 
 
+def test_tab_skips_items_the_role_cannot_see():
+    """탭 항목이 그 역할에게 안 보이면 건너뛴다. 메인 관리자만 보는 시상안을 다른 역할의 탭에 적어도 빠진다."""
+    from app.web import menu
+    rows = [{"id": "home", "items": [menu.find("/")]}, {"id": "promo", "items": [menu.find("/promo/list")]}]
+    cfg = menu.load()
+    saved = cfg["mobile_tabs"].get("agent")
+    try:
+        cfg["mobile_tabs"]["agent"] = [{"id": "home"}, {"id": "data-plan", "name": "시상안"}, {"id": "promo-list", "name": "프로모션"}]
+        assert [t["id"] for t in menu.tabs_for({"role": "agent"}, rows)] == ["home", "promo-list"]
+    finally:
+        cfg["mobile_tabs"]["agent"] = saved
+
+
+# 화면마다 켜지는 탭과 뒤로 단추. (역할, 주소, 켜지는 탭 주소 또는 more, 뒤로 단추)
+# 탭 화면이면 그 탭이 켜지고 뒤로 단추가 없다. 탭이 아닌 프로모션 묶음 화면이면 프로모션 탭이 켜지고 뒤로 단추는 그 탭으로 간다.
+# 탭이 없는 묶음과 공통 묶음은 더보기가 켜지고 뒤로 단추는 더보기의 그 구획을 연다
+ACTIVE = [
+    ("agent", "/", "/", None),
+    ("agent", "/promo/progress", "/promo/progress", None),
+    ("agent", "/notifications", "/notifications", None),
+    ("agent", "/promo/compare", "/promo/list", ("tab", "/promo/list", "프로모션")),
+    ("agent", "/my/awards", "/promo/list", ("tab", "/promo/list", "프로모션")),
+    ("agent", "/perf/hall", "/promo/list", ("tab", "/promo/list", "프로모션")),
+    ("agent", "/my/summary", "more", ("more", "more-my", "내 진척")),
+    ("agent", "/sales/leads", "more", ("more", "more-sales", "영업")),
+    ("agent", "/calendar", "more", ("more", "more-common", "더보기")),
+    ("agent", "/me", "more", ("more", "more-common", "더보기")),
+    ("manager", "/promo/org-awards", "/promo/org-awards", None),
+    ("manager", "/promo/archive", "/promo/list", ("tab", "/promo/list", "프로모션")),
+    ("manager", "/notifications", "more", ("more", "more-common", "더보기")),
+    ("manager", "/team/members", "more", ("more", "more-team", "팀")),
+    ("main", "/data/plan", "/data/plan", None),
+    ("main", "/promo/archive", "/promo/archive", None),
+    ("main", "/promo/tiers", "/promo/list", ("tab", "/promo/list", "프로모션")),
+    ("main", "/data/plan-qa", "/promo/list", ("tab", "/promo/list", "프로모션")),
+    ("main", "/data/contracts", "more", ("more", "more-data", "데이터")),
+    ("main", "/perf/period", "more", ("more", "more-perf", "실적")),
+]
+
+
+@pytest.mark.parametrize("role,path,on,back", ACTIVE)
+def test_active_tab_and_back_button(env, role, path, on, back):
+    c = login(env, _role_logins(env)[role])
+    r = c.get(path)
+    assert r.status_code == 200, (role, path)
+    assert _on_tab(r.text) == on, (role, path)
+    assert _back(r.text) == back, (role, path)
+    if back and back[0] == "more":                                                   # 뒤로 단추가 여는 구획이 더보기에 있다
+        assert f'id="{back[1]}"' in _sheet(r.text), (role, path)
+
+
 @pytest.mark.parametrize("role", ["agent", "manager", "main"])
-def test_more_sheet_reaches_every_group_not_in_tabs(env, role):
-    """더보기는 탭에 없는 묶음의 항목을 빠짐없이 담고, 사이드바는 그 사람에게 보이는 항목만 담는다."""
+def test_more_sheet_holds_every_item_not_in_tabs(env, role):
+    """더보기는 탭에 없는 항목을 빠짐없이 담고 탭 항목은 뺀다. 탭이 빠져도 남은 항목이 있는 묶음은 남는다.
+    사이드바는 그 사람에게 보이는 항목을 묶음 순서대로 모두 담는다."""
     from app.web import menu
     c = login(env, _role_logins(env)[role])
     html = c.get("/").text
-    sheet = re.search(r'<div class="sheet" id="sheet"[^>]*>(.*)</div>\s*<script>', html, re.S).group(1)
+    sheet = _sheet(html)
     in_sheet = set(re.findall(r'href="([^"]+)"', sheet))
-    side = set(re.findall(r'href="([^"]+)"', re.search(r'<nav class="nav-groups"[^>]*>(.*?)</nav>', html, re.S).group(1)))
-    tab_ids = {g for g, _, _ in TABS[role]}
+    side_html = re.search(r'<nav class="nav-groups"[^>]*>(.*?)</nav>', html, re.S).group(1)
+    side = set(re.findall(r'href="([^"]+)"', side_html))
+    tab_paths = {h for _, _, h in TABS[role]}
     visible = menu.for_ctx(_ctx_of(env, role))
     paths = {it["path"] for g in visible for it in g["items"]}
-    missing = [it["path"] for g in visible if g["id"] not in tab_ids for it in g["items"] if it["path"] not in in_sheet]
+    missing = [it["path"] for g in visible if g["id"] != "home" for it in g["items"] if it["path"] not in tab_paths | in_sheet]
     assert not missing, (role, missing)
+    assert not (tab_paths - {"/me"}) & in_sheet, (role, tab_paths & in_sheet)       # 탭 항목은 더보기에 없다
     assert not ({it["path"] for g in menu.load()["groups"] for it in g["items"]} - paths) & (in_sheet | side), role
     assert paths <= side | {"/"}, (role, paths - side)
+    assert 'id="more-promo"' in sheet and "<h2 class=\"list-h\">프로모션</h2>" in sheet, role   # 탭 밖 프로모션 항목이 남아 묶음이 있다
+    heads = re.findall(r'<div class="side-h">.*?</svg>([^<]+)</div>', side_html, re.S)
+    names = {g["id"]: g["name"] for g in menu.load()["groups"]}
+    assert heads == [names[g] for g in GROUP_ORDER if g not in ("home", "common") and g in {x["id"] for x in visible}], (role, heads)
 
 
 def test_group_entry_falls_back_to_first_item_when_nothing_built():

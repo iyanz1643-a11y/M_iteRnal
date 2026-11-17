@@ -7,41 +7,39 @@ roles:
   manager: 관리자
   agent: 설계사
 
-# 역할별 아래 탭. 1000픽셀 이하 화면에서 쓴다. 네 칸 뒤에 늘 더보기가 붙고, 탭에 없는 묶음은 더보기에 모은다.
-# 그 역할에게 보이지 않는 묶음은 건너뛴다. 1001픽셀 이상에서는 왼쪽 사이드바에 모든 묶음을 이 파일의 순서대로 둔다.
+# 모듈. 기본 상품은 core(프로모션 달성관리)이고 나머지는 추가기능이다. 묶음마다 module 을 적고, 묶음과 다른 항목만 항목에 module 을 적는다.
+# 꺼진 모듈의 항목은 메뉴, 사이드바, 더보기, 탭에서 빠지고 guard 가 404 로 막는다. 배포마다 환경 변수 APP_MODULES_OFF 에 쉼표로 모듈 키를 적어 끈다.
+# core 는 끌 수 없다. enabled 를 false 로 두거나 APP_MODULES_OFF 에 적어도 켜진 채로 두고 경고를 남긴다.
+modules:
+  core: {name: 프로모션 달성관리, enabled: true}
+  perf: {name: 실적 모니터링, enabled: true}
+  team: {name: 팀 관리, enabled: true}
+  edu: {name: 교육과 제도, enabled: true}
+  sales: {name: 영업과 모바일 명함, enabled: true}
+  settle: {name: 수수료와 점검, enabled: true}
+  ai: {name: AI, enabled: true}
+
+# 역할별 아래 탭. 1000픽셀 이하 화면에서 쓴다. 항목 id 를 적고, 탭 이름이 항목 이름과 다르면 {id, name} 으로 적는다.
+# 네 칸 뒤에 늘 더보기가 붙는다. 그 역할에게 보이지 않거나 모듈이 꺼진 항목은 건너뛴다. 탭에 있는 항목은 더보기에서 뺀다.
+# 1001픽셀 이상에서는 왼쪽 사이드바에 모든 묶음을 이 파일의 순서대로 둔다.
 mobile_tabs:
-  agent: [home, my, promo, sales]
-  manager: [home, team, promo, perf]
-  main: [home, perf, promo, data]
+  agent: [home, {id: promo-list, name: 프로모션}, {id: promo-progress, name: 달성 현황}, {id: notifications, name: 알림}]
+  manager: [home, {id: promo-list, name: 프로모션}, {id: promo-progress, name: 팀 달성}, {id: promo-org-awards, name: 부문 시상}]
+  main: [home, {id: promo-list, name: 프로모션}, {id: data-plan, name: 시상안}, {id: promo-archive, name: 확정}]
 
 groups:
   - id: home
     name: 홈
     icon: "⌂"
+    module: core
     items:
       - {id: home, name: 홈, path: /, roles: {main: all, manager: org, agent: self}, phase: 2, status: built,
          desc: "역할별 요약, 할 일, 마감이 가까운 프로모션, 자료의 기준 시각"}
 
-  - id: my
-    name: 내 진척
-    icon: "◔"
-    items:
-      - {id: my-summary, name: 실적 요약, path: /my/summary, roles: {manager: self, agent: self}, phase: 2, status: built,
-         desc: "월·분기·반기·연 실적과 구분별 집계. 청약은 예정, 성립은 확정으로 나눈다. 인별실적 파일 기준 기간 실적은 따로 보인다"}
-      - {id: my-awards, name: 시상 진척, path: /my/awards, roles: {manager: self, agent: self}, phase: 2, status: built,
-         desc: "조직 부문 순위와 구간시상 달성 현황"}
-      - {id: my-persistency, name: 내 유지율, path: /my/persistency, roles: {manager: self, agent: self}, phase: 2, status: built,
-         desc: "13회차·25회차 유지율, 위험 계약, 석 달 안 13회차 도래"}
-      - {id: my-education, name: 내 교육, path: /my/education, roles: {manager: self, agent: self}, phase: 2, status: built,
-         desc: "필수 과정 수료 현황, 수료 이력, 기한"}
-      - {id: my-career, name: 커리어패스, path: /my/career, roles: {manager: self, agent: self}, phase: 3, status: built,
-         desc: "현재 단계, 다음 단계의 기준, 남은 양, 목표 역산"}
-      - {id: my-cert, name: 인증, path: /my/cert, roles: {manager: self, agent: self}, phase: 3, status: built,
-         desc: "MDRT와 우수인증 진척, 연말 예상"}
-
   - id: promo
     name: 프로모션
     icon: "★"
+    module: core
     items:
       - {id: promo-list, name: 진행 중 프로모션, path: /promo/list, roles: {main: all, manager: org, agent: self}, phase: 2, status: built,
          desc: "승인한 시상안을 보험사·상품군·마감 임박으로 걸러 본다. 원문 보기 포함"}
@@ -49,6 +47,10 @@ groups:
          desc: "정률 시책의 예상액, 주차 시상의 이번 주 구간, 연계 시상의 창별 달성, 여행 시상의 누적 달성. 관리자는 팀원의 구간 근접 현황"}
       - {id: promo-org-awards, name: 조직 부문 시상, path: /promo/org-awards, roles: {main: all, manager: org, agent: self}, phase: 2, status: built,
          desc: "조직이 등록한 월간 부문과 현재 순위. 메인 관리자와 관리자는 부문을 만들고 고친다. 설계사에게는 상위 10명과 본인 순위가 보인다"}
+      - {id: my-awards, name: 시상 진척, path: /my/awards, roles: {manager: self, agent: self}, phase: 2, status: built,
+         desc: "조직 부문 순위와 구간시상 달성 현황"}
+      - {id: perf-hall, name: 명예의전당, path: /perf/hall, roles: {main: all, manager: org, agent: self}, phase: 2, status: built,
+         desc: "확정된 전월 순위와 수상 이력. 수상과 자격은 본인이 공개한 것만 남에게 보이고 메인 관리자도 같다. 본인 것은 늘 보인다. D-77, D-80"}
       - {id: promo-compare, name: 프로모션 비교, path: /promo/compare, roles: {main: all, manager: org, agent: self}, phase: 2, status: built,
          desc: "같은 상품군의 보험사별 지급률과 지급 시점. 내부 참고용"}
       - {id: promo-archive, name: 지난 프로모션, path: /promo/archive, roles: {main: all, manager: org, agent: self}, phase: 2, status: built,
@@ -57,10 +59,31 @@ groups:
          desc: "승인한 시상안 줄을 프로모션으로 게시하고 회수한다"}
       - {id: promo-tiers, name: 구간과 조건 입력, path: /promo/tiers, roles: {main: all}, phase: 2, status: built,
          desc: "주차·연계·여행 시상의 기간 창, 구간표, 결합 규칙, 보상을 입력한다. 금액이 원문의 그림에만 있는 줄이 대상이다"}
+      - {id: data-plan, name: 시상안, path: /data/plan, roles: {main: all}, phase: 1, status: built,
+         desc: "보험사별 시상안을 원장에 쌓고 해석하고 승인한다"}
+      - {id: data-plan-qa, name: 시상안 묻고 답하기, path: /data/plan-qa, roles: {main: all}, phase: 3, status: built, module: ai,
+         desc: "승인한 설계사 몫 시상안 줄만 근거로 AI 가 답한다. 근거 줄 번호와 원안 우선 문구. 설계사에게 여는 일은 D-27"}
+
+  - id: my
+    name: 내 진척
+    icon: "◔"
+    module: edu
+    items:
+      - {id: my-summary, name: 실적 요약, path: /my/summary, roles: {manager: self, agent: self}, phase: 2, status: built, module: perf,
+         desc: "월·분기·반기·연 실적과 구분별 집계. 청약은 예정, 성립은 확정으로 나눈다. 인별실적 파일 기준 기간 실적은 따로 보인다"}
+      - {id: my-persistency, name: 내 유지율, path: /my/persistency, roles: {manager: self, agent: self}, phase: 2, status: built, module: perf,
+         desc: "13회차·25회차 유지율, 위험 계약, 석 달 안 13회차 도래"}
+      - {id: my-education, name: 내 교육, path: /my/education, roles: {manager: self, agent: self}, phase: 2, status: built,
+         desc: "필수 과정 수료 현황, 수료 이력, 기한"}
+      - {id: my-career, name: 커리어패스, path: /my/career, roles: {manager: self, agent: self}, phase: 3, status: built,
+         desc: "현재 단계, 다음 단계의 기준, 남은 양, 목표 역산"}
+      - {id: my-cert, name: 인증, path: /my/cert, roles: {manager: self, agent: self}, phase: 3, status: built,
+         desc: "MDRT와 우수인증 진척, 연말 예상"}
 
   - id: perf
     name: 실적
     icon: "▤"
+    module: perf
     items:
       - {id: perf-period, name: 기간별 업적, path: /perf/period, roles: {main: all, manager: org, agent: self}, phase: 1, status: built,
          desc: "월·분기·반기·연. 청약, 성립, 철회, 순건수, 보험료, 인정보험료"}
@@ -72,14 +95,29 @@ groups:
          desc: "13회차·25회차의 업권별·보험사별·사람별 유지율과 위험 계약 건수"}
       - {id: perf-ranking, name: 랭킹, path: /perf/ranking, roles: {main: all, manager: org, agent: self}, phase: 1, status: built,
          desc: "지표, 업권 조건, 조직 범위를 골라 순위를 낸다. 설계사에게는 상위 10명과 본인 순위"}
-      - {id: perf-hall, name: 명예의전당, path: /perf/hall, roles: {main: all, manager: org, agent: self}, phase: 2, status: built,
-         desc: "확정된 전월 순위와 수상 이력. 수상과 자격은 본인이 공개한 것만 남에게 보이고 메인 관리자도 같다. 본인 것은 늘 보인다. D-77, D-80"}
       - {id: perf-org-compare, name: 조직 비교, path: /perf/org-compare, roles: {main: all, manager: org}, phase: 2, status: built,
          desc: "지점별·팀별 실적과 가동률"}
+
+  - id: team
+    name: 팀
+    icon: "☷"
+    module: team
+    items:
+      - {id: team-members, name: 팀원 현황, path: /team/members, roles: {main: all, manager: org}, phase: 2, status: built,
+         desc: "팀원별 실적, 프로모션 달성, 교육, 정착 단계. 수수료와 시상 금액은 가린다. 인별실적 파일 기준 기간 실적, 구분 분포, 무실적 명단은 따로 보인다"}
+      - {id: team-education, name: 교육 진척도, path: /team/education, roles: {main: all, manager: org}, phase: 2, status: built,
+         desc: "과정별 수료율, 미수료자, 수료 확인 처리"}
+      - {id: team-onboarding, name: 신인 정착, path: /team/onboarding, roles: {main: all, manager: org}, phase: 2, status: built,
+         desc: "위촉 뒤 필수 교육, 첫 계약, 첫 가동까지의 체크리스트"}
+      - {id: team-coaching, name: 면담 기록, path: /team/coaching, roles: {manager: org}, phase: 3, status: built,
+         desc: "팀원별 면담 날짜와 약속 사항, 다음 면담 알림"}
+      - {id: team-activity, name: 활동 깔때기, path: /team/activity, roles: {main: all, manager: org}, phase: 3, status: built,
+         desc: "통화, 상담, 제안, 청약 건수와 전환율"}
 
   - id: sales
     name: 영업
     icon: "✆"
+    module: sales
     items:
       - {id: sales-leads, name: 내 DB, path: /sales/leads, roles: {manager: self, agent: self}, phase: 3, status: built,
          desc: "배정받은 DB와 통화·상담·제안 기록"}
@@ -98,24 +136,10 @@ groups:
       - {id: sales-card-approve, name: 명함 승인, path: /sales/card-approve, roles: {main: all, manager: org}, requires: card_approver, phase: 2, status: built,
          desc: "명함 신청본을 앱에서 미리 보고 승인하거나 반려한다. 권한 승인 요청을 메인 관리자가 승인한 관리자만 범위 안 설계사의 요청을 처리하고, 관리자 본인의 명함은 메인 관리자가 처리한다. 메인 관리자는 설계사와 이어지지 않은 요청도 잇고 처리한다. 메인 관리자 전용 묶음에 새 연도 자격 안내와 해촉자 명함 내리기가 있다. D-44"}
 
-  - id: team
-    name: 팀
-    icon: "☷"
-    items:
-      - {id: team-members, name: 팀원 현황, path: /team/members, roles: {main: all, manager: org}, phase: 2, status: built,
-         desc: "팀원별 실적, 프로모션 달성, 교육, 정착 단계. 수수료와 시상 금액은 가린다. 인별실적 파일 기준 기간 실적, 구분 분포, 무실적 명단은 따로 보인다"}
-      - {id: team-education, name: 교육 진척도, path: /team/education, roles: {main: all, manager: org}, phase: 2, status: built,
-         desc: "과정별 수료율, 미수료자, 수료 확인 처리"}
-      - {id: team-onboarding, name: 신인 정착, path: /team/onboarding, roles: {main: all, manager: org}, phase: 2, status: built,
-         desc: "위촉 뒤 필수 교육, 첫 계약, 첫 가동까지의 체크리스트"}
-      - {id: team-coaching, name: 면담 기록, path: /team/coaching, roles: {manager: org}, phase: 3, status: built,
-         desc: "팀원별 면담 날짜와 약속 사항, 다음 면담 알림"}
-      - {id: team-activity, name: 활동 깔때기, path: /team/activity, roles: {main: all, manager: org}, phase: 3, status: built,
-         desc: "통화, 상담, 제안, 청약 건수와 전환율"}
-
   - id: edu
     name: 교육
     icon: "✎"
+    module: edu
     items:
       - {id: edu-courses, name: 과정, path: /edu/courses, roles: {main: all, manager: org, agent: self}, phase: 2, status: built,
          desc: "과정명, 유형, 필수 여부, 대상, 기한. 유형은 신인·보수·상품·준법"}
@@ -127,6 +151,7 @@ groups:
   - id: program
     name: 제도
     icon: "▲"
+    module: edu
     items:
       - {id: program-career, name: 커리어패스 운영, path: /program/career, roles: {main: all, manager: org}, phase: 3, status: built,
          desc: "주관 기관별 기준, 회차, 후보, 승인, 결과"}
@@ -140,20 +165,17 @@ groups:
   - id: data
     name: 데이터
     icon: "⇪"
+    module: core
     items:
       - {id: data-contracts, name: 계약 엑셀, path: /data/contracts, roles: {main: all}, phase: 1, status: built,
          desc: "본부 계약현황을 올려 계약 원장에 반영한다"}
       - {id: data-staff, name: 사원현황, path: /data/staff, roles: {main: all}, phase: 1, status: built,
          desc: "조직, 설계사, 조직장, 인사 이동, 퇴사를 미리보기한 뒤 반영한다. 계약현황의 조직 경로로 조직도 만든다"}
-      - {id: data-person-perf, name: 인별실적, path: /data/person-perf, roles: {main: all}, phase: 2, status: built,
+      - {id: data-person-perf, name: 인별실적, path: /data/person-perf, roles: {main: all}, phase: 2, status: built, module: perf,
          desc: "사람별 기간 실적 파일을 미리보기에서 건수, 사번 매칭, 막힌 줄을 본 뒤 적재한다. 계약 원장과 섞지 않는다. 이름과 금액은 미리보기에 없다"}
-      - {id: data-plan, name: 시상안, path: /data/plan, roles: {main: all}, phase: 1, status: built,
-         desc: "보험사별 시상안을 원장에 쌓고 해석하고 승인한다"}
-      - {id: data-plan-qa, name: 시상안 묻고 답하기, path: /data/plan-qa, roles: {main: all}, phase: 3, status: built,
-         desc: "승인한 설계사 몫 시상안 줄만 근거로 AI 가 답한다. 근거 줄 번호와 원안 우선 문구. 설계사에게 여는 일은 D-27"}
-      - {id: data-courses, name: 수료자 명부, path: /data/courses, roles: {main: all}, phase: 2, status: built,
+      - {id: data-courses, name: 수료자 명부, path: /data/courses, roles: {main: all}, phase: 2, status: built, module: edu,
          desc: "교육 수료 기록 화면으로 안내한다. 명부 올리기는 수료 기록 한 곳에서 한다"}
-      - {id: data-statement, name: 정산서와 유지율, path: /data/statement, roles: {main: all}, phase: 3, status: built,
+      - {id: data-statement, name: 정산서와 유지율, path: /data/statement, roles: {main: all}, phase: 3, status: built, module: settle,
          desc: "원수사 정산서와 유지율 현황"}
       - {id: data-quality, name: 품질검증, path: /data/quality, roles: {main: all}, phase: 1, status: built,
          desc: "차단과 경고 목록, 처리 기록"}
@@ -165,6 +187,7 @@ groups:
   - id: settle
     name: 수수료·점검
     icon: "₩"
+    module: settle
     items:
       - {id: settle-commission, name: 수수료 내역, path: /settle/commission, roles: {main: all, manager: self, agent: self}, phase: 3, status: built,
          desc: "계약별 초회·계속·시책. 본인 것과 메인 관리자만 본다"}
@@ -180,6 +203,7 @@ groups:
   - id: org
     name: 조직·설정
     icon: "⚙"
+    module: core
     items:
       - {id: org-tree, name: 조직 계층, path: /org/tree, roles: {main: all, manager: org}, phase: 1, status: built,
          desc: "GA, 지사 또는 본부, 지점, 센터, 팀의 여섯 단계. 조직마다 조직장, 직속 인원, 아래 인원"}
@@ -193,12 +217,13 @@ groups:
          desc: "보험사, 상품, 구분"}
       - {id: org-audit, name: 변경 기록, path: /org/audit, roles: {main: all}, phase: 1, status: built,
          desc: "누가 언제 무엇을 바꿨는지, 로그인과 접근 거부 기록"}
-      - {id: org-ai, name: AI 사용량과 한도, path: /org/ai, roles: {main: all}, phase: 3, status: built,
+      - {id: org-ai, name: AI 사용량과 한도, path: /org/ai, roles: {main: all}, phase: 3, status: built, module: ai,
          desc: "앱 안 AI 기능별 이번 달 호출, 토큰, 비용 추정과 월 한도. 한도를 고친다. D-26"}
 
   - id: review
     name: 심사함
     icon: "⚖"
+    module: ai
     items:
       - {id: review-requests, name: 심사 요청, path: /review/requests, roles: {main: all}, phase: 3, status: built,
          desc: "카드뉴스, 제안 리포트 서식, 안내문, 기준 문안, 랜딩 문구를 7나이츠 심사에 올린다. 심사는 작업 워커가 3회전까지 돈다"}
@@ -208,6 +233,7 @@ groups:
   - id: common
     name: 공통
     icon: "…"
+    module: core
     items:
       - {id: notifications, name: 알림함, path: /notifications, roles: {main: all, manager: org, agent: self}, phase: 2, status: built,
          desc: "프로모션 게시와 마감, 구간 근접, 교육 기한, 승인 대기, 새 공지"}

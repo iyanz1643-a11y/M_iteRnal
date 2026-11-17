@@ -52,7 +52,13 @@ def test_menu_file_is_consistent():
     cfg = menu.load()
     items = [it for g in cfg["groups"] for it in g["items"]]
     assert len({it["id"] for it in items}) == len(items) == len({it["path"] for it in items})
-    assert all(g in [x["id"] for x in cfg["groups"]] for tabs in cfg["mobile_tabs"].values() for g in tabs)
+    # 아래 탭은 항목 id 로 적는다. 있는 항목이고, 네 칸까지이고, 탭 이름은 비어 있지 않다
+    assert all(isinstance(t, dict) and t["id"] in {it["id"] for it in items} and (t.get("name") is None or t["name"].strip())
+               for tabs in cfg["mobile_tabs"].values() for t in tabs)
+    assert all(len(tabs) <= 4 for tabs in cfg["mobile_tabs"].values())
+    # 모든 묶음과 항목에 켜고 끌 모듈이 있고, 기본 상품 core 가 있다
+    assert "core" in cfg["modules"] and all(g["module"] in cfg["modules"] for g in cfg["groups"])
+    assert all(it["module"] in cfg["modules"] for it in items)
     # 데이터, 심사함은 메인 관리자만
     for it in items:
         if it["group"] in ("data", "review"):
