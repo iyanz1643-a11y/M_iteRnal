@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends "base.html" %}{% import "_card.html" as cd %}
 {% block body %}
 <p class="eyebrow">영업 · 본인</p>
 <h1 class="display">모바일 명함</h1>
@@ -66,11 +66,7 @@
     {% if r.how %}<p class="cap badge-how">{{ r.how }}</p>{% endif %}
     {% if r.expected_note %}<p class="cap badge-note">{{ r.expected_note }}</p>{% endif %}
   </div>
-  {% if r.can_publish %}<form method="post" action="{{ path }}" class="pub-toggle" role="group" aria-label="{{ r.label }} 명예의전당 공개 여부">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><input type="hidden" name="action" value="publish"><input type="hidden" name="item_key" value="{{ r.key }}">
-    <button type="submit" name="published" value="1" class="{{ 'on' if r.published }}" aria-pressed="{{ 'true' if r.published else 'false' }}">공개</button>
-    <button type="submit" name="published" value="0" class="{{ 'on' if not r.published }}" aria-pressed="{{ 'false' if r.published else 'true' }}">비공개</button>
-  </form>{% endif %}</div>
+  {% if r.can_publish %}{{ cd.pub_toggle(r, path, csrf_token(request)) }}{% endif %}</div>
 {% endfor %}</div>
 {% endif %}
 {% endif %}

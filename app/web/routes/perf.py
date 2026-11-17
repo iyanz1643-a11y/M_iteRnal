@@ -11,15 +11,19 @@
   줄은 card_badges.program_key 와 org_award_key 로 공개 열쇠를 만들고 card_badges.published_keys 로 거른다.
   열쇠가 없는 줄은 공개할 수 없는 항목이라 본인에게만 보인다. 본인 줄은 늘 보이고 공개 여부를 붙인다.
   전월 순위는 공개 항목이 아니라 랭킹 화면과 같은 규칙으로 그대로 보인다. D-81
+  내 수상과 자격 구획은 관리자와 설계사 본인 것만 그린다. 공개 스위치는 /perf/hall POST 로 받고, 내 명함과 같은
+  card_badges.set_publish 를 세션의 본인 설계사 번호로만 부른다. 영업 모듈을 꺼도 공개를 바꿀 수 있게 하려는 것이다.
+  목록은 내 명함과 같은 card.my_badges 다. 메인 관리자는 내 명함 화면이 없어 여기서도 바꾸지 않는다.
 
 D-17. 이 묶음에는 수수료와 시상 금액을 싣지 않는다. 명예의전당의 조직 부문 시상 내용은 D-45 제안대로(가정) 모두에게
 공개하는 순위별 상품표로 보고 모든 역할에게 적는다. 규칙은 app/web/awards.py 한 곳이고 조직 부문 시상 화면과 같다.
 계약 원장은 app/web/routes/contracts.py 에 따로 있다.
 """
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.connect import card_badges as cb
+from app.connect.base import OK
 from app.engine import org_award as oa
 from app.engine import orgs
 from app.engine import results as rs
@@ -27,6 +31,7 @@ from app.org import levels
 from app.periods import ym_add
 from app.web import awards
 from app.web.deps import _in, _q, get_con, guard, page
+from app.web.routes import card as card_route
 
 router = APIRouter()
 
@@ -263,6 +268,33 @@ def perf_hall(request: Request, metric: str = "recognized_premium", ctx: dict = 
     metric = pick(metric, HALL_METRICS, "recognized_premium")
     prev = ym_add(ctx["ym"], -1)
     closed = bool(con.execute("SELECT 1 FROM close_period WHERE period_ym=? AND status='closed'", (prev,)).fetchone())
+    mine = card_route.my_badges(con, ctx.get("agent_id")) if _own_publish(ctx) else None
     return page(request, ctx, "perf_hall.html", prev=prev, closed=closed, metric=metric, METRICS=HALL_METRICS, fresh=fresh(con, prev),
                 rank=hall_ranking(con, ctx, prev, metric), divisions=hall_divisions(con, ctx, prev), history=hall_history(con, ctx),
-                prize_note=awards.PUBLIC_NOTE)
+                prize_note=awards.PUBLIC_NOTE, mine=mine, publish_help=card_route.PUBLISH_HELP,
+                flash=request.session.pop(HALL_FLASH, None))
+
+
+HALL_FLASH = "hall_flash"
+HALL_PATH = "/perf/hall"
+
+
+def _own_publish(ctx) -> bool:
+    """내 수상과 자격 구획과 공개 스위치를 쓰는 사람인가. 설계사 번호가 이어진 관리자와 설계사다. 내 명함 화면과 같은 사람들이다."""
+    return ctx.get("agent_id") is not None and ctx["role"] != "main"
+
+
+@router.post("/perf/hall", response_class=HTMLResponse)
+def perf_hall_publish(request: Request, action: str = Form(""), item_key: str = Form(""), published: str = Form(""),
+                      ctx: dict = Depends(guard), con=Depends(get_con)):
+    """명예의전당에서 내 항목 하나의 공개 여부를 바꾼다. D-77, D-80. 내 명함의 토글(card.my_card_publish)과 같은 규칙이다.
+    설계사 번호는 세션에서만 읽고 폼으로 받지 않는다. 본인 확인과 자격 확인은 set_publish 가 한 번 더 한다."""
+    if action != "publish" or published not in ("0", "1") or not item_key or len(item_key) > 200:
+        raise HTTPException(400, "처리할 수 없는 요청입니다.")
+    if not _own_publish(ctx):
+        raise HTTPException(403, "공개 여부는 본인만 바꿀 수 있습니다.")
+    out = cb.set_publish(con, ctx["agent_id"], item_key, published == "1", ctx["login_id"], today=card_route._today())
+    kind = "ok" if out.status == OK else ("warn" if out.status == cb.UNCHANGED else "bad")
+    text = (out.reason or "공개 여부를 저장하지 못했습니다. 잠시 뒤 다시 해 주세요").rstrip(".") + "."
+    request.session[HALL_FLASH] = {"kind": kind, "text": text}
+    return RedirectResponse(f"{HALL_PATH}#mine", status_code=303)

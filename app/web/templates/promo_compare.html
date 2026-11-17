@@ -4,6 +4,7 @@
 <h1 class="display">프로모션 비교 {{ n }}건</h1>
 <p class="lede">같은 실적 {{ (unit / 10000)|int }}만 원을 올렸을 때 받을 수 있는 예상 보상으로 나란히 놓았습니다.</p>
 <div class="alert cmp-note" role="note">내부 참고용입니다. 고객에게 보여 드리거나 밖으로 보내지 말아 주세요. {{ estimate_note }}</div>
+{{ ui.ref_note() }}
 {% if show_original %}<p class="cap">{{ plan_note }}</p>{% endif %}
 {% if cats %}<div class="seg" aria-label="구분으로 거르기"><a class="{{ 'on' if not sel_cat }}" href="/promo/compare">전체 구분</a>
   {% for code, name in cats %}<a class="{{ 'on' if sel_cat == code }}" href="/promo/compare?cat={{ code }}">{{ name }}</a>{% endfor %}</div>{% endif %}

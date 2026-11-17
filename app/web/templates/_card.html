@@ -7,3 +7,10 @@
   {% if r.conflict %}<span class="chip bad">공개본과 신청 정보가 다름</span>{% endif %}
   {% if r.live_url %}<a href="{{ r.live_url }}" target="_blank" rel="noopener noreferrer">지금 공개본 보기</a>{% else %}<span class="cap" style="margin:0">공개본 없음</span>{% endif %}
 </div>{% endmacro %}
+{#- 명예의전당 공개 토글 하나. 내 명함(/sales/card)과 명예의전당의 내 수상과 자격(/perf/hall)이 함께 쓴다. D-77, D-80
+    폼에는 설계사 번호 칸이 없다. 받는 쪽은 세션의 본인 번호로만 card_badges.set_publish 를 부른다 -#}
+{% macro pub_toggle(r, action, token) %}<form method="post" action="{{ action }}" class="pub-toggle" role="group" aria-label="{{ r.label }} 명예의전당 공개 여부">
+    <input type="hidden" name="csrf_token" value="{{ token }}"><input type="hidden" name="action" value="publish"><input type="hidden" name="item_key" value="{{ r.key }}">
+    <button type="submit" name="published" value="1" class="{{ 'on' if r.published }}" aria-pressed="{{ 'true' if r.published else 'false' }}">공개</button>
+    <button type="submit" name="published" value="0" class="{{ 'on' if not r.published }}" aria-pressed="{{ 'false' if r.published else 'true' }}">비공개</button>
+  </form>{% endmacro %}

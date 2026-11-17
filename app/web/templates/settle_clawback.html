@@ -10,7 +10,8 @@
 <div class="grid g2" style="margin-top:24px">
   <div class="card" data-hero="clawback"><div class="k"><span class="dot {{ 'bad' if c.lines else 'off' }}"></span>환수 합계 {% if c.lines %}{{ sx.basis(c.estimated) }}{% endif %}</div>
     <div class="big">{{ c.total|won }}<span class="unit">원</span></div>
-    <div class="cap">{% if c.lines %}{{ c.lines|length }}줄{% if everyone %} · {{ people }}명{% endif %}{% else %}이 달 환수 줄이 없습니다{% endif %}</div></div>
+    <div class="cap">{% if c.lines %}{{ c.lines|length }}줄{% if everyone %} · {{ people }}명{% endif %}{% else %}이 달 환수 줄이 없습니다{% endif %}</div>
+    {{ ui.ref_note() }}</div>
   <div class="card"><div class="k">기준</div>
     <div class="cap" style="font-size:16px;color:var(--ink)">정산서가 들어온 보험사는 정산서의 환수 줄이고, 정산서가 없는 보험사는 요율표로 계산한 예상 환수입니다.</div></div>
 </div>

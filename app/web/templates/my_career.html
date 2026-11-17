@@ -61,6 +61,6 @@
 <td class="hide-sm">{{ r.from_level.name }}에서 {{ r.to_level.name }}</td><td class="hide-sm">{{ r.effective_ym|ymko if r.effective_ym else '-' }}</td></tr>{% endfor %}
 </table></div>
 {% endif %}
-<p class="cap" style="margin-top:20px"><a href="/my/summary?pt=quarter">이번 분기 실적 요약</a> · <a href="/my/cert">내 인증</a></p>
+<p class="cap" style="margin-top:20px">{% if path_on('/my/summary') %}<a href="/my/summary?pt=quarter">이번 분기 실적 요약</a> · {% endif %}<a href="/my/cert">내 인증</a></p>
 {% endif %}
 {% endblock %}

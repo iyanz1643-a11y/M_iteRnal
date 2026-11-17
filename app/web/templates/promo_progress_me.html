@@ -4,6 +4,7 @@
 <p class="eyebrow">{{ ctx.ym[:4] }}년 {{ ctx.ym[4:]|int }}월 · 기준일 {{ ref|md }}</p>
 <h1 class="display">내 달성 현황</h1>
 <p class="lede">프로모션 {{ items|length }}건 가운데 {{ hit }}건에 실적이 잡혔습니다. 금액과 구간은 예상이며 확정은 보험사 정산을 따릅니다.</p>
+{{ ui.ref_note() }}
 {% if ctx.role == 'manager' %}<div class="seg"><a href="/promo/progress">팀원 현황</a><a class="on" href="/promo/progress?view=me">내 현황</a></div>{% endif %}
 {% if not items %}<div class="card" style="margin-top:32px"><div class="k">게시된 프로모션이 없습니다</div></div>{% endif %}
 <div class="grid" style="margin-top:28px">

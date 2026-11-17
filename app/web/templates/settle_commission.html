@@ -14,6 +14,7 @@
   <div class="cap">지급 {{ m.total.paid|won }}원 · 환수 {{ m.total.clawback|won }}원 · {{ m.total.lines }}줄</div>
   {% if mixed %}<div class="cap">정산서 기준 {{ m.confirmed.net|won }}원 · 예상 {{ m.expected.net|won }}원</div>{% endif %}
   {% else %}<div class="big na">자료 없음</div><div class="cap">이 달에는 정산서도 자체 계산도 없습니다. 금액을 지어내지 않습니다.</div>{% endif %}
+  {{ ui.ref_note() }}
 </div>
 {% if who %}<p class="cap"><a href="{{ path }}?ym={{ ym }}">전체 설계사로 돌아가기</a></p>{% endif %}
 

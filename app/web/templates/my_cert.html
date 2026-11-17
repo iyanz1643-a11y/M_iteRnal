@@ -27,6 +27,6 @@
   </div>{% endfor %}
 </div>
 {% endfor %}
-<p class="cap" style="margin-top:20px">기준마다 묶음이 여럿이면 한 묶음만 채워도 됩니다. 연말 값은 예상이고 확정이 아닙니다. <a href="/my/career">내 커리어패스</a> · <a href="/my/summary">실적 요약</a></p>
+<p class="cap" style="margin-top:20px">기준마다 묶음이 여럿이면 한 묶음만 채워도 됩니다. 연말 값은 예상이고 확정이 아닙니다. <a href="/my/career">내 커리어패스</a>{% if path_on('/my/summary') %} · <a href="/my/summary">실적 요약</a>{% endif %}</p>
 {% endif %}
 {% endblock %}

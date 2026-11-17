@@ -49,3 +49,9 @@
   <div class="bar-val">{{ (r[val_key] or 0)|won }}</div></div>{% endfor %}
 </div>
 {% endmacro %}
+
+{#- 참고용 안내. 대표님 지시 문구다. 로그인한 모든 화면의 맨 아래(base.html)에 한 번, 금액이나 예상액, 달성 여부가 나오는 화면에는
+    숫자 가까운 설명 줄에 한 번 더 둔다. 문구는 여기 한 곳에만 적는다. 로그인 전 화면(로그인, 초대, 상담 신청)에는 넣지 않는다 -#}
+{% set REF_NOTE = "이 자료는 참고용이며 정확한 계산은 수수료 담당 부서 또는 유관부서에 문의해 주세요." %}
+{% macro ref_note(style='') %}<p class="cap ref-note" data-note="ref"{% if style %} style="{{ style }}"{% endif %}>{{ REF_NOTE }}</p>{% endmacro %}
+{% macro ref_foot() %}<footer class="ref-foot" data-note="ref-foot">{{ REF_NOTE }}</footer>{% endmacro %}

@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% import "_perf.html" as pf %}{% import "_awards.html" as aw %}
+{% extends "base.html" %}{% import "_perf.html" as pf %}{% import "_awards.html" as aw %}{% import "_card.html" as cd %}
 {% block body %}
 <p class="eyebrow">{{ prev|ymko }} · {{ '마감 확정' if closed else '마감 전' }}</p>
 <h1 class="display">명예의전당</h1>
@@ -6,6 +6,7 @@
 {% set run_at = rank.run_at if rank else none %}{% set behind = run_at and fresh.last_load and fresh.last_load > run_at %}
 <p class="cap perf-fresh"><span class="dot {{ 'warn' if behind else ('' if run_at else 'off') }}"></span>{% if run_at %}{{ run_at|when }}에 계산한 순위가 기준입니다.{% else %}{{ prev|ymko }} 순위는 아직 계산하지 않았습니다.{% endif %}
 {% if fresh.last_load %} 계약은 {{ fresh.last_load|when }} 적재 기준입니다.{% else %} 적재한 계약 자료가 없습니다.{% endif %}{% if behind %} 순위를 계산한 뒤 계약을 다시 올려 랭킹 화면의 숫자와 다를 수 있습니다.{% endif %}</p>
+{{ ui.ref_note() }}
 
 <h2 class="sec">{{ prev[4:]|int }}월 전체 순위</h2>
 <div class="seg perf-seg">{% for k, v in METRICS.items() %}<a class="{{ 'on' if k == metric }}" href="{{ path }}{{ qs({}, metric=k if k != 'recognized_premium' else '') }}">{{ v }}</a>{% endfor %}</div>
@@ -26,7 +27,7 @@
 {% if rank.rows|length < rank.total %}<p class="cap">순위에 든 {{ rank.total }}명 가운데 {{ rank.rows|length }}명을 보여 줍니다.{% if ctx.role != 'main' %} 상위 10명과 {{ '우리 조직 사람' if ctx.role == 'manager' else '본인' }}입니다.{% endif %}</p>{% endif %}
 {% endif %}
 
-{% macro pubmark(x) %}{% if x.mine %}<div class="hall-pub" data-mine-pub="{{ 1 if x.published else 0 }}">{% if x.can_publish %}<span class="chip {{ 'blue' if x.published else '' }}">{{ '공개' if x.published else '비공개' }}</span><span>{{ '다른 분께도 보입니다' if x.published else '나에게만 보입니다' }}</span>{% if ctx.role != 'main' %}<a href="/sales/card#badges">내 명함에서 바꾸기</a>{% endif %}{% else %}<span class="chip">나에게만 보입니다</span>{% endif %}</div>{% endif %}{% endmacro %}
+{% macro pubmark(x) %}{% if x.mine %}<div class="hall-pub" data-mine-pub="{{ 1 if x.published else 0 }}">{% if x.can_publish %}<span class="chip {{ 'blue' if x.published else '' }}">{{ '공개' if x.published else '비공개' }}</span><span>{{ '다른 분께도 보입니다' if x.published else '나에게만 보입니다' }}</span>{% if mine is not none %}{% if path_on('/sales/card') %}<a href="/sales/card#badges">내 명함에서 바꾸기</a>{% else %}<a href="#mine">내 수상과 자격에서 바꾸기</a>{% endif %}{% endif %}{% else %}<span class="chip">나에게만 보입니다</span>{% endif %}</div>{% endif %}{% endmacro %}
 <h2 class="sec">{{ prev[4:]|int }}월 조직 부문 수상</h2>
 {% if divisions %}{% for d in divisions %}
 <section class="card" style="margin-top:16px">
@@ -51,5 +52,25 @@
   <td>{{ h.title }}</td><td class="hide-sm">{{ h.at|ymko if h.kind == 'division' else h.at ~ '년' }}</td></tr>{% endfor %}
 </table></div>
 {% else %}<div class="card"><div class="k">보여 드릴 수상 이력이 없습니다</div></div>{% endif %}
-<p class="cap">{{ {'all': '전체', 'org': '우리 조직', 'self': '본인'}[ctx.scope] }}의 수상 이력입니다. 영업우수와 명예의전당 수상, 확정한 조직 부문 수상을 모았습니다. 다른 분의 수상과 자격은 그분이 공개한 항목만 보입니다.{% if ctx.agent_id and ctx.role != 'main' %} 내 수상은 늘 나에게 보이고, 공개 여부는 <a href="/sales/card#badges">내 명함</a>에서 정합니다.{% endif %}</p>
+<p class="cap">{{ {'all': '전체', 'org': '우리 조직', 'self': '본인'}[ctx.scope] }}의 수상 이력입니다. 영업우수와 명예의전당 수상, 확정한 조직 부문 수상을 모았습니다. 다른 분의 수상과 자격은 그분이 공개한 항목만 보입니다.{% if mine is not none %} 내 수상은 늘 나에게 보이고, 공개 여부는 아래 <a href="#mine">내 수상과 자격</a>{% if path_on('/sales/card') %}이나 <a href="/sales/card#badges">내 명함</a>{% endif %}에서 정합니다.{% endif %}</p>
+
+{#- 내 수상과 자격. 본인에게만 그린다. 목록은 내 명함과 같은 card.my_badges, 스위치는 같은 card_badges.set_publish 로 간다. D-77, D-80
+    영업 모듈이 꺼져도 공개를 바꿀 수 있게 이 화면에 둔다. 폼에는 설계사 번호 칸이 없다 -#}
+{% if mine is not none %}
+<h2 class="sec" id="mine">내 수상과 자격</h2>
+<p class="cap" style="margin:-6px 0 12px">나에게만 보이는 구획입니다. {{ mine.as_of }} 기준으로 인증 확정과 조직 부문 수상 기록에서 판정했습니다. {{ publish_help }}</p>
+{% if flash %}<div class="{{ 'okmsg' if flash.kind == 'ok' else 'alert' }}{{ ' bad' if flash.kind == 'bad' }}" role="status">{{ flash.text }}</div>{% endif %}
+{% if mine.error %}<div class="alert" role="status">수상과 자격 기록을 읽지 못했습니다. 잠시 뒤 <a href="{{ path }}#mine">새로 고쳐</a> 주세요.</div>
+{% elif not mine.rows %}<div class="card"><div class="k"><span class="dot off"></span>내 수상과 자격</div>
+  <p class="cap">인증이 확정되거나 조직 부문 시상에서 수상이 확정되면 여기에서 공개 여부를 정할 수 있습니다.</p></div>
+{% else %}
+<div class="card reqs badges">{% for r in mine.rows %}
+  <div class="req" data-badge="{{ r.status }}" data-mine-key="{{ r.key }}"{% if r.can_publish %} data-published="{{ 1 if r.published else 0 }}"{% endif %}><div class="req-main">
+    <div class="req-who"><span class="strong">{{ r.label }}</span> <span class="chip {{ r.tone }}">{{ r.status_ko }}</span></div>
+    <div class="req-meta">{% if r.can_publish %}<span>명예의전당 {{ '공개' if r.published else '비공개' }}{% if r.changed %} · {{ r.changed }} 바꿈{% endif %}</span>{% else %}<span>확정 전이라 아직 공개할 수 없습니다</span>{% endif %}</div>
+  </div>
+  {% if r.can_publish %}{{ cd.pub_toggle(r, path, csrf_token(request)) }}{% endif %}</div>
+{% endfor %}</div>
+{% endif %}
+{% endif %}
 {% endblock %}

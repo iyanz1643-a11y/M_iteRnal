@@ -7,7 +7,7 @@
 {% block body %}
 <p class="eyebrow">교육 · {{ SCOPES[ctx.scope] }}</p>
 <h1 class="display">수료 기록</h1>
-<p class="lede">{% if is_main %}수료자 명부를 올려 수료를 넣고, 명함 과정을 마친 설계사에게 수료 코드를 발급합니다. 관리자의 수료 확인은 <a href="/team/education">교육 진척도</a>에서 합니다.{% else %}범위 안 설계사의 수료 기록입니다. 명부 올리기는 메인 관리자가 합니다. 수료 확인은 <a href="/team/education">교육 진척도</a>의 미수료자 목록에서 합니다.{% endif %}</p>
+<p class="lede">{% if is_main %}수료자 명부를 올려 수료를 넣고, 명함 과정을 마친 설계사에게 수료 코드를 발급합니다. {% if path_on('/team/education') %}관리자의 수료 확인은 <a href="/team/education">교육 진척도</a>에서 합니다.{% endif %}{% else %}범위 안 설계사의 수료 기록입니다. 명부 올리기는 메인 관리자가 합니다.{% if path_on('/team/education') %} 수료 확인은 <a href="/team/education">교육 진척도</a>의 미수료자 목록에서 합니다.{% endif %}{% endif %}</p>
 {{ e.flashbox(flash) }}
 {% if error %}<div class="alert bad" role="alert" style="margin-top:24px">{{ error }}</div>{% endif %}
 

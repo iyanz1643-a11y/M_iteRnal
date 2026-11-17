@@ -50,7 +50,7 @@ svg.ic-more circle + circle{fill:currentColor}
 .subnav a.on{background:var(--blue);color:#fff;font-weight:600}
 
 /* ---------- 본문 */
-main.wrap{max-width:1120px;margin:0 auto;padding:4px 16px calc(120px + env(safe-area-inset-bottom))}
+main.wrap{max-width:1120px;margin:0 auto;padding:4px 16px 0}
 .eyebrow{font-size:var(--t-foot);font-weight:600;color:var(--quiet);margin:4px 0 2px}
 .display{font-size:var(--t-large);line-height:1.2;font-weight:700;letter-spacing:-.01em;margin:0}
 .lede{font-size:var(--t-sub);line-height:1.45;color:var(--quiet);margin:6px 0 0;max-width:44em}
@@ -68,6 +68,10 @@ h2.sec{font-size:var(--t2);line-height:1.25;font-weight:700;letter-spacing:-.01e
 .mid.word{font-size:var(--t3);line-height:1.25;white-space:nowrap}
 .unit{font-size:.45em;font-weight:600;letter-spacing:-.01em;margin-left:.12em;color:var(--quiet)}
 .cap{font-size:var(--t-foot);color:var(--faint);margin-top:6px}
+/* 참고용 안내. 숫자 가까이 두는 줄은 .cap 그대로다. 화면 맨 아래 한 줄은 main 다음의 footer 이고 더 작고 가운데다.
+   아래 탭 막대 몫의 여백은 main 이 아니라 이 footer 의 아래 여백이 맡아 안내가 탭 막대에 가리지 않는다 */
+.ref-foot{max-width:1120px;margin:0 auto;padding:40px 16px calc(120px + env(safe-area-inset-bottom));font-size:var(--t-cap);line-height:1.45;
+  color:var(--faint);text-align:center;word-break:keep-all}
 .hero{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--fill-green);margin-right:7px;vertical-align:.1em}
 .dot.warn{background:var(--fill-orange)}.dot.bad{background:var(--fill-red)}.dot.off{background:var(--track)}
@@ -206,7 +210,7 @@ form.out button.link{display:inline-flex;align-items:center;min-height:48px;colo
   .tabbar{justify-content:center}
   .tabbar a,.tabbar button{flex:0 1 150px;flex-direction:row;gap:6px;font-size:var(--t-foot);min-height:50px}
   .tabbar svg.ic{width:24px;height:24px}
-  main.wrap{padding-left:24px;padding-right:24px}
+  main.wrap,.ref-foot{padding-left:24px;padding-right:24px}
   .subnav{padding:0 24px}
 }
 @media (max-width:760px){
@@ -248,7 +252,8 @@ form.out button.link{display:inline-flex;align-items:center;min-height:48px;colo
   .nav-right .me{display:flex;color:var(--ink)}
   .nav-right .me svg.ic{color:var(--blue)}
   .nav-left .back,.subnav,.sheet{display:none !important}
-  main.wrap{padding:8px 40px 96px}
+  main.wrap{padding:8px 40px 0}
+  .ref-foot{padding:40px 40px 96px}
 }
 
 /* ---------- 프로모션 */

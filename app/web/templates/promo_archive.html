@@ -13,6 +13,7 @@
 <p class="eyebrow">{% if sel_ym %}{{ ym_label }} · {% endif %}{{ '본인' if mine else SCOPES[ctx.scope] }} · 기준일 {{ today|md }}{% if n_done %} · <span class="chip good">{{ SETTLE_KO.confirmed }} {{ n_done }}건</span>{% endif %}{% if n_open %} · <span class="chip warn">{{ SETTLE_KO.estimate }} {{ n_open }}건</span>{% endif %}</p>
 <h1 class="display">지난 프로모션 {{ results|length }}건</h1>
 <p class="lede">끝난 프로모션의 결과입니다. 메인 관리자가 확정하기 전에는 마감 전 예상이고, 확정한 뒤에는 그때의 값이 그대로 남습니다. 지급은 보험사 정산을 따릅니다.{% if not show_amount %} 팀원의 시상 금액은 보이지 않고 달성 여부만 보입니다.{% endif %}</p>
+{{ ui.ref_note() }}
 {% if msg %}<div class="okmsg">{{ msg }}</div>{% endif %}{% if err %}<div class="alert">{{ err }}</div>{% endif %}
 {% if ctx.role == 'manager' %}<div class="seg"><a class="{{ 'on' if not mine }}" href="/promo/archive{{ '?ym=' ~ sel_ym if sel_ym }}">팀원 결과</a><a class="{{ 'on' if mine }}" href="/promo/archive?view=me{{ '&ym=' ~ sel_ym if sel_ym }}">내 결과</a></div>{% endif %}
 {% if months %}<div class="seg" aria-label="달 고르기">{% for m in months %}<a class="{{ 'on' if m == sel_ym }}" href="/promo/archive?ym={{ m }}{{ '&view=me' if mine and ctx.role == 'manager' }}">{{ m[:4] }}년 {{ m[4:]|int }}월</a>{% endfor %}</div>{% endif %}

@@ -52,6 +52,7 @@
 {% if ctx.must_change_password and path != '/me' %}<div class="alert">초기 비밀번호를 쓰고 있습니다. <a href="/me">내 정보</a>에서 바꿔 주세요.</div>{% endif %}
 {% block body %}{% endblock %}
 </main>
+{{ ui.ref_foot() }}
 <nav class="tabbar" aria-label="아래 탭">
   {% for t in tabs %}<a class="{{ 'on' if tab_on and tab_on.id == t.id }}" href="{{ t.path }}">{{ ui.tab_icon(t) }}<span>{{ t.label }}</span></a>{% endfor %}
   <button class="more{{ ' on' if item and not tab_on }}" type="button" data-sheet aria-controls="sheet">{{ ui.icon('more') }}<span>더보기</span></button>

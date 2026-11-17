@@ -322,18 +322,9 @@ def test_scope_and_shown_people_do_not_grow_when_modules_are_off(env, monkeypatc
 
 
 # ---------------------------------------------------------------- 7. 꺼진 모듈의 화면으로 가는 링크가 남은 화면 어디에도 없다
-# 검증 때 찾은 문제의 재현. 켜진 화면의 본문에 꺼진 화면 링크가 남아 누르면 404 다. 고치면 이 표에서 지운다.
-# (꺼진 모듈, 역할): 남는 링크
-DEAD_LINKS = {
-    (("perf",), "main"): "/team/members 의 인별실적 링크 /data/person-perf",
-    (("perf",), "agent"): "/my/career, /my/cert 의 실적 요약 링크 /my/summary",
-    (("team",), "main"): "/edu/completions 의 교육 진척도 링크 /team/education",
-    (("team",), "manager"): "/edu/completions 의 교육 진척도 링크 /team/education",
-    (("sales",), "manager"): "/perf/hall 의 내 명함 링크 /sales/card. 공개 여부를 바꿀 곳도 없어진다",
-    (("sales",), "agent"): "/perf/hall 의 내 명함 링크 /sales/card. 공개 여부를 바꿀 곳도 없어진다",
-    (ADDONS, "manager"): "/perf/hall 의 내 명함 링크 /sales/card",
-    (ADDONS, "agent"): "/perf/hall 의 내 명함 링크 /sales/card",
-}
+# 검증 때 찾은 문제의 재현이었다. 켜진 화면의 본문에 꺼진 화면 링크가 남아 누르면 404 였다. 모두 고쳐 표가 비었다.
+# 다시 생기면 (꺼진 모듈, 역할): 남는 링크 로 적고 xfail 로 둔다. 고치면 지운다.
+DEAD_LINKS: dict = {}
 LINK_CASES = [pytest.param(o, r, id=f"{'+'.join(o)}-{r}",
                            marks=[pytest.mark.xfail(strict=True, reason=DEAD_LINKS[(o, r)])] if (o, r) in DEAD_LINKS else [])
               for o in [(m,) for m in ADDONS] + [ADDONS] for r in ("main", "manager", "agent")]

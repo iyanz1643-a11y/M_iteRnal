@@ -7,7 +7,7 @@
 
 {% macro empty(main) %}
 <div class="card"><div class="k">아직 들어온 인별실적 파일이 없습니다</div>
-  <div class="cap">{% if main %}<a href="/data/person-perf">데이터 묶음의 인별실적</a>에서 파일을 올리면 여기에 보입니다.{% else %}메인 관리자가 인별실적 파일을 올리면 여기에 보입니다.{% endif %}</div></div>
+  <div class="cap">{% if main and path_on('/data/person-perf') %}<a href="/data/person-perf">데이터 묶음의 인별실적</a>에서 파일을 올리면 여기에 보입니다.{% elif main %}인별실적 파일이 들어오면 여기에 보입니다.{% else %}메인 관리자가 인별실적 파일을 올리면 여기에 보입니다.{% endif %}</div></div>
 {% endmacro %}
 
 {% macro names(rows, empty_text) %}
