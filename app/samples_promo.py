@@ -173,19 +173,23 @@ def seed(con, ym="202610", by="정산담당(데모)") -> dict:
     book.add(busan[9], "2026-11-11", 260_000, "DB생명 건강보험")                 # 추가안 11월 25만을 채움
     book.add(seoul[9], "2026-11-12", 150_000, "DB생명 건강보험")                 # 10월 미달성. 추가안 11월 25만까지 10만이 남음
 
-    # ---------------- 흥국화재 BOOM-UP: 청약 기준, 지표는 인정보험료(대표님 지시, 11월 17일). 샘플 계약은 인정보험료를 보험료와 같게 넣는다(_Book.add)
-    # 10월과 11월을 채운 사람, 작게 따라가는 사람, 10월을 놓친 사람, 11월 근접, 철회
+    # ---------------- 흥국화재 BOOM-UP: 연계(대표님 정정, 11월 18일). 10월 5만을 채운 사람이 11월 10만, 12월 15만으로 이어 가고(연속),
+    # 연속이 끊기면 10월에서 12월 합산 40만으로 간다. 연속 또는 합산을 채우면 달성(either). 청약 기준, 지표는 인정보험료(11월 17일).
+    # 샘플 계약은 인정보험료를 보험료와 같게 넣는다(_Book.add). 11월 16일까지의 모습: 10월을 채우고 11월을 이어 가는 사람,
+    # 10월을 채우고 합산 40만도 채운 사람, 10월을 놓쳤지만 합산 40만을 채운 사람, 10월을 놓치고 합산도 못 채운 사람, 11월 근접, 철회
     hk = "흥국화재 건강종합보험"
     for i, a in enumerate(seoul[:5] + busan[:3]):
         book.add(a, "2026-10-15", 100_000, hk, status="applied" if i % 2 else "inforce")
-        book.add(a, "2026-11-13", 150_000, hk)
+        book.add(a, "2026-11-13", 300_000 if i == 0 else 150_000, hk)      # 첫 사람은 합산 40만도 채운다. 연속과 합산을 둘 다 채운 사람
     for a in (seoul[5], busan[3]):
         book.add(a, "2026-10-16", 50_000, hk)
         book.add(a, "2026-11-14", 100_000, hk)
-    for a in (seoul[6], busan[4]):
-        book.add(a, "2026-10-17", 40_000, hk)                  # 10월 5만에 못 미침. 10월이 끝나면 '모두' 라 무효
+    book.add(seoul[6], "2026-10-17", 40_000, hk)               # 10월 5만에 못 미쳐 연속은 끊겼다. 11월에 크게 채워 합산 44만으로 달성
+    book.add(seoul[6], "2026-11-12", 400_000, hk)
+    book.add(busan[4], "2026-10-17", 40_000, hk)               # 10월을 놓치고 합산도 한참 모자란다. 합산 40만까지 36만이 남는다
+    book.add(busan[4], "2026-11-11", 30_000, hk)
     book.add(seoul[7], "2026-10-17", 60_000, hk)
-    book.add(seoul[7], "2026-11-09", 80_000, hk)               # 11월 10만 근접
+    book.add(seoul[7], "2026-11-09", 80_000, hk)               # 11월 10만 근접. 연속은 아직 살아 있다
     book.add(busan[5], "2026-10-18", 300_000, hk, status="withdrawn")   # 철회는 세지 않는다
     book.add(busan[5], "2026-10-19", 200_000, "흥국화재 자동차보험")       # 장기 인보험이 아니라 세지 않는다
 
@@ -220,11 +224,12 @@ def seed(con, ym="202610", by="정산담당(데모)") -> dict:
     out = {}
     out["boom"] = pm.create(
         con, period_ym=ym, name="흥국화재 BOOM-UP", kind="travel", insurer_id=ins("흥국화재"), insurer_name="흥국화재", sector="nonlife",
-        categories=["health"], windows=Q4, combine_rule="both", date_basis="application_date", metric="converted_premium",
+        categories=["health"], windows=Q4, combine_rule="either", date_basis="application_date", metric="converted_premium",
         tiers=tiers("제주 2박 3일", 400_000), window_tiers={1: tiers("제주 2박 3일", 50_000), 2: tiers("제주 2박 3일", 100_000),
                                                             3: tiers("제주 2박 3일", 150_000)},
         rules={"count_basis": "application", "retention_min": 95}, target_note="흥국화재 장기 인보험",
-        caution="10월에서 12월 청약 기준, 철회 제외. 월 5만, 10만, 15만 이상 연속 달성과 3개월 합산 40만 이상을 모두 채웁니다. "
+        caution="10월에서 12월 청약 기준, 철회 제외. 연계 시상입니다. 10월 5만을 채운 사람이 11월 10만, 12월 15만으로 이어 가고, 연속이 끊기면 "
+                "3개월 합산 40만으로 갑니다. 연속으로 끝까지 채우거나 합산 40만을 채우면 달성입니다. "
                 "13회차 유지율 95%를 함께 봅니다. 최다 달성 본부의 총무가 참석합니다. 시험용 샘플입니다.", by=by, publish=True)
     # DB생명 여행시상은 판이 둘이다(원문 동영상 확인). 1차 원안을 만들고 2차 변경으로 고친다. 판 날짜는 샘플이라 정해 둔다.
     # 1차: 10만, 30만, 40만 연속 또는 합산 100만. 2배 인정은 매월 1~2주차. 여행지 추후 공지.

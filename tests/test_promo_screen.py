@@ -8,7 +8,8 @@
 | 보상 선택 | 메인 관리자만, CSRF 를 거쳐, 확정한 달성자에게만 남는다. 변경 기록에 사번으로 남는다 |
 | 계층 이름 | 메인 관리자의 조직별 보기는 이터널총괄본부에서 시작하고 예하 본부 넷이 '본부' 로 보인다 |
 | 조건 입력 | rules 칸을 넣고 고치면 엔진 값이 바뀌고 변경 기록 이름표에 '조건 확장' 이 보인다 |
-| 표 모양 | 달마다 대상자 칸, 조건 1-1, 1-2, 2 묶음, 최종 달성. 시작 전 달은 숫자 없이 '시작 전' 이다 |
+| 표 모양 | 달 칸마다 대상자와 달성, 조건 1-1, 1-2, 2 묶음, 최종 달성. 둘째 창부터 대상자는 앞 창까지 연속이 살아 있는 사람이다. 시작 전 달은 숫자 없이 '시작 전' 이다 |
+| 연계 | 흥국 BOOM-UP 은 연속 또는 합산(either). 11월 대상자는 10월 달성자이고, 연속이 끊긴 사람도 합산 40만이면 달성이다. 내 달성 현황에 연계 안내와 다음 기준이 있다 |
 | 명단 | 표의 숫자를 누르면 나오는 명단의 인원이 그 숫자와 같고, 범위 밖 사람이 없고, 관리자 명단에 금액이 없다 |
 | 브릿지 | 내 달성 현황의 상태, 남은 날, 다음 단계까지 남은 값이 엔진 결과와 같다 |
 | 복사 | 브릿지 다음 달 복사는 메인 관리자만, CSRF 를 거쳐 초안을 만들고 옮기지 않은 값을 안내한다 |
@@ -40,6 +41,7 @@ from fastapi.testclient import TestClient
 from app import db
 from app.engine import promotion as pm
 from app.web import audit_view, auth, org_labels, promo_extra
+from app.web.routes import promo as routes_promo
 
 PW = "screen-pass-1234"
 TOKEN = re.compile(r'name="csrf_token" value="([^"]+)"')
@@ -210,9 +212,9 @@ def test_agent_cannot_open_org_view_and_sees_gate_numbers_only(env):
     assert gates and gates[0]["min"] == 15 and gates[0]["n"] < 15
     assert f"이터널총괄본부 전체 달성 {gates[0]['n']}명 / 15명" in me.text
     assert set(gates[0]) <= {"org_path", "org_name", "min", "n", "open", "left", "ym", "note", "promo_id", "name", "org_title"}
-    # 조건을 묶는 결합은 두 조건과 결합 문구를 보인다
-    assert 'data-paths="both"' in me.text and 'data-paths="either"' in me.text
-    assert pm.COMBINE_KO and "모두 채워야" in me.text and "하나만 채우면" in me.text
+    # 조건을 묶는 결합은 두 조건과 결합 문구를 보인다. 샘플에는 either 둘(BOOM-UP, DB생명 여행시상)이 있고 both 는 없다
+    assert 'data-paths="either"' in me.text and 'data-paths="both"' not in me.text
+    assert pm.COMBINE_KO and "둘 중 하나만 채우면 됩니다" in me.text and "모두 채워야" in routes_promo.PAIRED_TEXT["both"]
     con.close()
 
 
@@ -330,7 +332,7 @@ def test_org_table_numbers_open_matching_rosters(env, who):
 
 
 def test_org_table_columns_follow_engine_phases(env):
-    """DB생명 여행시상의 칸은 달마다 대상자, 조건 1-1, 1-2, 2 묶음, 최종 달성이다. 시작 전 달은 숫자가 없다. 칸 수는 엔진의 창과 추가안을 따른다."""
+    """DB생명 여행시상의 칸은 달마다 대상자와 달성, 조건 1-1, 1-2, 2 묶음, 최종 달성이다. 시작 전 달은 숫자가 없다. 칸 수는 엔진의 창과 추가안을 따른다."""
     con = db.connect(env["db"])
     c = login(env, "admin")
     pid = _promo(con, "DB생명 여행시상")
@@ -341,12 +343,13 @@ def test_org_table_columns_follow_engine_phases(env):
     tot = data["total"]
     assert sum(1 for x in cols if x["group"] == "main") == len(tot["phases"])
     assert sum(1 for x in cols if x["group"] == "alt") == 1 + len(tot["alt"]["phases"])
-    for col, ph in zip([x for x in cols if x["group"] == "main"], tot["phases"]):
-        cell = tot["cells"][cols.index(col)]
+    for i, (col, ph) in enumerate(zip([x for x in cols if x["group"] == "main"], tot["phases"])):
+        cell, target = tot["cells"][cols.index(col)], tot["targets"][cols.index(col)]
         if ph["state"] == "future":
-            assert cell == "시작 전"
-        else:
-            assert cell.startswith(f"{ph['n_met']}명") and (("진행 중" in cell) == (ph["state"] == "open"))
+            assert cell == "시작 전" and target is None
+        else:                                                           # 달성은 이 창까지 연속으로 채운 사람, 대상자는 앞 창까지 연속이 살아 있는 사람
+            assert cell.startswith(f"{ph['n_chain']}명") and (("진행 중" in cell) == (ph["state"] == "open"))
+            assert target == f"{tot['n_target'] if i == 0 else tot['phases'][i - 1]['n_chain']}명"
     assert "연속으로 채우면 3개월 합계 70만원(10만, 20만, 40만), 합산으로는 100만원" in r.text
     # 합산 칸의 머리는 지표 이름으로 만들고, 칸에는 합산 실적과 '100만 달성 n명' 을 둔다
     sum_col = next(x for x in cols if x["key"] == "sum")
@@ -667,7 +670,7 @@ def test_tiers_form_picks_metric_after_publish(env):
     r = main.post("/promo/tiers", data=data)
     assert r.status_code == 303 and "/promo/publish?msg=" in r.headers["location"], r.headers.get("location")
     after = pm._load(con, pid)
-    assert after["metric"] == "premium_monthly" and after["status"] == "published" and after["combine_rule"] == "both"
+    assert after["metric"] == "premium_monthly" and after["status"] == "published" and after["combine_rule"] == "either"
     assert {seq: [t["min_value"] for t in rows] for seq, rows in after["window_tiers"].items()} == {1: [50_000], 2: [100_000], 3: [150_000]}
     page = main.get(f"/promo/progress?view=org&p={pid}")
     assert 'data-col="sum">합산 보험료<span class="th-sub">기준 40만</span>' in page.text and "실적은 보험료 기준입니다" in page.text
@@ -827,20 +830,116 @@ def test_period_text_does_not_repeat_the_window_name():
 
 
 def test_void_person_sees_no_remaining_amount(env):
-    """BOOM-UP 에서 10월 기준을 놓쳐 무효가 된 사람에게는 '남았습니다' 가 없다. 본부 표와 개인 화면에도 남은 금액이 없다."""
+    """삼성 드림+ 에서 앞 창 기준을 놓쳐 무효가 된 사람에게는 '남았습니다' 가 없다. 본부 표와 개인 화면에도 남은 금액이 없다."""
     con = db.connect(env["db"])
-    pid = _promo(con, BOOM)
+    name = "삼성화재 드림+"
+    pid = _promo(con, name)
     p = pm._load(con, pid)
     ids = [a for (a,) in con.execute("SELECT agent_id FROM agent WHERE internal_code LIKE 'T01%'")]
     res = pm.progress(con, p, ids, date.today())
     void = next(a for a in ids if res[a]["broken"] and res[a]["value"] > 0)
     code = con.execute("SELECT internal_code FROM agent WHERE agent_id=?", (void,)).fetchone()[0]
     html = login(env, code).get("/promo/progress").text
-    section = html.split(f"{BOOM}</div>", 1)[1].split("</section>", 1)[0]
+    section = html.split(f"{name}</div>", 1)[1].split("</section>", 1)[0]
     assert "무효" in section and "남았습니다" not in section and "data-left=" not in section and "data-sum-left=" not in section
     page = login(env, "admin").get(f"/promo/progress?view=org&p={pid}&person={void}")
     assert page.context["status"] == "miss" and page.context["todo"] == [] and "남았습니다" not in page.text and "남은 길이 없습니다" in page.text
-    assert all(m["left"] is None for m in page.context["months"]) and page.context["sum_row"]["left"] is None
+    assert all(m["left"] is None for m in page.context["months"])
+    con.close()
+
+
+def _boom_people(con):
+    """샘플 BOOM-UP 의 연계 사례. {열쇠: 사번}. 지금 기준(11월 17일)으로 엔진이 낸 사람별 결과에서 고른다."""
+    p = pm._load(con, _promo(con, BOOM))
+    ids = {c: a for a, c in con.execute("SELECT agent_id, internal_code FROM agent WHERE internal_code LIKE 'T01%'")}
+    res = pm.progress(con, p, list(ids.values()), date(2026, 11, 17))
+    code = {a: c for c, a in ids.items()}
+    pick = lambda f: sorted(code[a] for a, r in res.items() if f(r))
+    got = {"both_paths": pick(lambda r: not r["paths"]["each"]["broken"] and r["paths"]["sum"]["tier_no"]),     # 연속을 이어 가고 합산도 채움
+           "sum_only": pick(lambda r: r["paths"]["each"]["broken"] and r["paths"]["sum"]["tier_no"]),            # 연속이 끊겼지만 합산 40만으로 달성
+           "chain_alive": pick(lambda r: not r["paths"]["each"]["broken"] and not r["paths"]["sum"]["tier_no"] and r["value"] > 0),
+           "neither": pick(lambda r: r["paths"]["each"]["broken"] and not r["paths"]["sum"]["tier_no"] and r["value"] > 0)}
+    return p, res, got
+
+
+def test_boom_up_is_chain_or_sum_and_sample_mixes_the_cases(env):
+    """BOOM-UP 은 연계다. 연속(5만, 10만, 15만) 또는 합산 40만이면 달성이다(either). 샘플에 네 부류가 섞여 있다. 연속과 합산을 둘 다 채운 사람,
+    10월을 놓쳤지만 합산으로 달성한 사람, 연속을 이어 가는 사람, 둘 다 못 채운 사람."""
+    con = db.connect(env["db"])
+    p, res, got = _boom_people(con)
+    assert p["combine_rule"] == "either" and p["metric"] == "converted_premium"
+    assert all(got[k] for k in got), got
+    ids = {c: a for a, c in con.execute("SELECT agent_id, internal_code FROM agent WHERE internal_code LIKE 'T01%'")}
+    for c in got["sum_only"]:                                           # 10월 미달성이어도 합산 40만이면 최종 달성
+        assert pm.is_achieved(p, res[ids[c]]) and res[ids[c]]["windows"][0]["tier"] is None
+    for c in got["chain_alive"] + got["neither"]:
+        assert not pm.is_achieved(p, res[ids[c]])
+    assert "연계" in p["caution"]
+    con.close()
+
+
+def test_boom_up_org_table_reads_as_chain(env):
+    """조직별 표: 10월 달성 n명 | 11월 대상 n명(10월 달성자) 달성 n명(진행 중) | 12월 시작 전 | 합산 40만 달성 n명 | 최종 달성 n명.
+    칸 머리에 달 기준이 있고 합산 칸 위에 '연속이 끊기면 합산 40만으로 갑니다' 가 있다. 대상자와 달성 숫자는 모두 눌러 명단이 열리고 인원이 같다.
+    11월 대상자 명단은 10월 달성자와 같은 사람이다."""
+    con = db.connect(env["db"])
+    c = login(env, "admin")
+    pid = _promo(con, BOOM)
+    r = c.get(f"/promo/progress?view=org&p={pid}")
+    cols, tot = r.context["phases"], r.context["data"]["total"]
+    ph = tot["phases"]
+    assert [x["key"] for x in cols] == ["w1", "w2", "w3", "sum", "final"] and [x["sub"] for x in cols[:3]] == ["기준 5만", "기준 10만", "기준 15만"]
+    assert [x["label"] for x in cols[:3]] == ["10월", "11월", "12월"]
+    assert tot["targets"][:3] == [f"{tot['n_target']}명", f"{ph[0]['n_chain']}명", None]               # 11월 대상자는 10월 달성자
+    assert ph[0]["n_chain"] == ph[0]["n_met"] and tot["cells"][:3] == [f"{ph[0]['n_chain']}명", f"{ph[1]['n_chain']}명 진행 중", "시작 전"]
+    assert ph[1]["n_chain"] <= ph[0]["n_chain"]                                        # 연속은 줄기만 한다
+    assert cols[3]["note"] == "연속이 끊기면 합산 40만으로 갑니다" and 'data-sum-note="1">연속이 끊기면 합산 40만으로 갑니다' in r.text
+    assert tot["cells"][3] == f"{tot['n_sum']}명" and tot["n_sum"] > 0
+    # 대상자와 달성의 링크와 명단. 11월 대상자 명단은 10월 달성자 명단과 같은 사람이다
+    links = {(k, row): n for _h, k, row, n in _who_links(r.text)}
+    assert all(k in links for k in (("t1", "all"), ("t2", "all"), ("w1", "all"), ("w2", "all")))
+    assert ("t3", "all") not in links and ("w3", "all") not in links
+    roster = lambda who: c.get(f"/promo/progress?view=org&p={pid}&who={who}&row=all").context["roster"]
+    people = lambda ro: {x["agent_id"] for g in ro["groups"] for x in g["people"]}
+    t1, t2, w1, w2 = (roster(k) for k in ("t1", "t2", "w1", "w2"))
+    assert t1["n"] == int(links[("t1", "all")]) == tot["n_target"] and t2["n"] == int(links[("t2", "all")]) == ph[0]["n_chain"]
+    assert people(t2) == people(w1) and people(w2) <= people(t2) and w2["n"] == ph[1]["n_chain"]
+    assert c.get(f"/promo/progress?view=org&p={pid}&who=t3&row=all").status_code == 404            # 시작 전 창
+    # 합산 달성자 명단은 연속에서 빠진 사람도 포함한다
+    _p, _res, got = _boom_people(con)
+    codes = {x["code"] for g in roster("sum")["groups"] for x in g["people"]}
+    assert set(got["sum_only"]) <= codes and set(got["both_paths"]) <= codes and not codes & set(got["neither"])
+    # 최종 달성 = 연속을 끝까지 채웠거나 합산 40만을 채운 사람
+    assert tot["n_achieved"] >= tot["n_sum"]
+    con.close()
+
+
+def test_my_view_boom_up_chain_text_and_next_steps(env):
+    """내 달성 현황의 BOOM-UP 안내. 창 이름과 합산 기준으로 만든 글이고 숫자를 글에 박지 않는다. 합산까지 남은 금액과 연속의 다음 기준이 함께 있다.
+    연속이 끊긴 사람에게는 창별 남은 금액이 없고 합산 남은 금액만 있다."""
+    con = db.connect(env["db"])
+    p, res, got = _boom_people(con)
+    want = ("10월을 채우면 11월에도 이어 갑니다. 연속이 끊기면 10월부터 12월까지 합산 40만으로 달성할 수 있습니다. 둘 중 하나만 채우면 됩니다.")
+    assert routes_promo.either_text(p) == want
+    assert routes_promo.either_text({**p, "tiers": [{**p["tiers"][0], "min_value": 1_000_000}]}) == want.replace("40만", "100만")      # 숫자는 설정에서 읽는다
+    assert routes_promo.either_text({**p, "windows": [{**w, "label": lab} for w, lab in zip(p["windows"], ("1주차", "2주차", "3주차"))]}).startswith("1주차를 채우면 2주차에도")
+    assert routes_promo.either_text({**p, "combine_rule": "both"}) is None
+    ids = {c: a for a, c in con.execute("SELECT agent_id, internal_code FROM agent WHERE internal_code LIKE 'T01%'")}
+
+    def section(code):
+        html = login(env, code).get("/promo/progress").text
+        return html.split(f"{BOOM}</div>", 1)[1].split("</section>", 1)[0]
+    alive = section(got["chain_alive"][0])                                # 연속을 이어 가는 사람
+    assert want in alive and 'data-next-each="next"' in alive and 'data-next-sum="open"' in alive and "연속의 다음 기준" in alive and "합산까지" in alive
+    mine = res[ids[got["chain_alive"][0]]]
+    assert f'data-next-sum-left="{int(400_000 - mine["value"])}"' in alive
+    left = [w for w in mine["windows"] if w["state"] == "active" and not w["tier"]]
+    assert ("data-each-left=" in alive) is bool(left)
+    cut = section(got["neither"][0])                                      # 연속이 끊겼고 합산도 못 채운 사람
+    assert 'data-next-each="broken"' in cut and "연속이 끊겼습니다" in cut and "data-left=" not in cut        # 창별 남은 금액은 없다
+    assert f'data-next-sum-left="{int(400_000 - res[ids[got["neither"][0]]]["value"])}"' in cut
+    done = section(got["sum_only"][0])                                    # 합산으로 달성한 사람
+    assert 'data-next-sum="met"' in done and "을 채웠습니다" in done
     con.close()
 
 

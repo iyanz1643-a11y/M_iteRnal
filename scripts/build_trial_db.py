@@ -95,7 +95,7 @@ def register_promotions(con, gate_org_path=None, contracts=False) -> dict:
     pub_other = not contracts
     boom_note = f"{CONTRACT_NOTE}" if contracts else f"{TRIAL_NOTE} {LIMITS['흥국']}"
     boom = dict(
-        period_ym=PROMO_YM, name="흥국화재 BOOM-UP (대조용)", kind="travel", windows=Q4, combine_rule="both", insurer_name="흥국화재",
+        period_ym=PROMO_YM, name="흥국화재 BOOM-UP (대조용)", kind="travel", windows=Q4, combine_rule="either", insurer_name="흥국화재",
         insurer_id=_insurer(con, "흥국화재"), date_basis="application_date", tiers=_tiers((400_000, "여행")),
         window_tiers={1: _tiers((50_000, "여행")), 2: _tiers((100_000, "여행")), 3: _tiers((150_000, "여행"))},
         rules={"count_basis": "application", "retention_min": 95, "retention_ref": "2027-12-31"},

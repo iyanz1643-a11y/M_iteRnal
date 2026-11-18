@@ -200,6 +200,8 @@ def promo_progress(request: Request, p: int | None = None, view: str | None = No
             c["versions"] = promo_extra.versions(con, c)
             c["chain_text"] = chain_text(c)
             c["phase_rows"], c["sum_row"] = my_phases(c, c["r"])
+            c["either_text"] = either_text(c)
+            c["either_next"] = either_next(c["r"], c["phase_rows"], c["sum_row"]) if c["either_text"] else None
             c["alt"] = my_alt(c, c["r"])
             c["has_alt"] = bool(pm._r(c).get("alt_chains"))
             if aid and pm._r(c)["retention_min"]:
@@ -224,12 +226,13 @@ def my_phases(p, r) -> tuple:
         return [], None
     nxt = r.get("next") or {}
     void = bool(r.get("broken")) or r.get("status") == "missed"     # 무효가 됐거나 놓쳤으면 남은 금액을 보이지 않는다
+    chain_void = void or bool(((r.get("paths") or {}).get("each") or {}).get("broken"))     # 연계에서 연속이 끊겼으면 창별 남은 금액이 없다. 합산은 남는다
     rows = []
     for w in r["windows"]:
         floor = window_floor(p, w)
         state = _STATE_PHASE[w["state"]]
         left = None
-        if state == "open" and not w["tier"] and floor is not None and not void:
+        if state == "open" and not w["tier"] and floor is not None and not chain_void:
             left = nxt["gap"] if nxt.get("path", "each") == "each" and nxt.get("min_value") == floor else max(floor - w["value"], 0)
         rows.append({"seq": w["seq"], "label": w["label"], "state": state, "state_ko": PHASE_KO[state], "value": w["value"], "plain": w.get("plain", w["value"]),
                      "floor": floor, "met": bool(w["tier"]), "left": left, "date_from": w["date_from"], "date_to": w["date_to"]})
@@ -365,13 +368,23 @@ def _phase_list(x, data, ref) -> list:
     return out
 
 
-def _phase_cell(ph) -> str:
-    """창 칸의 글. 끝난 달은 n명, 진행 중인 달은 n명 진행 중, 시작 전인 달은 숫자 없이 시작 전이다."""
+def _phase_cell(ph, key="n_met") -> str:
+    """창 칸의 글. 끝난 달은 n명, 진행 중인 달은 n명 진행 중, 시작 전인 달은 숫자 없이 시작 전이다.
+    key 는 셀 인원이다. 추가안은 n_met, 연속으로 달성하는 창 칸은 n_chain(이 창까지 연속으로 채운 사람)이다."""
     if ph.get("state") == "future":
         return "시작 전"
-    if ph.get("n_met") is None:
+    if ph.get(key) is None:
         return ""
-    return f"{ph['n_met']}명" + (" 진행 중" if ph.get("state") == "open" else "")
+    return f"{ph[key]}명" + (" 진행 중" if ph.get("state") == "open" else "")
+
+
+def _target_cell(phases, i, n_target) -> str | None:
+    """연속형 표의 창 대상자 글. 첫 창의 대상자는 프로모션 대상 전체이고 둘째 창부터는 앞 창까지 연속이 살아 있는 사람(앞 창의 n_chain)이다.
+    시작 전 창과 엔진이 인원을 내지 않은 칸은 None 이다."""
+    if i >= len(phases) or phases[i].get("state") == "future":
+        return None
+    n = n_target if i == 0 else (phases[i - 1].get("n_chain") if i - 1 < len(phases) else None)
+    return None if n is None else f"{n}명"
 
 
 def window_floor(p, w):
@@ -403,6 +416,58 @@ def chain_text(p) -> str | None:
     if target:
         text += f", 합산으로는 {_short(target, p)}원"
     return text.replace("만원원", "만원").replace("건원", "건")
+
+
+def _final(word) -> int:
+    """글의 마지막 글자의 받침 번호(0 이면 받침 없음, 8 은 ㄹ). 숫자는 읽는 소리로 본다(영, 일, 삼, 육, 칠, 팔)."""
+    for ch in reversed(str(word).strip()):
+        if "가" <= ch <= "힣":
+            return (ord(ch) - 0xAC00) % 28
+        if ch.isdigit():
+            return {"0": 21, "1": 8, "3": 16, "6": 1, "7": 8, "8": 8}.get(ch, 0)
+    return 0
+
+
+def _eul(word) -> str:
+    return "을" if _final(word) else "를"
+
+
+def _euro(word) -> str:
+    return "으로" if _final(word) not in (0, 8) else "로"
+
+
+def _win_label(p, i) -> str:
+    w = p["windows"][i]
+    return w["label"] or f"{w['seq']}번 창"
+
+
+def either_text(p) -> str | None:
+    """연계(연속 또는 합산)의 안내 글. '10월을 채우면 11월에도 이어 갑니다. 연속이 끊기면 10월부터 12월까지 합산 40만으로 달성할 수 있습니다.
+    둘 중 하나만 채우면 됩니다.' 창 이름과 합산 기준은 프로모션의 설정에서 읽고 숫자를 글에 박지 않는다. 추가안(조건 1-2)이 있으면 마지막 문장이 셋을 말한다.
+    결합이 either 가 아니거나 창이 하나거나 합산 기준이 없으면 None 이다."""
+    target = sum_target(p)
+    if p["combine_rule"] != "either" or len(p["windows"]) < 2 or not target:
+        return None
+    first, second, last = _win_label(p, 0), _win_label(p, 1), _win_label(p, len(p["windows"]) - 1)
+    t = _short(target, p)
+    tail = "조건 1-1, 조건 1-2, 조건 2 가운데 하나만 채우면 됩니다." if pm._r(p).get("alt_chains") else "둘 중 하나만 채우면 됩니다."
+    return (f"{first}{_eul(first)} 채우면 {second}에도 이어 갑니다. 연속이 끊기면 {first}부터 {last}까지 합산 {t}{_euro(t)} 달성할 수 있습니다. {tail}")
+
+
+def either_next(r, rows, sum_row) -> dict | None:
+    """연계에서 다음에 채울 것 두 가지. 연속의 다음 기준(each)과 합산까지 남은 금액(sum). 값은 my_phases 의 줄과 합산 줄을 옮긴다.
+    each 는 {state, label, floor, left}. state 는 broken(연속이 끊김), next(다음 창이 있음), done(연속을 모두 채움)이다.
+    left 는 진행 중인 창에서만 있고 시작 전인 창은 기준만 보인다. sum 은 합산 줄 그대로다. 합산 줄이 없으면 None 이다."""
+    if not sum_row or not rows:
+        return None
+    each = (r.get("paths") or {}).get("each") or {}
+    if each.get("broken"):
+        chain = {"state": "broken", "label": None, "floor": None, "left": None}
+    else:
+        nxt = next((x for x in rows if x["state"] != "done" and not x["met"]), None)
+        chain = {"state": "next", "label": nxt["label"], "floor": nxt["floor"], "left": nxt["left"], "window_state": nxt["state"]} if nxt \
+            else {"state": "done", "label": None, "floor": None, "left": None}
+    return {"each": chain, "sum": sum_row}
 
 
 def amount_text(v, p) -> str | None:
@@ -448,10 +513,17 @@ def org_phases(data, sel, ref, shape=None) -> list:
     합산 칸이 합산 실적 합계(sum_value, 없으면 value)다. 합산 칸이 없는 프로모션은 최종 달성 칸에 둔다.
     plains 는 가중 인정이 있어 합산용 값이 다를 때의 달 칸 값(plain_sum)이다. 모두 엔진 값을 옮기기만 하고 없으면 None 이다.
     shape 는 창과 지표를 읽는 프로모션이다. 딸린 시책이면 부모이고 비면 sel 이다. 칸의 모양(달 칸, 추가안, 합산 칸, 묶음 머리)은
-    shape 를 따른다. 그래서 딸린 시책의 표가 부모와 같은 모양이고 추가안 대상 칸의 이름도 부모의 추가안에서 읽는다."""
+    shape 를 따른다. 그래서 딸린 시책의 표가 부모와 같은 모양이고 추가안 대상 칸의 이름도 부모의 추가안에서 읽는다.
+
+    창마다 연속으로 달성하는 프로모션(결합 all, both, either)은 연계 모양이다(대표님 지시, 11월 18일). 달 칸 하나에 대상자와 달성을 나눠 보인다.
+    첫 창의 대상자는 프로모션 대상 전체, 달성은 그 창 기준을 채운 사람이다. 둘째 창부터 대상자는 앞 창까지 연속이 살아 있는 사람(앞 창의 n_chain),
+    달성은 이 창까지 연속으로 채운 사람(이 창의 n_chain)이다. 줄의 cells 는 달성, targets 는 대상자의 글이고 칸 열쇠는 w(달성)와 t(대상자)이다.
+    합산 칸에는 결합이 either 이면 '연속이 끊기면 합산으로 갑니다', both 이면 '연속과 합산을 모두 채워야 합니다' 라는 note 가 붙는다.
+    엔진은 합산 달성자를 연속에서 빠진 사람과 이어 가는 사람으로 나눠 내지 않아 합산 칸은 하나로 둔다."""
     shape = shape or sel
     tot = data["total"]
     phases = _phase_list(tot, data, ref) if len(shape["windows"]) > 1 else []
+    chain = bool(phases) and shape["combine_rule"] in pm.EACH_RULES and has_floors(data)
     alt = tot.get("alt") or data.get("alt")
     alt_phases = (alt or {}).get("phases") or []
     paired = shape["combine_rule"] in pm.PAIRED
@@ -459,8 +531,9 @@ def org_phases(data, sel, ref, shape=None) -> list:
     cols = []
     for ph, w in zip(phases, shape["windows"]):
         floor = ph.get("target") if ph.get("target") is not None else window_floor(shape, w)
-        cols.append({"key": f"w{ph['seq']}", "label": f"{ph['label']} 대상자", "sub": (_short(floor, shape) if floor is not None else ""),
-                     "state": ph["state"], "group": "main", "group_label": g_main})
+        cols.append({"key": f"w{ph['seq']}", "label": ph["label"] if chain else f"{ph['label']} 대상자",
+                     "sub": ((f"기준 {_short(floor, shape)}" if chain else _short(floor, shape)) if floor is not None else ""),
+                     "state": ph["state"], "group": "main", "group_label": g_main, "chain": chain, "tkey": f"t{ph['seq']}"})
     if alt:
         conf = next((c for c in (pm._r(shape).get("alt_chains") or []) if c.get("key") == alt.get("key")), {})
         wl = {w["seq"]: w["label"] for w in shape["windows"]}
@@ -473,15 +546,20 @@ def org_phases(data, sel, ref, shape=None) -> list:
                      "state": ph.get("state"), "group": "alt", "group_label": "조건 1-2", "short": ph["label"]})
     target = sum_target(shape, data)
     if target:
+        note = None
+        if chain and shape["combine_rule"] == "either":
+            note = f"연속이 끊기면 합산 {_short(target, shape)}{_euro(_short(target, shape))} 갑니다"
+        elif chain and shape["combine_rule"] == "both":
+            note = "연속과 합산을 모두 채워야 합니다"
         cols.append({"key": "sum", "label": f"합산 {shape['metric_ko']}", "sub": f"기준 {_short(target, shape)}", "state": None, "group": "sum",
-                     "group_label": "조건 2" if paired else "", "pre": f"{_short(target, shape)} 달성"})
+                     "group_label": "조건 2" if paired else "", "pre": f"{_short(target, shape)} 달성", "note": note})
     cols.append({"key": "final", "label": "최종 달성", "sub": "", "state": None, "group": "final", "group_label": ""})
     for i, c in enumerate(cols):                                     # 묶음 머리의 칸 수. 묶음의 첫 칸에만 둔다
         first = i == 0 or cols[i - 1]["group_label"] != c["group_label"]
         c["gspan"] = len(list(itertools.takewhile(lambda d, g=c["group_label"]: d["group_label"] == g, cols[i:]))) if first else 0
 
     def cells(x):
-        out = [_phase_cell(ph) for ph in (_phase_list(x, data, ref) if phases else [])]
+        out = [_phase_cell(ph, "n_chain" if chain else "n_met") for ph in (_phase_list(x, data, ref) if phases else [])]
         out += [""] * (len(phases) - len(out))
         if alt:
             n_el = (x.get("alt") or {}).get("n_eligible")
@@ -512,9 +590,16 @@ def org_phases(data, sel, ref, shape=None) -> list:
             val.append(whole)
         val.append(None if target else whole)
         return val, plain + [None] * (len(val) - len(plain))
+    def targets(x):
+        """칸마다 대상자 글. 연속형 표의 달 칸에만 있고 그 밖의 칸은 None 이다."""
+        if not chain:
+            return [None] * len(cols)
+        xp = _phase_list(x, data, ref)
+        return [_target_cell(xp, i, x["n_target"]) if i < len(phases) else None for i in range(len(cols))]
     alt_ix = [i for i, c in enumerate(cols) if c["group"] == "alt"]
     for r in [*data["rows"], tot]:
         r["cells"] = cells(r)
+        r["targets"] = targets(r)
         r["sums"], r["plains"] = sums(r)
         r["alt_line"] = " · ".join(                                  # 휴대폰에서 조건 1-2 를 둘째 줄로. 금액은 인원 뒤에 붙인다
             f"{cols[i]['short']} {r['cells'][i] or '-'}" + (f" {amount_text(r['sums'][i], shape)}" if r["sums"][i] is not None else "")
@@ -579,7 +664,7 @@ def person_months(r, multi=True, floors=True) -> list:
 
 
 def cell_who(col_key: str) -> str | None:
-    """표 칸 열쇠를 명단 열쇠로. w2 는 w2, a0 는 alt_el, a2 는 alt_w2, sum, final 은 그대로다."""
+    """표 칸 열쇠를 명단 열쇠로. w2(달성)와 t2(대상자)는 그대로, a0 는 alt_el, a2 는 alt_w2, sum, final 도 그대로다."""
     if col_key == "a0":
         return "alt_el"
     if col_key.startswith("a") and col_key[1:].isdigit():
@@ -593,20 +678,27 @@ def _who_rule(sel, data, who, pcts):
     seqs = [w["seq"] for w in data["windows"]]
     tot = data["total"]
     phases = {ph["seq"]: ph for ph in (tot.get("phases") or [])}
-    if who.startswith("w") and who[1:].isdigit() and int(who[1:]) in seqs:
+    if who[:1] in ("w", "t") and who[1:].isdigit() and int(who[1:]) in seqs:
         seq = int(who[1:])
         i = seqs.index(seq)
         ph = phases.get(seq) or {}
         if ph.get("state") == "future" or ph.get("target") is None:
             return None
         floor = ph["target"]
-        title = f"{data['windows'][i]['label']} 기준({_short(floor, sel)}) 채운 사람"
-        if ph.get("n_met") is None:
-            return title, None, None
-        pick = lambda a, r: bool(r["windows"][i]["tier"])
+        label = data["windows"][i]["label"]
         view = lambda r: (r["windows"][i]["value"], r["windows"][i].get("plain", r["windows"][i]["value"]), floor,
                           "met" if r["windows"][i]["tier"] else ("open" if ph.get("state") == "open" else "miss"))
-        return title, pick, view
+        if who[0] == "t":                                               # 창 대상자. 첫 창은 대상 전체, 그 뒤는 앞 창까지 연속이 살아 있는 사람(앞 창의 n_chain)
+            title = f"{label} 대상자" if i == 0 else f"{label} 대상자({data['windows'][i - 1]['label']}까지 연속으로 채운 사람)"
+            if i == 0:
+                return title, (lambda a, r: True), view
+            if (tot["phases"][i - 1].get("n_chain")) is None:
+                return title, None, None
+            return title, (lambda a, r: all(r["windows"][j]["tier"] for j in range(i))), view
+        title = f"{label} 기준({_short(floor, sel)}) 채운 사람" if i == 0 else f"{label} 기준({_short(floor, sel)})까지 연속으로 채운 사람"
+        if ph.get("n_chain") is None:                                   # 달성은 이 창까지 연속으로 채운 사람(이 창의 n_chain)
+            return title, None, None
+        return title, (lambda a, r: all(r["windows"][j]["tier"] for j in range(i + 1))), view
     if who.startswith("alt_w") and who[5:].isdigit():
         alt = tot.get("alt")
         if not alt:
@@ -678,14 +770,14 @@ def who_roster(con, ctx, sel, ref, data, phases, who, row_key, sort=None):
     note = window_note(data.get("detail"), len(data["windows"])) if frozen else None
     if pick is None:                                                    # 엔진이 인원을 내지 않은 칸. 화면에서 대신 세지 않는다
         return {"who": who, "title": title, "row": row_key or "all", "n": 0, "groups": [], "summary": [], "confirmed": frozen,
-                "unavailable": (note or NO_WINDOW_NOTE) if who.startswith(("w", "alt_w")) else NO_COND_NOTE, "window_note": None, "estimate_note": data["estimate_note"], "windows": [], "on_seq": None,
+                "unavailable": (note or NO_WINDOW_NOTE) if (who[:1] in ("w", "t") and who[1:].isdigit()) or who.startswith("alt_w") else NO_COND_NOTE, "window_note": None, "estimate_note": data["estimate_note"], "windows": [], "on_seq": None,
                 "sum_target": None, "sum_target_text": None, "sort": sort, "sorts": SORT_KO, "sortable": False, "marks": False, "has_plain": False}
     res = (pm.confirmed_progress(con, sel, ids) or {}) if frozen else pm.progress(con, sel, ids, ref)
     scope = {a["agent_id"]: a for a in _scope_agents(con, ctx, with_left=frozen)}   # 범위 안 사람만. org_progress 도 같은 목록으로 셌다
     multi = len(data["windows"]) > 1 and not note                       # 창별 값이 없는 확정 값이면 달 칸을 그리지 않는다
     shape = pm._parent(con, sel) or sel                                 # 합산 기준은 창을 읽는 프로모션의 것이다
     target, floors = sum_target(shape, data), has_floors(data)
-    on_seq = int(who[1:]) if who.startswith("w") and who[1:].isdigit() else (int(who[5:]) if who.startswith("alt_w") and who[5:].isdigit() else None)
+    on_seq = int(who[1:]) if who[:1] in ("w", "t") and who[1:].isdigit() else (int(who[5:]) if who.startswith("alt_w") and who[5:].isdigit() else None)
     groups, n = [], 0
     for r in rows:
         people = []

@@ -162,10 +162,10 @@ Q4 = [("2026-10-01", "2026-10-31"), ("2026-11-01", "2026-11-30"), ("2026-12-01",
 
 
 def test_sample_boom_up_matches_confirmed_terms(env):
-    """흥국 BOOM-UP: 10~12월 청약 기준, 철회 제외. 월 5만, 10만, 15만 연속 그리고 합산 40만(both)."""
+    """흥국 BOOM-UP: 10~12월 청약 기준, 철회 제외. 연계다. 월 5만, 10만, 15만 연속 또는 합산 40만(either, 대표님 정정 11월 18일)."""
     con = db.connect(env["db"])
     p = pm._load(con, _pid(con, BOOM))
-    assert _months(p) == Q4 and p["combine_rule"] == "both"
+    assert _months(p) == Q4 and p["combine_rule"] == "either"
     assert _floors(p) == {1: [5 * MAN], 2: [10 * MAN], 3: [15 * MAN]}
     assert [t["min_value"] for t in p["tiers"]] == [40 * MAN]
     assert p["rules"]["count_basis"] == "application" and p["date_basis"] == "application_date"

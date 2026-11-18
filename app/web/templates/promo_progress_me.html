@@ -63,7 +63,18 @@
       <div class="mid">{% if pa.sum.tier_no %}달성{% else %}진행 중{% endif %}</div>
       <div class="cap">합계 {{ pr.val(pa.sum.value, p) }} · {{ pa.sum.pct|round|int }}% · 문턱 {{ pr.val(p.tiers[-1].min_value, p) if p.tiers else '-' }}</div></div>
   </div>
-  <p class="cap" style="margin-top:10px;font-weight:600" data-combine="{{ p.combine_rule }}">{{ paired_text[p.combine_rule] }}</p>
+  <p class="cap" style="margin-top:10px;font-weight:600" data-combine="{{ p.combine_rule }}">{{ p.either_text or paired_text[p.combine_rule] }}</p>
+  {% if p.either_next %}{% set nx = p.either_next %}<div class="paths" data-next-paths="1">
+    <div class="path {{ 'ok' if nx.each.state == 'done' }}" data-next-each="{{ nx.each.state }}"><div class="k">연속의 다음 기준</div>
+      {% if nx.each.state == 'broken' %}<div class="mid soft">연속이 끊겼습니다</div><div class="cap">합산으로 이어 갑니다</div>
+      {% elif nx.each.state == 'done' %}<div class="mid">연속을 모두 채웠습니다</div>
+      {% else %}<div class="mid">{{ nx.each.label }} {{ pr.val(nx.each.floor, p) }}</div>
+        <div class="cap"{% if nx.each.left %} data-each-left="{{ nx.each.left|int }}" style="color:var(--blue);font-weight:600"{% endif %}>{% if nx.each.left %}기준까지 {{ pr.val(nx.each.left, p) }} 남았습니다{% elif nx.each.window_state == 'open' %}진행 중{% else %}시작 전{% endif %}</div>{% endif %}</div>
+    <div class="path {{ 'ok' if nx.sum.met }}" data-next-sum="{{ 'met' if nx.sum.met else 'open' }}"><div class="k">합산까지</div>
+      {% if nx.sum.met %}<div class="mid">합산 {{ pr.val(nx.sum.target, p) }}을 채웠습니다</div>
+      {% elif nx.sum.left is none %}<div class="mid soft">합산 {{ pr.val(nx.sum.target, p) }}</div>
+      {% else %}<div class="mid">{{ pr.val(nx.sum.left, p) }} 남았습니다</div><div class="cap" data-next-sum-left="{{ nx.sum.left|int }}">합산 {{ pr.val(nx.sum.target, p) }} 기준 · 지금 {{ pr.val(nx.sum.value, p) }}</div>{% endif %}</div>
+  </div>{% endif %}
   <div class="pcard" style="margin-top:12px">
     <div>{% if r.broken %}<div class="k">무효</div><div class="mid" style="color:var(--red)">조건 1 미달</div><div class="cap">두 조건을 모두 채워야 하는데 끝난 창을 놓쳤습니다</div>
       {% elif r.tier %}<div class="k">지금 구간</div><div class="big">{{ r.reward }}</div>

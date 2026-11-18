@@ -62,9 +62,10 @@ def _tiers(*rows):
 
 
 # ------------------------------------------------------------------ 시험용 세 프로모션
-def _heungkuk(con, **kw):
-    """흥국화재 BOOM-UP 꼴. 청약 기준, 조건 1 월별 5/10/15만, 조건 2 합산 40만, 둘 다(both). 13회차 유지율 95% 표시."""
-    return pm.create(con, period_ym=YM, name="시험 BOOM-UP", kind="travel", windows=Q4, combine_rule="both", insurer_name="한빛손해",
+def _heungkuk(con, rule="either", **kw):
+    """흥국화재 BOOM-UP 꼴. 청약 기준, 조건 1 월별 5/10/15만 연속, 조건 2 합산 40만. 연계라 연속 또는 합산(either, 대표님 정정 11월 18일).
+    rule 로 both 도 만든다. 엔진의 both 결합을 시험할 때만 쓴다. 13회차 유지율 95% 표시."""
+    return pm.create(con, period_ym=YM, name="시험 BOOM-UP", kind="travel", windows=Q4, combine_rule=rule, insurer_name="한빛손해",
                      insurer_id=con.execute("SELECT insurer_id FROM insurer WHERE name='한빛손해'").fetchone()[0],
                      categories=["health"], date_basis="application_date", tiers=_tiers((400_000, "여행")),
                      window_tiers={1: _tiers((50_000, "여행")), 2: _tiers((100_000, "여행")), 3: _tiers((150_000, "여행"))},
@@ -282,7 +283,7 @@ def test_both_needs_every_condition_and_application_basis(env):
     add(sum_only, "2026-10-20", 500_000, **kw)
     add(sum_only, "2026-11-20", 500_000, status="withdrawn", **kw)       # 철회는 세지 않는다
     add(sum_only, "2026-12-20", 500_000, status="declined", **kw)        # 반송도 세지 않는다 (D-85)
-    pid = _heungkuk(con)
+    pid = _heungkuk(con, "both")                                         # 모두 채워야 하는 결합의 엔진 시험. 흥국 BOOM-UP 자체는 either 다
     p = pm._load(con, pid)
     res = pm.progress(con, p, [ok, each_only, sum_only], AFTER)
     assert res[ok]["status"] == "achieved" and res[ok]["value"] == pytest.approx(450_000)
@@ -534,13 +535,14 @@ def _shape(t):
     return [(ph["state"], ph["n_met"], ph["n_chain"]) for ph in t["phases"]]
 
 
-def test_phases_both_heungkuk_by_ref_date(env):
-    """흥국 BOOM-UP 꼴(both). 계약을 달마다 넣어 가며 10월 31일, 11월 17일, 12월 31일에 본다."""
+def test_phases_both_combine_by_ref_date(env):
+    """창 연속과 합산을 모두 채워야 하는 결합(both)의 BOOM-UP 꼴. 엔진의 both 가 그대로인지 본다. 흥국 BOOM-UP 자체는 either 다.
+    계약을 달마다 넣어 가며 10월 31일, 11월 17일, 12월 31일에 본다."""
     con, add = env["con"], env["add"]
     a1, a2, a3, a4, _idle = scope = _five(env)
     root = env["root"]["path_key"]
     kw = {"insurer": "한빛손해", "product": "한빛손해 건강종합보험"}
-    p = pm._load(con, _heungkuk(con))
+    p = pm._load(con, _heungkuk(con, "both"))
     add(a1, "2026-10-10", 100_000, status="applied", **kw)
     add(a2, "2026-10-12", 50_000, **kw)
     add(a3, "2026-10-14", 40_000, **kw)                  # 10월 5만에 못 미친다
@@ -573,6 +575,40 @@ def test_phases_both_heungkuk_by_ref_date(env):
     t = _phase_check(con, p, scope, AFTER, root)
     assert _shape(t) == [("done", 3, 3), ("done", 3, 2), ("done", 3, 2)]
     assert (t["n_chain"], t["n_sum"], t["n_achieved"]) == (2, 3, 1)
+
+
+def test_phases_either_heungkuk_chain_or_sum(env):
+    """흥국 BOOM-UP(연계, either). 10월 5만을 채운 사람이 11월 10만, 12월 15만으로 이어 가고, 연속이 끊기면 3개월 합산 40만으로 간다.
+    연속으로 끝까지 채우거나 합산 40만을 채우면 달성이다. 10월 미달성이어도 합산 40만이면 최종 달성이고, 10월을 채우고 11월을 놓쳐도 합산으로 간다.
+    11월의 대상자는 10월 달성자와 같은 수다(앞 창의 n_chain)."""
+    con, add = env["con"], env["add"]
+    a1, a2, a3, a4, _idle = scope = _five(env)
+    root = env["root"]["path_key"]
+    kw = {"insurer": "한빛손해", "product": "한빛손해 건강종합보험"}
+    p = pm._load(con, _heungkuk(con))
+    assert p["combine_rule"] == "either"
+    for a, mon, v in ((a1, "10", 100_000), (a1, "11", 150_000),          # 연속을 이어 간다
+                      (a2, "10", 40_000), (a2, "11", 400_000),           # 10월 미달성. 합산 44만
+                      (a3, "10", 60_000), (a3, "11", 70_000),            # 10월은 채우고 11월 10만에 못 미친다
+                      (a4, "10", 40_000), (a4, "11", 30_000)):           # 둘 다 못 채운다
+        add(a, f"2026-{mon}-12", v, **kw)
+    t = _phase_check(con, p, scope, MID, root)
+    assert _shape(t) == [("done", 2, 2), ("open", 2, 1), ("future", None, None)]       # 11월은 진행 중. 대상은 10월 달성자 둘, 지금 채운 사람 하나
+    assert t["phases"][0]["n_chain"] == t["phases"][0]["n_met"] == 2                    # 11월 대상자 = 10월 달성자
+    per = pm.progress(con, p, scope, MID)
+    assert [per[a]["paths"]["each"]["broken"] for a in (a1, a2, a3, a4)] == [False, True, False, True]      # 10월을 놓친 둘은 연속에서 빠졌다
+    assert [bool(per[a]["paths"]["sum"]["tier_no"]) for a in (a1, a2, a3, a4)] == [False, True, False, False]
+    assert (t["n_sum"], t["n_achieved"]) == (1, 1) and pm.is_achieved(p, per[a2]) and not pm.is_achieved(p, per[a4])     # 10월 미달성이어도 합산이면 달성
+
+    add(a1, "2026-12-10", 200_000, **kw)
+    add(a3, "2026-12-11", 300_000, **kw)                                                # 합산 43만. 11월을 놓쳐 연속은 끊겼다
+    t = _phase_check(con, p, scope, AFTER, root)
+    assert _shape(t) == [("done", 2, 2), ("done", 2, 1), ("done", 2, 1)]                # 11월 달성 하나, 12월 대상 하나(11월 달성자)
+    assert t["phases"][1]["n_chain"] == 1 == t["phases"][2]["n_chain"] and t["phases"][1]["n_met"] == 2   # 10월 미달성 a2 의 11월 실적은 연속에 들지 않는다
+    per = pm.progress(con, p, scope, AFTER)
+    assert per[a3]["paths"]["each"]["broken"] and per[a3]["paths"]["sum"]["tier_no"] and pm.is_achieved(p, per[a3])     # 연속에서 빠지고 합산으로 달성
+    assert not per[a1]["paths"]["each"]["broken"] and pm.is_achieved(p, per[a1])
+    assert (t["n_chain"], t["n_sum"], t["n_achieved"]) == (1, 3, 3)                     # 연속 하나, 합산 셋(a1 45만 포함), 달성 셋
 
 
 BOOST_V2 = {"factor": 2, "ranges": [["2026-10-01", "2026-10-14"], ["2026-12-01", "2026-12-14"]], "cap": 100_000, "applies_to": "each"}
@@ -1180,14 +1216,19 @@ def test_counted_contracts_add_up_to_person_values_live_and_confirmed(env):
     assert 2_000_000 in [x["value"] for x in pm.counted_contracts(con, p, n, AFTER)["rows"]]
 
 
-def test_n_missed_splits_into_lost_and_open(env):
+@pytest.mark.parametrize("rule, want", [
+    # either(흥국 BOOM-UP). 10월을 놓쳐도 합산 40만이면 달성이라 11월 17일에 a3 이 달성하고 무효인 사람이 없다. 놓침은 기간이 끝나야 정해진다
+    ("either", [(5, 0, 5, 0, 5), (5, 1, 4, 0, 4), (5, 2, 3, 0, 3), (5, 2, 3, 3, 0)]),
+    # both. 10월을 놓친 세 사람은 11월 17일에 무효다
+    ("both", [(5, 0, 5, 0, 5), (5, 0, 5, 3, 2), (5, 1, 4, 3, 1), (5, 1, 4, 4, 0)])])
+def test_n_missed_splits_into_lost_and_open(env, rule, want):
     """미달성 인원은 대상에서 최종 달성을 뺀 수다. 그 가운데 놓친 것이 정해진 사람(n_lost)과 진행 중인 사람(n_open)을 가른다.
     화면의 명단 열쇠 missed(달성하지 않은 사람 모두)와 최종 상태 miss, open 과 같은 조건이다."""
     con, add = env["con"], env["add"]
     a1, a2, a3, a4, idle = scope = _five(env)
     root = env["root"]["path_key"]
     kw = {"insurer": "한빛손해", "product": "한빛손해 건강종합보험"}
-    p = pm._load(con, _heungkuk(con))
+    p = pm._load(con, _heungkuk(con, rule))
     for a, v in ((a1, 100_000), (a2, 50_000), (a3, 40_000)):           # a3 은 10월 5만을 놓친다. a4 와 idle 은 실적이 없다
         add(a, "2026-10-10", v, **kw)
 
@@ -1203,13 +1244,13 @@ def test_n_missed_splits_into_lost_and_open(env):
             assert t[k] == sum(r[k] for r in res["rows"])
         return t["n_target"], t["n_achieved"], t["n_missed"], t["n_lost"], t["n_open"]
 
-    assert check(date(2026, 10, 20)) == (5, 0, 5, 0, 5)               # 10월이 끝나기 전에는 모두 진행 중이다
+    assert check(date(2026, 10, 20)) == want[0]                        # 10월이 끝나기 전에는 모두 진행 중이다
     for a, v in ((a1, 150_000), (a2, 100_000), (a3, 400_000)):
         add(a, "2026-11-10", v, **kw)
-    assert check(MID) == (5, 0, 5, 3, 2)                               # 10월을 놓친 세 사람은 무효다. 진행 중인 두 사람도 미달성에 든다
+    assert check(MID) == want[1]
     add(a1, "2026-12-10", 200_000, **kw)
-    assert check(DEC_MID) == (5, 1, 4, 3, 1)                           # a1 달성. a2 는 12월이 남아 진행 중이다
-    assert check(AFTER) == (5, 1, 4, 4, 0)                             # 기간이 끝나면 진행 중이 없다
+    assert check(DEC_MID) == want[2]                                   # a1 달성. a2 는 12월이 남아 진행 중이다
+    assert check(AFTER) == want[3]                                     # 기간이 끝나면 진행 중이 없다
     assert pm.org_progress(con, p, root, [], MID, near_pct=30)["total"]["n_missed"] == 0
 
 
