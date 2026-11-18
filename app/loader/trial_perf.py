@@ -283,6 +283,30 @@ def pick_people(reads: list, month_of: dict) -> dict:
     return out
 
 
+def merge_contract_people(people: dict, cpeople: dict) -> dict:
+    """실적 파일에서 정한 사람(people)에 계약현황의 모집사원(cpeople, eternal_contract.read_people 의 결과)을 더한다.
+    같은 사번은 같은 사람이다. 이름은 실적 파일의 것이 있으면 그것을 쓰고, 조직은 계약현황의 것으로 바꾼다(더 늦은 자료다).
+    계약현황의 조직 칸 이름은 한 단계씩 밀려 있어 실적 파일의 표준 이름으로 옮긴다: 본사, 본부, 지점, 센터, 팀이
+    org_company, org_division, org_general, org_hq, org_branch 다. 돌려주는 것: {사번: {name, org, paths}} 와 건수 stats 를 담은 (people, stats)."""
+    back = {v: k for k, v in CONTRACT_ORG.items()}
+    out = {c: dict(p) for c, p in people.items()}
+    stats = Counter()
+    for code, cp in cpeople.items():
+        org = {back[k]: v for k, v in cp["org"].items() if k in back}
+        old = out.get(code)
+        if old is None:
+            out[code] = {"name": cp["name"], "org": org, "paths": cp["paths"]}
+            stats["only_contract"] += 1
+            continue
+        stats["both"] += 1
+        if any((old["org"].get(k) or None) != (org.get(k) or None) for k in back.values()):
+            stats["org_moved"] += 1
+        old["org"], old["paths"] = org, max(old.get("paths", 1), cp["paths"])
+        old["name"] = old["name"] or cp["name"]
+    stats["only_rank"] = len(set(people) - set(cpeople))
+    return out, dict(stats)
+
+
 def build_people(con, people: dict, from_ym: str) -> dict:
     """조직 마디, 설계사, 소속을 만든다. 다시 돌려도 같다. 커밋한다.
     돌려주는 것: {agents: {사번: agent_id}, stats: {new_orgs, new_agents, no_org, multi_path, gap, short_path}}."""

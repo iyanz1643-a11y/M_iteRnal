@@ -1,0 +1,231 @@
+# 이터널 계약현황 2026-11-18 양식 (열 58개) → 계약 원장
+# v1(eternal_contract.yaml, 열 56개)에서 '최종수금일' 뒤, '비고' 앞에 '이관일자', '고객구분' 두 열이 끼었다. 나머지는 같다.
+# 적재기는 머리글을 보고 v1 과 v2 를 자동으로 고른다(app/loader/eternal_contract.py pick_mapping). 어느 쪽에도 맞지 않으면 막는다.
+#
+# 머리글 검사
+# - headers 의 58개가 이 순서 그대로 1행에 있어야 한다. 빠지거나, 새로 생기거나, 순서가 바뀌면 적재 전에 막고 사유를 보여 준다.
+# - 비교할 때 앞뒤 공백, 연속 공백, 가운뎃점 변형(· ・ ㆍ)은 같은 것으로 본다.
+# - drop_keywords 가 들어간 머리글은 민감 정보로 보고 읽자마자 버린다. 이런 열은 머리글 검사에서 빼고 경고만 남긴다.
+#
+# 적재 규칙 (v1 과 같다)
+# - 키는 (보험사, 증권번호). 같은 증권번호가 다시 오면 상태 변화로 다룬다.
+# - 인정보험료는 파일 값을 그대로 쓰고 다시 계산하지 않는다. 철회 계약의 음수만 부호를 맞춘다 (D-31, 아래 sign_align).
+# - 1차년에서 4차년 성적과 수기성적은 보관만 한다 (D-03).
+# - 원본 행은 raw_row 에 남긴다. 버린 열은 raw_row 에도 남기지 않는다.
+#
+# v2 에서 달라진 것
+# - 이관일자, 고객구분은 표준 이름을 주지 않는다. 계약 원장에는 칸이 없고 원본 행(raw_row)에만 남는다.
+# - 이 양식에는 청약일자 칸이 없다. application_date_from 이 contract_date 이면 계약일자를 청약일로 쓴다.
+#   가정이다. 청약 기준으로 세는 프로모션(count_basis=application)이 청약일을 기준일로 읽기 때문이다. 영수일자는 쓰지 않는다.
+#   이 키가 없는 매핑은 청약일을 비워 둔다(v1).
+source: eternal
+data_type: contract
+versions:
+  - version: 1
+    effective_from: "202601"
+    file:
+      # 실제 파일은 "계약현황" 뒤에 피봇 시트 둘이 있다. 2026-11-16 실제 파일 대조에서 시트를 이름으로 고정했다. 2026-11-18 파일은 시트가 하나다.
+      # 이 이름의 시트가 없으면 시트가 하나뿐인 파일만 그 시트를 읽고, 여럿이면 막는다.
+      sheet: "계약현황"
+      header_row: 1
+    application_date_from: contract_date
+    # 맨 끝의 합계 행. 증권번호가 비고 No. 칸이 아래 말 가운데 하나면 계약이 아니라 원본의 합계로 보고 넣지 않는다.
+    # 막힌 행으로 세지 않고, 원본 행(raw_row)에는 남긴다. 합계 행의 인정보험료가 계약 행의 합과 다르면 차이 비율만 경고한다.
+    # 2026-11-16 실제 2월 파일의 마지막 행이 이 꼴이었다.
+    summary_row:
+      label_column: "No."
+      labels: ["합계", "총계", "총합계", "소계", "계", "Total", "Grand Total"]
+      blank_column: "증권번호"
+      compare_column: "인정보험료"
+    headers:
+      - "No."
+      - "맵핑상태"
+      - "맵핑구분"
+      - "본사"
+      - "본부"
+      - "지점"
+      - "센터"
+      - "팀"
+      - "모집사원번호"
+      - "모집사원명"
+      - "계약일자"
+      - "보험사"
+      - "증권번호"
+      - "계약자"
+      - "피보험자"
+      - "상품명"
+      - "초회보험료"
+      - "수금보험료"
+      - "1차년성적"
+      - "2차년성적"
+      - "3차년성적"
+      - "4차년성적"
+      - "인정보험료"
+      - "계약상태"
+      - "납입회차"
+      - "최종납입년월"
+      - "납입기간"
+      - "납입기간명"
+      - "계약종류"
+      - "상품종류"
+      - "납입주기(방법)"
+      - "수금사원번호"
+      - "수금사원명"
+      - "CA코드"
+      - "상품코드"
+      - "수기성적"
+      - "모바일청약"
+      - "시작일자"
+      - "종료일자"
+      - "자동이체일"
+      - "영수일자"
+      - "본인·가족계약"
+      - "외부이관여부"
+      - "엑셀등록여부"
+      - "확인서징구(개인)"
+      - "확인서징구(비교)"
+      - "확인서징구(금소법)"
+      - "확인서징구(종신)"
+      - "최초등록자"
+      - "최초등록자명"
+      - "최종수정자"
+      - "최종수정자명"
+      - "수정일시"
+      - "최종상태변경일"
+      - "최종수금일"
+      - "이관일자"
+      - "고객구분"
+      - "비고"
+    # 민감 정보. 머리글에 이 말이 들어가면 그 열을 버린다. 이 양식에는 없고 사원현황 양식에는 있다.
+    drop_keywords: ["주민", "계좌", "소득", "이행보증", "예치금", "4대보험", "보험업계고유번호"]
+    # 원본 열 → 표준 이름. 여기 없는 열(관리 열, 사람 이름 가운데 설계사와 등록자)은 raw_row 에만 남는다.
+    columns:
+      "No.":                src_no
+      "맵핑상태":           mapping_status
+      "맵핑구분":           mapping_kind
+      "본사":               org_head_office
+      "본부":               org_hq
+      "지점":               org_branch
+      "센터":               org_center
+      "팀":                 org_team
+      "모집사원번호":       agent_code
+      "모집사원명":         agent_name
+      "계약일자":           contract_date
+      "보험사":             insurer_name
+      "증권번호":           policy_no
+      "계약자":             policyholder_name
+      "피보험자":           insured_name
+      "상품명":             product_name
+      "초회보험료":         first_premium
+      "수금보험료":         collected_premium
+      "1차년성적":          perf_y1
+      "2차년성적":          perf_y2
+      "3차년성적":          perf_y3
+      "4차년성적":          perf_y4
+      "인정보험료":         recognized_premium
+      "계약상태":           status_raw
+      "납입회차":           paid_installments
+      "최종납입년월":       last_paid_ym
+      "납입기간":           payment_term
+      "납입기간명":         payment_term_name
+      "계약종류":           sector_raw
+      "상품종류":           product_type_raw
+      "납입주기(방법)":     payment_mode_raw
+      "수금사원번호":       collector_code
+      "CA코드":             ca_code
+      "상품코드":           insurer_product_code
+      "수기성적":           manual_perf
+      "모바일청약":         mobile_application
+      "시작일자":           coverage_start
+      "종료일자":           coverage_end
+      "자동이체일":         auto_debit_day
+      "영수일자":           receipt_date
+      "본인·가족계약":      self_family
+      "외부이관여부":       external_transfer
+      "엑셀등록여부":       excel_registered
+      "확인서징구(개인)":   confirm_personal
+      "확인서징구(비교)":   confirm_compare
+      "확인서징구(금소법)": confirm_fcpa
+      "확인서징구(종신)":   confirm_whole_life
+      "최종상태변경일":     status_changed_date
+      "최종수금일":         last_collected_date
+    transforms:
+      src_no: [to_int]
+      mapping_status: [none_if_blank]
+      mapping_kind: [none_if_blank]
+      org_head_office: [as_text, none_if_blank]
+      org_hq: [as_text, none_if_blank]
+      org_branch: [as_text, none_if_blank]
+      org_center: [as_text, none_if_blank]
+      org_team: [as_text, none_if_blank]
+      agent_code: [as_text, strip, upper, none_if_blank]
+      agent_name: [as_text, none_if_blank]
+      contract_date: [parse_date]
+      insurer_name: [as_text, none_if_blank]
+      policy_no: [as_text, strip, {remove: ["-", " ", "."]}, upper, none_if_blank]
+      policyholder_name: [as_text, none_if_blank]
+      insured_name: [as_text, none_if_blank]
+      product_name: [as_text, none_if_blank]
+      first_premium: [parse_money]
+      collected_premium: [parse_money]
+      perf_y1: [parse_money]
+      perf_y2: [parse_money]
+      perf_y3: [parse_money]
+      perf_y4: [parse_money]
+      recognized_premium: [parse_money]
+      status_raw: [as_text, none_if_blank]
+      paid_installments: [to_int]
+      last_paid_ym: [parse_ym]
+      payment_term: [digits_int]
+      payment_term_name: [as_text, none_if_blank]
+      sector_raw: [as_text, none_if_blank]
+      product_type_raw: [as_text, none_if_blank]
+      payment_mode_raw: [as_text, none_if_blank]
+      collector_code: [as_text, strip, upper, none_if_blank]
+      ca_code: [as_text, none_if_blank]
+      insurer_product_code: [as_text, none_if_blank]
+      manual_perf: [parse_money]
+      mobile_application: [as_text, none_if_blank]
+      coverage_start: [parse_date]
+      coverage_end: [parse_date]
+      auto_debit_day: [as_text, none_if_blank]
+      receipt_date: [parse_date]
+      self_family: [yes_no]
+      external_transfer: [yes_no]
+      excel_registered: [yes_no]
+      confirm_personal: [yes_no]
+      confirm_compare: [yes_no]
+      confirm_fcpa: [yes_no]
+      confirm_whole_life: [yes_no]
+      status_changed_date: [parse_date]
+      last_collected_date: [parse_date]
+    # 이 값이 비거나 읽히지 않으면 그 행을 막는다. 나머지 칸은 읽히지 않으면 경고를 남기고 빈 값으로 둔다.
+    required: [policy_no, insurer_name, contract_date, status_raw, recognized_premium]
+    # 계약상태 원문 → 앱의 상태. 여기 없는 값은 그 행을 막고 사유를 남긴다.
+    status_map:
+      "정상": inforce
+      "성립": inforce
+      "청약": applied
+      "철회": withdrawn
+      "청약철회": withdrawn
+      "반송": declined
+      "실효": lapsed
+      "해지": cancelled
+      "만기": matured
+    sector_map:
+      "생보": life
+      "손보": nonlife
+    payment_mode_map:
+      "월납": monthly
+      "일시납": single
+      "연납": annual
+      "3월납": quarterly
+      "6월납": semiannual
+    # D-31 확정 2026-11-14. 철회 계약의 금액이 음수로 오면 원장에는 절댓값으로 넣는다.
+    # 철회는 계약상태(status_raw)를 위 status_map 으로 옮긴 값이 withdrawn 인 것이다. 지금은 "철회"와 "청약철회" 두 가지다.
+    # 계산 엔진은 철회 계약의 금액을 양수로 보고 성립한 달에 더하고 철회한 달에 뺀다.
+    # 원본 행(raw_row)과 file_recognized_sum 은 원래 부호 그대로다. 철회가 아닌 계약의 음수는 값을 두고 경고만 남긴다.
+    # 1차년에서 4차년 성적과 수기성적은 보관만 하는 칸이라 여기 넣지 않았다.
+    sign_align:
+      when_status: [withdrawn]
+      fields: [recognized_premium, first_premium, collected_premium]

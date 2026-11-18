@@ -1,5 +1,7 @@
-"""이터널 실제 계약현황(56열) 적재기.
+"""이터널 실제 계약현황(56열, 58열) 적재기.
 
+매핑은 머리글을 보고 자동으로 고른다. 56열은 eternal_contract.yaml, 58열(이관일자, 고객구분이 끼인 2026-11-18 양식)은
+eternal_contract_v2.yaml 이다. 어느 쪽에도 맞지 않으면 열이 더 가까운 쪽의 사유로 막는다. mapping_name 으로 고정할 수도 있다.
 순서: 머리글 검사 → 같은 파일 막기 → 원본 행 보관 → 표준 행 → 계약 원장 반영 → 건수와 합계 대조.
 - 머리글이 매핑과 다르면 DB 에 아무것도 쓰지 않고 HeaderMismatch 로 사유를 돌려준다.
 - 같은 파일(import_batch.file_hash)은 DuplicateFile 로 막는다.
@@ -10,6 +12,8 @@
 - 맨 끝의 합계 행(매핑의 summary_row)은 계약으로 넣지 않고 막힌 행으로도 세지 않는다. 원본 행에는 남긴다.
   합계 행의 인정보험료가 계약 행의 합과 다르면 차이 비율만 경고한다. No. 가 1부터 이어지지 않으면 빠진 번호 수를 경고한다.
 - 경고와 오류 메시지에는 사람 이름과 금액을 넣지 않는다. 사번, 보험사, 상품종류 같은 분류 값만 넣는다.
+- redact 로 원본 머리글 이름을 주면 그 칸의 값은 읽자마자 비운다. 표준 행, 계약 원장, 원본 행(raw_row) 모두 빈 값이다. 대조용 DB 가 쓴다.
+- 매핑에 application_date_from: contract_date 가 있으면 청약일(application_date)을 계약일자로 채운다. 청약일자 칸이 없는 양식의 가정이다.
 """
 import hashlib
 import json
@@ -25,6 +29,7 @@ from app.loader.transforms import apply, normalize_header, normalize_policy_no
 from app.periods import date_ym
 
 CATEGORY_MAP = mapping.MAPPING_DIR / "product_category_map.yaml"
+CONTRACT_MAPPINGS = ("contract", "contract_v2")          # eternal_<이름>.yaml. 앞의 것이 같은 거리면 먼저 쓴다
 SEVEN = ("whole_life", "health", "savings", "annuity", "property", "auto", "general")
 CONCLUDED = ("inforce", "lapsed", "cancelled", "matured", "withdrawn")
 DATA_TYPE = "org_contract"
@@ -50,14 +55,69 @@ def load_category_map(path=CATEGORY_MAP) -> dict:
     return out
 
 
+# ------------------------------------------------------------------ 매핑 고르기
+def _distance(headers, m) -> int:
+    """파일 머리글과 매핑 머리글이 다른 이름의 수(없는 열 + 새 열). 민감 열은 뺀다."""
+    kept = {h for h in headers if h and not any(k in h for k in m.get("drop_keywords", []))}
+    exp = {normalize_header(h) for h in m["headers"]}
+    return len(exp - kept) + len(kept - exp)
+
+
+def pick_mapping(headers, period_ym, mapping_name=None) -> dict:
+    """머리글에 맞는 매핑을 고른다. mapping_name 은 CONTRACT_MAPPINGS 의 이름이고 주면 그것으로 고정한다.
+    검사를 통과하는 매핑이 없으면 열이 가장 가까운 매핑을 돌려준다(그 사유로 막힌다). 같은 거리면 앞의 것이다."""
+    names = (mapping_name,) if mapping_name else CONTRACT_MAPPINGS
+    maps = [mapping.load("eternal", n, period_ym) for n in names]
+    for m in maps:
+        if not check_headers(headers, expected=m["headers"], drop_keywords=m.get("drop_keywords"))[0]:
+            return m
+    return min(maps, key=lambda m: _distance(headers, m))
+
+
+def _open(path, period_ym, mapping_name=None):
+    """시트를 열고 머리글에 맞는 매핑을 고른다. 시트와 머리글 행은 모든 매핑이 같아야 한다(v1 과 v2 는 같다).
+    돌려주는 것: (매핑, workbook, worksheet, header_row, headers)."""
+    first = mapping.load("eternal", mapping_name or CONTRACT_MAPPINGS[0], period_ym)
+    wb, ws, hrow, headers = open_sheet(path, first["file"].get("sheet"), first["file"].get("header_row", 1))
+    return pick_mapping(headers, period_ym, mapping_name), wb, ws, hrow, headers
+
+
 # ------------------------------------------------------------------ 머리글만 미리 보기
-def preview(path, period_ym):
-    """DB 에 쓰지 않고 머리글만 검사한다. 돌려주는 것: {ok, reasons, dropped_columns, header_count}."""
-    m = mapping.load("eternal", "contract", period_ym)
-    wb, ws, hrow, headers = open_sheet(path, m["file"].get("sheet"), m["file"].get("header_row", 1))
+def preview(path, period_ym, mapping_name=None):
+    """DB 에 쓰지 않고 머리글만 검사한다. 돌려주는 것: {ok, reasons, dropped_columns, header_count, mapping_version}."""
+    m, wb, ws, hrow, headers = _open(path, period_ym, mapping_name)
     wb.close()
     reasons, dropped = check_headers(headers, expected=m["headers"], drop_keywords=m.get("drop_keywords"))
-    return {"ok": not reasons, "reasons": reasons, "dropped_columns": dropped, "header_count": len(headers)}
+    return {"ok": not reasons, "reasons": reasons, "dropped_columns": dropped, "header_count": len(headers), "mapping_version": m["mapping_version"]}
+
+
+def read_people(path, period_ym, mapping_name=None) -> dict:
+    """DB 에 쓰지 않고 모집사원마다 이름과 조직을 읽는다. 머리글이 맞지 않으면 HeaderMismatch.
+    한 사람의 조직은 계약일자가 가장 늦은 행의 칸을 쓴다(같으면 뒤 행). 돌려주는 것: {사번: {name, org, contracts, paths}}.
+    org 는 표준 이름 org_head_office, org_hq, org_branch, org_center, org_team 의 값이다. 이름이 비면 name 은 빈 문자열이다."""
+    m, wb, ws, hrow, headers = _open(path, period_ym, mapping_name)
+    try:
+        reasons, dropped = check_headers(headers, expected=m["headers"], drop_keywords=m.get("drop_keywords"))
+        if reasons:
+            raise HeaderMismatch(reasons, pathlib.Path(path).name)
+        out = {}
+        for _r, raw in iter_raw(ws, hrow, headers, m.get("drop_keywords", [])):
+            if _is_summary_row(raw, m.get("summary_row")):
+                continue
+            std, blocks, _w = to_standard(raw, m["columns"], m.get("transforms", {}), ())
+            code = std.get("agent_code")
+            if not code:
+                continue
+            o = out.setdefault(code, {"name": "", "org": {}, "contracts": 0, "date": "", "paths": set()})
+            o["contracts"] += 1
+            path_t = org_path.path_of(std)
+            o["paths"].add(path_t)
+            d = std.get("contract_date") or ""
+            if d >= o["date"]:
+                o["date"], o["name"], o["org"] = d, std.get("agent_name") or o["name"], dict(zip(org_path.LEVELS, path_t))
+        return {c: {"name": o["name"], "org": o["org"], "contracts": o["contracts"], "paths": len(o["paths"])} for c, o in out.items()}
+    finally:
+        wb.close()
 
 
 # ------------------------------------------------------------------ 적재
@@ -99,18 +159,18 @@ class _Agg:
             issue(con, batch_id, "warn", code, f"{msg} ({n}행, 첫 행 {row_no})", row_no)
 
 
-def load_contract(con, path, period_ym, upload_org_id=None, by="system"):
-    """실제 계약현황 한 파일을 적재한다. 돌려주는 것은 건수와 합계 대조가 든 요약이다."""
-    m = mapping.load("eternal", "contract", period_ym)
+def load_contract(con, path, period_ym, upload_org_id=None, by="system", mapping_name=None, redact=()):
+    """실제 계약현황 한 파일을 적재한다. 돌려주는 것은 건수와 합계 대조가 든 요약이다.
+    mapping_name 이 없으면 머리글로 v1 과 v2 를 고른다. redact 는 값을 비울 원본 머리글 이름 목록이다."""
+    m, wb, ws, hrow, headers = _open(path, period_ym, mapping_name)
     drop_kw = m.get("drop_keywords", [])
-    wb, ws, hrow, headers = open_sheet(path, m["file"].get("sheet"), m["file"].get("header_row", 1))
     try:
         reasons, dropped = check_headers(headers, expected=m["headers"], drop_keywords=drop_kw)
         if reasons:
             raise HeaderMismatch(reasons, pathlib.Path(path).name)
         batch_id = register_batch(con, path, DATA_TYPE, period_ym, upload_org_id=upload_org_id, by=by, mapping_version=m["mapping_version"])
         try:
-            out = _load_rows(con, m, ws, hrow, headers, batch_id, dropped)
+            out = _load_rows(con, m, ws, hrow, headers, batch_id, dropped, redact)
         except Exception:
             con.rollback()
             raise
@@ -119,8 +179,12 @@ def load_contract(con, path, period_ym, upload_org_id=None, by="system"):
     return out
 
 
-def _load_rows(con, m, ws, hrow, headers, batch_id, dropped):
+def _load_rows(con, m, ws, hrow, headers, batch_id, dropped, redact=()):
     drop_kw = m.get("drop_keywords", [])
+    redact = {normalize_header(h) for h in redact}
+    app_from = m.get("application_date_from")
+    if app_from not in (None, "contract_date"):
+        raise ValueError(f"매핑의 application_date_from 은 contract_date 만 쓸 수 있습니다: {app_from}")
     for h in dropped:
         issue(con, batch_id, "warn", "dropped_column", f"민감 정보 열 '{h}' 을 읽지 않고 버렸습니다")
     cmap = load_category_map()
@@ -139,6 +203,8 @@ def _load_rows(con, m, ws, hrow, headers, batch_id, dropped):
     written = {}  # (insurer_id, policy_no) → 인정보험료. 파일 안에서 같은 키가 다시 오면 뒤 행이 남는다
     seen_rows = {}
     for r_idx, raw in iter_raw(ws, hrow, headers, drop_kw):
+        for h in redact & raw.keys():
+            raw[h] = None
         raw_buf.append((batch_id, ws.title, r_idx, json.dumps(raw, ensure_ascii=False, default=str)))
         if _is_summary_row(raw, srule):
             summary_rows += 1
@@ -244,6 +310,8 @@ def _load_rows(con, m, ws, hrow, headers, batch_id, dropped):
             excel_registered=std.get("excel_registered"), confirm_personal=std.get("confirm_personal"), confirm_compare=std.get("confirm_compare"),
             confirm_fcpa=std.get("confirm_fcpa"), confirm_whole_life=std.get("confirm_whole_life"),
             mobile_application=std.get("mobile_application"), last_batch_id=batch_id, source_row_no=r_idx)
+        if app_from:                        # 청약일자 칸이 없는 양식. 이 키가 없는 매핑은 원장의 청약일을 건드리지 않는다
+            values["application_date"] = cdate
         reason = f"계약현황 계약상태 '{std['status_raw']}'"
         old = con.execute("SELECT contract_id, status, status_date, status_changed_date FROM contract WHERE insurer_id=? AND policy_no=?", key).fetchone()
         if old is None:
