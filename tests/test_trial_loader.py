@@ -395,10 +395,13 @@ def test_build_with_contracts_uses_real_contract_rows_and_not_month_sums(src):
     # 계정: T 번호는 사번 순. 새 사번은 맨 뒤 번호
     logins = [r[0] for r in con.execute("SELECT login_id FROM user_account ORDER BY login_id")]
     assert logins == [f"T{i:04d}" for i in range(1, 8)] + ["admin"]
-    # 프로모션: BOOM-UP 만 게시. 나머지는 초안
+    # 프로모션: BOOM-UP 과 DB생명 여행시상(2차 변경판)만 게시. 나머지는 초안
     st = {r["name"]: r["status"] for r in con.execute("SELECT name, status FROM promotion")}
-    assert [n for n, v in st.items() if v == "published"] == ["흥국화재 BOOM-UP (대조용)"] and len(st) == 4
-    pid = con.execute("SELECT promo_id FROM promotion WHERE status='published'").fetchone()[0]
+    assert sorted(n for n, v in st.items() if v == "published") == sorted(["흥국화재 BOOM-UP (대조용)", "DB생명 여행시상 (대조용)"]) and len(st) == 4
+    dbp = con.execute("SELECT metric, combine_rule, alt_chains_json, boost_json FROM promotion WHERE name='DB생명 여행시상 (대조용)'").fetchone()
+    assert dbp["metric"] == "converted_premium" and dbp["combine_rule"] == "either"
+    assert '"requires_missed": [1]' in dbp["alt_chains_json"] and "2026-12-14" in dbp["boost_json"]
+    pid = con.execute("SELECT promo_id FROM promotion WHERE name='흥국화재 BOOM-UP (대조용)'").fetchone()[0]
     p = pm._load(con, pid)
     assert (p["metric"], p["date_basis"], p["insurer_name"], p["rules"]["count_basis"], p["category_list"]) == \
         ("converted_premium", "application_date", "흥국화재", "application", [])

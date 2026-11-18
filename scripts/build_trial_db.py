@@ -104,13 +104,23 @@ def register_promotions(con, gate_org_path=None, contracts=False) -> dict:
         out["boom"] = pm.create(con, metric="converted_premium", target_note="흥국화재 손해보험. 상품 거르기 없음. 대조용 가정", **boom)
     else:
         out["boom"] = pm.create(con, categories=["health"], target_note="흥국화재 장기 인보험. 대조용 추정", **boom)
-    out["db"] = pm.create(
-        con, period_ym=PROMO_YM, name="DB생명 여행시상 (대조용)", kind="travel", windows=Q4, combine_rule="either", insurer_name="DB생명",
-        insurer_id=_insurer(con, "DB생명"), categories=["health"], date_basis="contract_date", tiers=_tiers((1_000_000, "싱가포르")),
-        window_tiers={1: _tiers((100_000, "싱가포르")), 2: _tiers((300_000, "싱가포르")), 3: _tiers((400_000, "싱가포르"))},
-        rules={"boost": {"factor": 2, "month_days": [1, 14], "cap": 100_000, "applies_to": "each"}, "exclude_self": True},
-        target_note="DB생명 건강보험. 본인 계약 제외. 대조용 추정", caution=DRAFT_NOTE if contracts else f"{TRIAL_NOTE} {LIMITS['DB']}",
-        by=BY, publish=pub_other)
+    if contracts:       # 실제 계약 단위 자료. 2차 변경판(조건 1-1, 1-2, 2)이고 적용 상품은 건강 계열 가정이다. 보험료는 인정보험료로 센다(대조용 가정)
+        db_rules = {"boost": {"factor": 2, "ranges": [["2026-10-01", "2026-10-14"], ["2026-12-01", "2026-12-14"]], "cap": 100_000, "applies_to": "each"},
+                    "exclude_self": True, "alt_chains": [{"key": "c12", "label": "조건 1-2", "windows": {2: 250_000, 3: 450_000}, "requires_missed": [1]}]}
+        out["db"] = pm.create(
+            con, period_ym=PROMO_YM, name="DB생명 여행시상 (대조용)", kind="travel", windows=Q4, combine_rule="either", insurer_name="DB생명",
+            insurer_id=_insurer(con, "DB생명"), sector="life", categories=["health"], metric="converted_premium", date_basis="contract_date",
+            tiers=_tiers((1_000_000, "싱가포르")),
+            window_tiers={1: _tiers((100_000, "싱가포르")), 2: _tiers((200_000, "싱가포르")), 3: _tiers((400_000, "싱가포르"))},
+            rules=db_rules, target_note="DB생명 건강 계열(보장, 치매). 종신 제외는 가정. 본인 계약 제외. 대조용 가정",
+            caution=CONTRACT_NOTE, by=BY, publish=True)
+    else:
+        out["db"] = pm.create(
+            con, period_ym=PROMO_YM, name="DB생명 여행시상 (대조용)", kind="travel", windows=Q4, combine_rule="either", insurer_name="DB생명",
+            insurer_id=_insurer(con, "DB생명"), categories=["health"], date_basis="contract_date", tiers=_tiers((1_000_000, "싱가포르")),
+            window_tiers={1: _tiers((100_000, "싱가포르")), 2: _tiers((300_000, "싱가포르")), 3: _tiers((400_000, "싱가포르"))},
+            rules={"boost": {"factor": 2, "month_days": [1, 14], "cap": 100_000, "applies_to": "each"}, "exclude_self": True},
+            target_note="DB생명 건강보험. 본인 계약 제외. 대조용 추정", caution=f"{TRIAL_NOTE} {LIMITS['DB']}", by=BY, publish=pub_other)
     rules = {"parent_promo_id": out["db"], "gate_min_achievers": 4}
     if gate_org_path:
         rules["gate_org_path"] = gate_org_path
