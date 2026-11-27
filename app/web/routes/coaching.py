@@ -19,10 +19,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app import db
-from app.org.sync import org_texts
 from app.sales import coaching as co
 from app.sales import core, stats
-from app.web import auth
+from app.web import auth, org_labels
 from app.web.deps import _in, _q, get_con, guard, page
 
 router = APIRouter()
@@ -42,7 +41,7 @@ def _members(con, ctx) -> list:
         [r["agent_id"] for r in con.execute("SELECT agent_id FROM agent")]
     q, params = _in(ids)
     rows = _q(con, f"SELECT agent_id, internal_code code, name, hire_date FROM agent WHERE agent_id IN ({q}) AND status='active' ORDER BY internal_code", params)
-    texts = org_texts(con)
+    texts = org_labels.texts(con)
     for r in rows:
         r["org"] = texts.get(core.home_org(con, r["agent_id"], ctx["ym"]), "")
     return rows
@@ -125,7 +124,7 @@ def team_activity(request: Request, m: str = "", ctx: dict = Depends(guard), con
     fn = stats.funnel(con, ids, first, last)
     q, params = _in(list(fn["agents"]))
     names = {r["agent_id"]: r for r in _q(con, f"SELECT agent_id, internal_code code, name FROM agent WHERE agent_id IN ({q})", params)}
-    texts = org_texts(con)
+    texts = org_labels.texts(con)
     rows = []
     for aid, v in fn["agents"].items():
         a = names.get(aid) or {"code": "-", "name": "-"}

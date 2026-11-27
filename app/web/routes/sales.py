@@ -22,11 +22,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app import db
-from app.org.sync import org_texts
 from app.sales import core, stats
 from app.sales import customers as cs
 from app.sales import leads as ld
-from app.web import auth
+from app.web import auth, org_labels
 from app.web import board as bd
 from app.web.deps import _in, _q, get_con, guard, page
 
@@ -210,11 +209,12 @@ def _assign_page(request, ctx, con, *, level="", opened=None, ask=None, error=No
     is_main = ctx["role"] == "main"
     ids = scope_ids(con, ctx)
     conv_orgs = None if is_main else set(ctx.get("org_ids") or ())
-    if level not in LEVELS:                               # 고르지 않았으면 셀 DB 가 있는 가장 아래 단위
-        level = next((lv for lv in LEVELS if stats.conversion(con, ids, ctx["ym"], lv, conv_orgs)), "team")
+    tabs = ("team", "center") if org_labels.active(con) else LEVELS      # 시작 조직이 있으면 그 아래 계층(지점, 본부)만 단위로 쓴다
+    if level not in tabs:                                 # 고르지 않았으면 셀 DB 가 있는 가장 아래 단위
+        level = next((lv for lv in tabs if stats.conversion(con, ids, ctx["ym"], lv, conv_orgs)), "team")
     cands = _candidates(con, ctx)
     names = _agents(con, ids)
-    texts = org_texts(con)
+    texts = org_labels.texts(con)
     pool = [_shown(r, False, listing=True) for r in ld.pool(con, ctx, day)]
     for r in pool:
         r["pool_name"] = texts.get(r["pool_org_id"], "본부 풀") if r["pool_org_id"] else "본부 풀"
@@ -227,17 +227,19 @@ def _assign_page(request, ctx, con, *, level="", opened=None, ask=None, error=No
             stale_rows.append(v)
     stale_rows.sort(key=lambda r: -(r["idle"] or 0))
     conv = stats.conversion(con, ids, ctx["ym"], level, conv_orgs)
+    for r in conv:
+        r["name"] = texts.get(r["org_id"], r["name"])         # 같은 이름의 지점은 본부 이름을 앞에 붙여 구별한다
     tot = stats.by_agent(con, ids)
     total, won = sum(v["total"] for v in tot.values()), sum(v["won"] for v in tot.values())
     extra = {}
     if is_main:
         extra = {"handover": cs.handover_candidates(con, ctx["ym"]), "pending": cs.pending_handover(con),
-                 "orgs": sorted(((o, t) for o, t in texts.items()), key=lambda x: x[1])}
+                 "orgs": org_labels.options(con, keep={r["pool_org_id"] for r in pool if r.get("pool_org_id")})}
     pick_agent = next((c for c in cands if c["agent_id"] == regions_for), None) if regions_for else None
     resp = page(request, ctx, "sales_assign.html", status_code=status_code, is_main=is_main, pool=pool, stale_rows=stale_rows, cands=cands,
                 conv=conv, level=level, total=total, won=won, rate=stats.rate(won, total), held_n=len(held),
                 n_stale=sum(1 for r in held if r["stale"]), opened=opened, ask=ask, error=error, pick_agent=pick_agent,
-                flash=request.session.pop(FLASH, None), now=db.now(), REGIONS=core.REGIONS, SOURCE_KO=core.SOURCE_KO, LEVELS=LEVELS,
+                flash=request.session.pop(FLASH, None), now=db.now(), REGIONS=core.REGIONS, SOURCE_KO=core.SOURCE_KO, LEVELS=tabs, LEVEL_NAMES=org_labels.level_names(con, tabs), rule_on=org_labels.active(con),
                 STALE=core.setting("stale"), WARN=core.setting("warn"), HOLD=core.setting("hold"), **extra)
     resp.headers["Cache-Control"] = "no-store"
     return resp

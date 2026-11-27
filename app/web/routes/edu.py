@@ -35,8 +35,7 @@ from app.engine import education as edu
 from app.loader import edu_roster as er
 from app.loader.excel_loader import DuplicateFile
 from app.loader.sheet import HeaderMismatch
-from app.org.sync import org_texts
-from app.web import auth, org_values
+from app.web import auth, org_labels, org_values
 from app.web.deps import _in, _q, edu_today, get_con, guard, page
 from app.web.routes import card as card_route
 from app.web.routes.staff import upload_dir
@@ -123,7 +122,7 @@ def _who(con, ym, agent_ids) -> dict:
     if not agent_ids:
         return {}
     q, ids = _in(sorted(set(agent_ids)))
-    texts = org_texts(con)
+    texts = org_labels.texts(con)
     rows = _q(con, f"""SELECT a.agent_id, a.internal_code code, a.name, a.status='terminated' AS "left",
                               (SELECT h.org_id FROM agent_org_history h WHERE h.agent_id=a.agent_id AND h.effective_from<=?
                                 ORDER BY h.effective_from DESC, h.id DESC LIMIT 1) org_id
@@ -159,9 +158,11 @@ def _team_page(request, ctx, con, *, course=None, level=None, ask=None, error=No
     today = _today()
     ids = _scope_ids(con, ctx)
     prog = edu.org_progress(con, ids, today)
-    level = level if level in LEVELS else ("branch" if ctx["role"] == "main" else "team")
+    tabs = org_labels.visible_levels(con, LEVELS)           # 시작 조직이 있으면 그 아래 계층만(본부, 지점). 없으면 네 계층 그대로
+    want = "branch" if ctx["role"] == "main" else "team"
+    level = level if level in tabs else (want if want in tabs else tabs[0])
     by_org = edu.progress_by_org(con, ids, level, today)
-    texts = org_texts(con)
+    texts = org_labels.texts(con)
     for r in by_org:
         r["org_text"] = texts.get(r["org_id"], r["org_name"] or "소속 없음")
     rows = edu.not_done(con, ids, today, course_id=course)
@@ -188,7 +189,7 @@ def _team_page(request, ctx, con, *, course=None, level=None, ask=None, error=No
     # 임박 날짜 수는 엔진이 사람마다 낸 soon_days 다. 임박을 세는 것은 미수료 줄뿐이라 그 줄들의 값을 모은다
     pool = rows if course is None else edu.not_done(con, ids, today)
     soon_days = org_values.days_text([r.get("soon_days") for r in pool], _viewer_days(con, ctx))
-    resp = page(request, ctx, "edu_team.html", status_code=status_code, prog=prog, by_org=by_org, level=level, LEVELS=LEVELS,
+    resp = page(request, ctx, "edu_team.html", status_code=status_code, prog=prog, by_org=by_org, level=level, LEVELS=tabs, LEVEL_NAMES=org_labels.level_names(con, tabs),
                 rows=rows[:NOT_DONE_SHOW], n_rows=len(rows), course=course, courses=courses, confirm=confirm, error=error,
                 flash=request.session.pop(FLASH, None), as_of=_day_label(today), soon_days=soon_days,
                 year=str(today.year))
@@ -259,13 +260,13 @@ def _course_form_defaults(c=None) -> dict:
 def _courses_page(request, ctx, con, *, edit=None, form=None, error=None, show_closed=False, status_code=200):
     is_main = ctx["role"] == "main"
     courses = edu.list_courses(con, _course_orgs(ctx), include_closed=is_main and show_closed)
-    texts = org_texts(con)
+    texts = org_labels.texts(con)
     for c in courses:
         c["owner"] = texts.get(c["owner_org_id"], "") if c["owner_org_id"] else ""
-    orgs = sorted(((oid, t) for oid, t in texts.items()), key=lambda x: x[1]) if is_main else []
     levels = [r["code"] for r in con.execute("SELECT code FROM career_level ORDER BY code")] if is_main else []
     if is_main and form is None:
         form = _course_form_defaults(edu.course(con, edit)) if edit else (_course_form_defaults() if edit is not None else None)
+    orgs = org_labels.options(con, keep={_int((form or {}).get("owner_org_id"))}) if is_main else []     # 시작 조직의 위쪽 조직은 뺀다. 지금 고른 조직은 남긴다
     return page(request, ctx, "edu_courses.html", status_code=status_code, courses=courses, is_main=is_main, form=form, error=error,
                 orgs=orgs, levels=levels, show_closed=show_closed, flash=request.session.pop(FLASH, None),
                 KIND_KO=edu.KIND_KO, TARGET_KO=edu.TARGET_KO, RULE_KO=edu.RULE_KO, CARD_COURSES=edu.CARD_COURSES)

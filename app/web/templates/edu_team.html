@@ -54,7 +54,7 @@
 {% else %}<div class="card"><div class="k">열린 필수 과정이 없습니다</div></div>{% endif %}
 
 <h2 class="sec">조직별</h2>
-<nav class="seg" aria-label="묶는 계층">{% for lv in LEVELS %}<a class="{{ 'on' if lv == level }}" href="?level={{ lv }}{{ '&course=' ~ course if course }}">{{ LEVEL_KO.get(lv, lv) }}</a>{% endfor %}</nav>
+<nav class="seg" aria-label="묶는 계층">{% for lv in LEVELS %}<a class="{{ 'on' if lv == level }}" href="?level={{ lv }}{{ '&course=' ~ course if course }}">{{ LEVEL_NAMES.get(lv, lv) }}</a>{% endfor %}</nav>
 {% if by_org %}
 <div class="card tablecard" style="margin-top:12px"><table>
 <tr><th>조직</th><th class="num hide-sm">재직</th><th class="num">수료율</th><th class="num">미수료</th><th class="num hide-sm">지남</th></tr>

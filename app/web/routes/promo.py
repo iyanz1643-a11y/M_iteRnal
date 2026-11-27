@@ -1013,7 +1013,8 @@ def _org_view(request, con, ctx, cards, head, p, org_key, direct, who=None, row_
                 phases=phases, roster=roster, who=who, row_key=row_key, cell_who=cell_who, shape=shape,
                 man=(lambda v: amount_text(v, shape)), metric_note=metric_note(shape, count_ref, bool(head_c)) if shape else "",
                 word="확정" if head_c else "예상",
-                root_path=_q(con, "SELECT path_key FROM org_unit WHERE parent_id IS NULL ORDER BY org_id LIMIT 1")[0]["path_key"] if is_main else None,
+                root_path=(org_labels.start_path(con) or _q(con, "SELECT path_key FROM org_unit WHERE parent_id IS NULL ORDER BY org_id LIMIT 1")[0]["path_key"])
+                if is_main else None,                              # 맨 위 조직부터 단추. 시작 조직이 있으면 그 조직으로 간다(위쪽 조직은 화면에서 숨긴다)
                 assumption=ORG_ASSUMPTION, org_level=org_labels.level_name, org_title=org_labels.title)
 
 
@@ -1417,8 +1418,11 @@ def promo_tiers(request: Request, line: int | None = None, edit: int | None = No
     plan = original_rows(pm._load(con, edit)) if edit else None
     parents = _q(con, "SELECT promo_id, name, period_ym FROM promotion WHERE kind!='rate' AND parent_promo_id IS NULL AND status!='withdrawn' "
                       "AND promo_id!=? ORDER BY promo_id DESC", (edit or 0,))
-    gate_orgs = [{"path_key": o["path_key"], "label": f"{org_labels.title(o)} · {org_labels.level_name(o)}"}
-                 for o in _q(con, "SELECT org_id, name, level, path_key FROM org_unit WHERE active=1 ORDER BY path_key")]
+    # 문턱을 셀 조직의 선택 상자. 시작 조직의 위쪽 조직은 뺀다(org_labels). 지금 저장된 조직은 숨긴 조직이어도 남긴다
+    now_gate = (d.get("rules") or {}).get("gate_org")
+    gate_rows = _q(con, "SELECT org_id, name, level, path_key FROM org_unit WHERE active=1 ORDER BY path_key")
+    gate_orgs = [{"path_key": o["path_key"], "label": o["label"]}
+                 for o in org_labels.choose(con, gate_rows, keep={g["org_id"] for g in gate_rows if g["path_key"] == now_gate})]
     return page(request, ctx, "promo_tiers.html", d=d, err=err, msg=msg, plan=plan, window_seqs=WINDOW_SEQS, wt_note=WINDOW_TIERS_NOTE,
                 wt_assumption=WINDOW_TIERS_ASSUMPTION, inst13_note=INST13_FORM_NOTE, parents=parents, gate_orgs=gate_orgs, rules_note=RULES_NOTE,
                 rules_assumption=RULES_ASSUMPTION, STATUS_KO=STATUS_KO, DROPPABLE=pm.DROPPABLE, COUNT_BASIS_KO=pm.COUNT_BASIS_KO,

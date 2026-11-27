@@ -1,15 +1,15 @@
 {% extends "base.html" %}{% import "_perf.html" as pf %}
 {% block body %}
-<p class="eyebrow">{% if c %}{{ c.period.label }} · {{ c.level_ko }}{% if sector %} · {{ SECTORS[sector] }}{% endif %}{% else %}{{ ym|ymko }}{% endif %} · {{ SCOPES[ctx.scope] }}</p>
+<p class="eyebrow">{% if c %}{{ c.period.label }} · {{ level_ko }}{% if sector %} · {{ SECTORS[sector] }}{% endif %}{% else %}{{ ym|ymko }}{% endif %} · {{ SCOPES[ctx.scope] }}</p>
 <h1 class="display">조직 비교</h1>
-<p class="lede">같은 단계 조직끼리 실적과 가동률을 견줍니다. 조직의 값은 그 아래 센터와 팀까지 모두 더한 것입니다.</p>
+<p class="lede">같은 단계 조직끼리 실적과 가동률을 견줍니다. 조직의 값은 그 아래 조직까지 모두 더한 것입니다.</p>
 {% if lv_opts|length > 1 %}<div class="seg perf-seg">{% for lv in lv_opts %}<a class="{{ 'on' if lv == level }}" href="{{ path }}{{ qs(f, level=lv) }}">{{ LEVEL_NAMES.get(lv, lv) }}</a>{% endfor %}</div>{% endif %}
 {{ pf.seg(path, f, 'pt', PERIODS, pt) }}
 {{ pf.seg(path, f, 'sector', SECTORS, sector) }}
 <form class="perf-pick" method="get" action="{{ path }}">
   {% for k, v in f.items() if k not in ('ym', 'parent', 'org') and v not in (none, '') %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
   <label class="f">기준 월<select name="ym">{% for m in yms %}<option value="{{ m }}" {{ 'selected' if m == ym }}>{{ m|ymko }}</option>{% endfor %}</select></label>
-  {% if parents %}<label class="f">이 조직 아래만<select name="parent"><option value="">범위 전체</option>{% for o in parents %}<option value="{{ o.org_id }}" {{ 'selected' if o.org_id == parent }}>{{ '　' * o.depth }}{{ o.name }} · {{ o.level_ko }}</option>{% endfor %}</select></label>{% endif %}
+  {% if parents %}<label class="f">이 조직 아래만<select name="parent"><option value="">범위 전체</option>{% for o in parents %}<option value="{{ o.org_id }}" {{ 'selected' if o.org_id == parent }}>{{ o.indent }}{{ o.label }}</option>{% endfor %}</select></label>{% endif %}
   <button class="ghost perf-go" type="submit">보기</button>
 </form>
 {{ pf.fresh_line(fresh) }}
@@ -18,13 +18,13 @@
 {% set t = c.total %}{% set heads = c.rows|sum(attribute='headcount') %}{% set act = c.rows|sum(attribute='active') %}
 <div class="grid g2" style="margin-top:24px">
   <div class="card"><div class="k">인정보험료 합계 <span class="chip good">확정</span></div><div class="big">{{ t.converted_premium|won }}<span class="unit">원</span></div>
-    <div class="cap">{{ c.level_ko }} {{ c.rows|length }}곳 · 순건수 {{ t.net_count|n }}건 · 청약 {{ t.applied_count|n }}건 예정</div></div>
+    <div class="cap">{{ level_ko }} {{ c.rows|length }}곳 · 순건수 {{ t.net_count|n }}건 · 청약 {{ t.applied_count|n }}건 예정</div></div>
   <div class="card"><div class="ringbox">{{ ui.ring(act / heads * 100 if heads else 0, '가동률', color='var(--fill-green)') }}
     <div><div class="k">가동률</div><div class="mid">{{ act }}<span class="unit">/ {{ heads }}명</span></div><div class="cap">이 기간 순건수 1건 이상</div></div></div></div>
 </div>
 <div class="card" style="margin-top:16px"><div class="k" style="margin-bottom:18px">확정 인정보험료</div>{{ pf.bars(c.rows, 'name', 'rate_label', 'converted_premium') }}</div>
 <div class="card tablecard" style="margin-top:16px"><table>
-<tr><th>순위</th><th>{{ c.level_ko }}</th><th class="num hide-sm">인원</th><th class="num">가동률</th><th class="num hide-sm">순건수</th><th class="num hide-sm">청약</th><th class="num hide-sm">인정보험료</th></tr>
+<tr><th>순위</th><th>{{ level_ko }}</th><th class="num hide-sm">인원</th><th class="num">가동률</th><th class="num hide-sm">순건수</th><th class="num hide-sm">청약</th><th class="num hide-sm">인정보험료</th></tr>
 {% for r in c.rows %}
 <tr><td class="strong">{{ r.rank }}</td><td class="strong">{{ r.name }}{% if r.left %} <span class="chip bad hide-sm">퇴사 {{ r.left }}명</span>{% endif %}
   <div class="sm-sub"><span>{{ r.converted_premium|won }}원 · 순건수 {{ r.net_count|n }}건</span><span>{{ r.active }} / {{ r.headcount }}명 가동{% if r.left %} · 퇴사 {{ r.left }}명 포함{% endif %}</span></div></td>

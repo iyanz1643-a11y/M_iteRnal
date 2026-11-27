@@ -18,8 +18,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
-from app.org.sync import org_texts
-from app.web import auth
+from app.web import auth, org_labels
 from app.web import board as bd
 from app.web.deps import get_con, guard, page
 
@@ -57,7 +56,7 @@ def _form_defaults(p=None) -> dict:
 def _page(request, ctx, con, *, cat="", open_id=None, form=None, error=None, ask=None, status_code=200):
     bd.ensure(con)
     is_main = ctx["role"] == "main"
-    texts = org_texts(con)
+    texts = org_labels.texts(con)
     rows = bd.visible_posts(con, ctx, include_withdrawn=is_main)
     live = [p for p in rows if p["status"] == "posted"]
     withdrawn = [p for p in rows if p["status"] != "posted"]
@@ -72,7 +71,7 @@ def _page(request, ctx, con, *, cat="", open_id=None, form=None, error=None, ask
             opened = {**opened, "files": bd.files(con, open_id)}
     if form is not None and form.get("post_id"):
         form = {**form, "files": bd.files(con, _int(form["post_id"]))}
-    orgs = sorted(texts.items(), key=lambda x: x[1]) if is_main and form is not None else []
+    orgs = org_labels.options(con, keep={_int(form.get("target_org_id"))}) if is_main and form is not None else []     # 시작 조직의 위쪽 조직은 뺀다. 지금 고른 조직은 남긴다
     resp = page(request, ctx, "board.html", status_code=status_code, is_main=is_main, posts=shown, withdrawn=withdrawn, counts=counts,
                 n_live=len(live), cat=cat, opened=opened, form=form, error=error, ask=ask, orgs=orgs,
                 flash=request.session.pop(FLASH, None), CATEGORY_KO=bd.CATEGORY_KO, ROLE_KO=bd.ROLE_KO, KIND_KO=bd.KIND_KO,

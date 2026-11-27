@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% import "_perf.html" as pf %}
 {% block body %}
 {% set t = s.total %}
-<p class="eyebrow">{{ s.period.label }} · {{ SCOPES[ctx.scope] }}{% if sel %} · {{ sel.name }}{% endif %}{% if sector %} · {{ s.sector_ko }}{% endif %}</p>
+<p class="eyebrow">{{ s.period.label }} · {{ SCOPES[ctx.scope] }}{% if sel %} · {{ sel.text }}{% endif %}{% if sector %} · {{ s.sector_ko }}{% endif %}</p>
 <h1 class="display">기간별 업적</h1>
 <p class="lede">성립한 계약만 확정 업적으로 셉니다. 청약은 예정 업적이고, 철회는 철회한 달에 뺍니다.</p>
 {{ pf.seg(path, f, 'pt', PERIODS, pt) }}

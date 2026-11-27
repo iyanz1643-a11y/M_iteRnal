@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% import "_perf.html" as pf %}
 {% block body %}
 {% set t = b.total %}
-<p class="eyebrow">{{ b.period.label }} · {{ SCOPES[ctx.scope] }}{% if sel %} · {{ sel.name }}{% endif %}{% if sector %} · {{ b.sector_ko }}{% endif %}</p>
+<p class="eyebrow">{{ b.period.label }} · {{ SCOPES[ctx.scope] }}{% if sel %} · {{ sel.text }}{% endif %}{% if sector %} · {{ b.sector_ko }}{% endif %}</p>
 <h1 class="display">{{ '업권별 집계' if by == 'sector' else '구분별 집계' }}</h1>
 <p class="lede">확정 인정보험료를 {{ '생명보험과 손해보험으로' if by == 'sector' else '상품 구분마다' }} 나눠 봅니다. 구분은 계약에 적힌 값을 먼저 씁니다.</p>
 <div class="seg perf-seg"><a class="{{ 'on' if by == 'category' }}" href="{{ path }}{{ qs(f, by='') }}">구분별</a><a class="{{ 'on' if by == 'sector' }}" href="{{ path }}{{ qs(f, by='sector', sector='') }}">업권별</a></div>

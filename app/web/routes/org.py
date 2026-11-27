@@ -17,8 +17,8 @@ from app.ops import sessions
 from app.org import card_grant as cg
 from app.org import heads as hd
 from app.org import levels
-from app.org.sync import org_texts, termination_candidates
-from app.web import audit_view, auth
+from app.org.sync import termination_candidates
+from app.web import audit_view, auth, org_labels
 from app.web import invite as iv
 from app.web.deps import _in, _q, get_con, guard, page
 
@@ -52,8 +52,14 @@ def _heads_by_org(con, ym, org_ids) -> dict:
 def org_tree(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)):
     ym = ctx["ym"]
     q, ids = _in(ctx["org_ids"])
-    orgs = _q(con, f"SELECT org_id, parent_id, name, level FROM org_unit WHERE org_id IN ({q}) AND active=1", tuple(ids))
+    orgs = _q(con, f"SELECT org_id, parent_id, name, level, path_key FROM org_unit WHERE org_id IN ({q}) AND active=1", tuple(ids))
+    hidden = org_labels.hidden_ids(con)                     # 시작 조직의 위쪽 조직은 트리에 그리지 않는다. 화면에서만 숨기고 범위는 그대로다
+    orgs = [{**o, "title": org_labels.title(o), "chip": org_labels.chip(o)} for o in orgs if o["org_id"] not in hidden]
     direct, heads = _active_members(con, ym, ids), _heads_by_org(con, ym, ids)
+    v = org_labels.view(con)
+    for org_id, hs in heads.items():
+        for h in hs:
+            h["role_ko"] = org_labels.head_name(org_id, h["role"], v)       # 본부장, 지점장. 규칙이 없으면 예전 이름
     by_parent, known = {}, {o["org_id"] for o in orgs}
     for o in sorted(orgs, key=lambda o: (levels.depth(o["level"]), o["name"], o["org_id"])):
         by_parent.setdefault(o["parent_id"] if o["parent_id"] in known else None, []).append(o)
@@ -69,7 +75,13 @@ def org_tree(request: Request, ctx: dict = Depends(guard), con=Depends(get_con))
         return total
     walk(None, 0)
     counts = {lv: sum(1 for o in orgs if o["level"] == lv) for lv in levels.codes()}
-    return page(request, ctx, "org_tree.html", orgs=flat, counts=counts, levels=levels.load()["levels"])
+    shown = None
+    if org_labels.active(con):                              # 화면 계층 이름(본부, 지점)으로 센다. 시작 조직 자체는 알약이 없어 세지 않는다
+        shown = {}
+        for o in sorted(orgs, key=lambda o: (levels.depth(o["level"]), o["org_id"])):
+            if o["chip"]:
+                shown[o["chip"]] = shown.get(o["chip"], 0) + 1
+    return page(request, ctx, "org_tree.html", orgs=flat, counts=counts, levels=levels.load()["levels"], shown=shown)
 
 
 # ---------------------------------------------------------------- 조직장과 대리
@@ -87,9 +99,11 @@ REQ_REASON = {"new_head": "새로 맡음", "reappointed": "다시 맡음", "self
 def _req_rows(con) -> list:
     """승인 대기 중인 권한 요청. pending_requests 가 먼저 빠진 사람의 요청을 거두고 새로 맡은 사람의 요청을 만든다."""
     out = []
+    texts, v = org_labels.texts(con), org_labels.view(con)      # 맡은 조직의 글과 역할 이름도 화면 이름 규칙을 따른다
     for r in cg.pending_requests(con):
         out.append({**r, "reason_text": REQ_REASON.get(r["reason"], r["reason_ko"]), "name": r["name"] or r["login_id"],
-                    "code": r["code"] or r["login_id"]})
+                    "code": r["code"] or r["login_id"], "orgs": [{**o, "text": texts.get(o["org_id"], o["text"]), "role_ko": org_labels.head_name(o["org_id"], o["role"], v)}
+                                                       for o in r["orgs"]]})
     return out
 
 
@@ -97,7 +111,7 @@ def _grant_rows(con) -> list:
     """명함 승인 권한 표의 줄. 지금 조직장이거나 대리인 관리자 계정에, 켜져 있지만 효력이 없는 줄을 더한다.
 
     효력 없음은 조직장이나 대리에서 빠졌거나 계정이 중지된 경우다. 그런 줄도 골라서 끌 수 있게 둔다."""
-    texts = org_texts(con)
+    texts, v = org_labels.texts(con), org_labels.view(con)
     rows = {}
     for c in cg.candidates(con):
         rows[c["login_id"]] = {"login_id": c["login_id"], "agent_id": c["agent_id"], "name": c["display_name"], "heads": c["heads"],
@@ -118,7 +132,8 @@ def _grant_rows(con) -> list:
     out = []
     for r in rows.values():
         r["code"] = codes.get(r["agent_id"], "")
-        r["orgs"] = [{"text": texts.get(h["org_id"], h["org_name"]), "role": h["role"]} for h in r["heads"]]
+        r["orgs"] = [{"text": texts.get(h["org_id"], h["org_name"]), "role": h["role"], "role_ko": org_labels.head_name(h["org_id"], h["role"], v)}
+                     for h in r["heads"]]
         r["depth"] = min((levels.depth(h["level"]) for h in r["heads"]), default=99)
         out.append(r)
     out.sort(key=lambda r: (not r["granted"], r["depth"], r["orgs"][0]["text"] if r["orgs"] else "", r["login_id"]))
@@ -128,12 +143,14 @@ def _grant_rows(con) -> list:
 def _heads_page(request, ctx, con, err=None, msg=None, status_code=200, grant_ask=None, grant_msg=None, grant_err=None,
                 req_ask=None, req_msg=None, req_err=None):
     ym, today = ctx["ym"], date.today().isoformat()
-    texts = org_texts(con)
+    texts = org_labels.texts(con)
     rows = _q(con, """SELECT m.id, m.org_id, m.role, m.effective_from, m.effective_to, m.source, a.internal_code code, a.name, o.level
                       FROM org_manager m JOIN agent a ON a.agent_id=m.agent_id JOIN org_unit o ON o.org_id=m.org_id
                       WHERE m.effective_to IS NULL OR m.effective_to>=?""", (ym,))
+    v = org_labels.view(con)
     for r in rows:
         r["org"] = texts.get(r["org_id"], "")
+        r["role_ko"] = org_labels.head_name(r["org_id"], r["role"], v)
         r["now"] = r["effective_from"] <= ym
     rows.sort(key=lambda r: (levels.depth(r["level"]), r["org"]))
     deputies = _q(con, """SELECT d.id, d.org_id, d.date_from, d.date_to, d.reason, a.internal_code code, a.name FROM org_deputy d
@@ -141,8 +158,9 @@ def _heads_page(request, ctx, con, err=None, msg=None, status_code=200, grant_as
     for d in deputies:
         d["org"], d["now"] = texts.get(d["org_id"], ""), d["date_from"] <= today
     headed = {r["org_id"] for r in rows if r["now"]}
-    choices = [{"org_id": o["org_id"], "text": texts.get(o["org_id"], o["name"]), "level": o["level"]}
-               for o in con.execute("SELECT org_id, name, level FROM org_unit WHERE active=1") if levels.head_role(o["level"])]
+    picks = [{"org_id": o["org_id"], "text": texts.get(o["org_id"], o["name"]), "level": o["level"], "name": o["name"], "path_key": o["path_key"]}
+             for o in con.execute("SELECT org_id, name, level, path_key FROM org_unit WHERE active=1") if levels.head_role(o["level"])]
+    choices = org_labels.choose(con, picks)                  # 시작 조직의 위쪽 조직은 뺀다. 글은 본부 이름이 앞에 붙은 경로다
     choices.sort(key=lambda c: c["text"])
     vacant = [c for c in choices if c["org_id"] not in headed]
     reqs = _req_rows(con)                         # 먼저 맞춘다. 직접 켜기 표의 요청 대기 표시가 이 결과를 따른다
@@ -271,7 +289,7 @@ def _accounts_page(request, ctx, con, issued=None, err=None, status_code=200, in
     rows = _q(con, """SELECT u.user_id, u.login_id, u.display_name, u.is_main_admin, u.status, u.must_change_password, u.locked_until, u.last_login_at,
                              (SELECT COUNT(*) FROM org_manager m WHERE m.agent_id=u.agent_id AND m.effective_to IS NULL) heads
                       FROM user_account u ORDER BY u.is_main_admin DESC, u.login_id""")
-    texts = org_texts(con)
+    texts = org_labels.texts(con)
     ym = ctx["ym"]
     no_account = _q(con, """SELECT a.agent_id, a.internal_code code, a.name, a.hire_date,
                                    (SELECT h.org_id FROM agent_org_history h WHERE h.agent_id=a.agent_id AND h.effective_from<=?

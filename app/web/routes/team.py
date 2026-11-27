@@ -23,8 +23,7 @@ from fastapi.responses import HTMLResponse
 
 from app.engine import education as edu
 from app.engine import performance
-from app.org.sync import org_texts
-from app.web import org_values
+from app.web import org_labels, org_values
 from app.web import person_perf_view as ppv
 from app.web.deps import _in, _last_load, _perf, _q, edu_today, get_con, guard, page
 
@@ -77,7 +76,7 @@ def onboarding_rows(con, ctx, today: date) -> list:
     end = ctx["ym"]
     start = min(_ym(p["hire_date"]) for p in people)
     months = performance.tally(con, start, end, agent_ids=new_ids, by="month") if start <= end else {}
-    texts = org_texts(con)
+    texts = org_labels.texts(con)
     out = []
     for p in people:
         aid, hire_ym = p["agent_id"], _ym(p["hire_date"])

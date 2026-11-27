@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse
 
 from app.engine import persist as ps
 from app.web.deps import get_con, guard, page
-from app.web.routes.perf import pick_org, pick_ym, scope_ids, scope_orgs
+from app.web.routes.perf import org_choices, pick_org, pick_ym, scope_ids
 
 router = APIRouter()
 RISK_SHOW = 60              # 위험 계약 목록에 한 번에 싣는 줄 수. 넘으면 건수만 더 적는다
@@ -64,7 +64,7 @@ def perf_persistency(request: Request, ym: str | None = None, org: int | None = 
     return page(request, ctx, "perf_persistency.html", rates=r, k=kinds(r), sectors=side_by_side(r, "by_sector", "sector", "sector_ko"),
                 insurers=side_by_side(r, "by_insurer", "insurer_id", "insurer"), people=people,
                 with_data=sum(1 for p in people if p["p13"]["rate"] is not None or p["p25"]["rate"] is not None),
-                risk=risk_view(ps.risk(con, ids, ym)), sel=sel, orgs=scope_orgs(con, ctx), yms=yms, ym=ym, stamps=stamps(con),
+                risk=risk_view(ps.risk(con, ids, ym)), sel=sel, orgs=org_choices(con, ctx, sel), yms=yms, ym=ym, stamps=stamps(con),
                 f={"ym": ym, "org": org or ""})
 
 

@@ -14,7 +14,7 @@
 {% if rank is none %}<div class="card"><div class="k">볼 수 있는 순위가 없습니다</div></div>
 {% elif not rank.rows %}<div class="card"><div class="k">{{ prev|ymko }} 랭킹 계산이 없습니다</div><div class="cap">월 랭킹을 계산하면 여기에 보입니다.</div></div>
 {% else %}
-<p class="cap">{{ rank.root.name }} 전체 · {{ rank.run_at|when }} 계산{% if closed %} · 마감으로 확정했습니다{% else %} · 그 달 마감 전에 계산한 순위입니다. 마감하면 확정합니다{% endif %}</p>
+<p class="cap">{{ rank.root.text }} · {{ rank.run_at|when }} 계산{% if closed %} · 마감으로 확정했습니다{% else %} · 그 달 마감 전에 계산한 순위입니다. 마감하면 확정합니다{% endif %}</p>
 {% set podium = rank.rows|selectattr('rank', 'le', 3)|list %}
 {% if podium %}<div class="podium">{% for x in podium[:3] %}<div class="pod {{ 'first' if x.rank == 1 }}"><div class="rk">{{ x.rank }}위</div><div class="nm">{{ x.name }}</div>
   <div class="vl">{{ pf.val(x.value, unit) }}{{ unit }}</div></div>{% endfor %}</div>{% endif %}

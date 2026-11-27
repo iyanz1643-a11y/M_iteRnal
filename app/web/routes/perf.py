@@ -29,7 +29,7 @@ from app.engine import orgs
 from app.engine import results as rs
 from app.org import levels
 from app.periods import ym_add
-from app.web import awards
+from app.web import awards, org_labels
 from app.web.deps import _in, _q, get_con, guard, page
 from app.web.routes import card as card_route
 
@@ -63,6 +63,11 @@ def scope_orgs(con, ctx) -> list:
     return sorted(rows, key=lambda r: (r["depth"], r["path_key"] or r["name"], r["org_id"]))
 
 
+def org_choices(con, ctx, sel=None) -> list:
+    """조직 선택 상자의 줄. 시작 조직의 위쪽 조직은 뺀다(org_labels). 범위 검사는 pick_org 가 따로 한다."""
+    return org_labels.choose(con, scope_orgs(con, ctx), keep={sel["org_id"]} if sel else ())
+
+
 def pick_org(con, ctx, org_id, ids) -> tuple:
     """고른 조직으로 사람을 좁힌다. (조직 또는 None, 좁힌 사람). 범위 밖 조직이면 403 이다."""
     if org_id is None:
@@ -76,7 +81,7 @@ def pick_org(con, ctx, org_id, ids) -> tuple:
     inside = {r["agent_id"] for r in con.execute(
         f"""SELECT DISTINCT agent_id FROM agent_org_history WHERE org_id IN ({q}) AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)""",
         (*params, ym, ym))}
-    return allowed[org_id], [a for a in ids if a in inside]
+    return {**allowed[org_id], "text": org_labels.shown(con, allowed[org_id])}, [a for a in ids if a in inside]
 
 
 def months(con, ctx) -> list:
@@ -123,7 +128,7 @@ def perf_period(request: Request, pt: str = "month", sector: str = "", ym: str |
     sel, ids = pick_org(con, ctx, org, scope_ids(con, ctx))
     s = rs.period_summary(con, ids, pt, ym, sector=sector or None)
     label_months(s["months"])
-    return page(request, ctx, "perf_period.html", s=s, sel=sel, orgs=scope_orgs(con, ctx), yms=yms, ym=ym, pt=pt, sector=sector,
+    return page(request, ctx, "perf_period.html", s=s, sel=sel, orgs=org_choices(con, ctx, sel), yms=yms, ym=ym, pt=pt, sector=sector,
                 SECTORS=SECTORS, PERIODS=rs.PERIOD_KO, fresh=fresh(con, ym), f=filters(pt, sector, ym, org))
 
 
@@ -137,7 +142,7 @@ def perf_category(request: Request, pt: str = "month", sector: str = "", by: str
     ym, yms = pick_ym(con, ctx, ym)
     sel, ids = pick_org(con, ctx, org, scope_ids(con, ctx))
     b = rs.breakdown(con, ids, pt, ym, by=by, sector=sector or None)
-    return page(request, ctx, "perf_category.html", b=b, sel=sel, orgs=scope_orgs(con, ctx), yms=yms, ym=ym, pt=pt, sector=sector, by=by,
+    return page(request, ctx, "perf_category.html", b=b, sel=sel, orgs=org_choices(con, ctx, sel), yms=yms, ym=ym, pt=pt, sector=sector, by=by,
                 SECTORS=SECTORS, PERIODS=rs.PERIOD_KO, fresh=fresh(con, ym), f=filters(pt, sector, ym, org, by=by if by != "category" else ""))
 
 
@@ -147,15 +152,19 @@ def perf_ranking(request: Request, pt: str = "month", sector: str = "", metric: 
                  org: int | None = None, ctx: dict = Depends(guard), con=Depends(get_con)):
     pt, sector, metric = pick(pt, rs.PERIOD_KO, "month"), pick(sector, SECTORS, ""), pick(metric, METRICS, "converted_premium")
     ym, yms = pick_ym(con, ctx, ym)
-    choices = rs.ranking_orgs(con, ctx)
-    if not choices:
+    allowed = rs.ranking_orgs(con, ctx)
+    choices = org_labels.choose(con, allowed, keep={org} if org is not None else ())
+    if not allowed:
         return page(request, ctx, "perf_ranking.html", r=None, choices=[], yms=yms, ym=ym, pt=pt, sector=sector, metric=metric,
                     SECTORS=SECTORS, PERIODS=rs.PERIOD_KO, METRICS=METRICS, fresh=fresh(con, ym), f=filters(pt, sector, ym))
-    org_id = org if org is not None else choices[0]["org_id"]
+    start = org_labels.start_org_id(con)
+    first = next((c for c in choices if c["org_id"] == start), None) or (choices or allowed)[0]    # 시작 조직이 있으면 그 조직부터 본다
+    org_id = org if org is not None else first["org_id"]
     try:
         r = rs.ranking_for(con, ctx, org_id, ym, period_type=pt, metric=metric, sector=sector or None)
     except PermissionError as e:
         raise HTTPException(403, str(e)) from e
+    r["org"] = {**r["org"], "text": org_labels.shown(con, r["org"])}
     return page(request, ctx, "perf_ranking.html", r=r, choices=choices, yms=yms, ym=ym, pt=pt, sector=sector, metric=metric,
                 SECTORS=SECTORS, PERIODS=rs.PERIOD_KO, METRICS=METRICS, fresh=fresh(con, ym),
                 f=filters(pt, sector, ym, org if org is not None else "", metric=metric if metric != "converted_premium" else ""))
@@ -173,19 +182,23 @@ def perf_org_compare(request: Request, pt: str = "month", sector: str = "", leve
         raise HTTPException(403, "이 조직의 실적을 볼 수 없습니다.")
     root = levels.root_code()
     under = orgs.descendants(con, parent) & org_ids if parent is not None else org_ids
+    hidden = org_labels.hidden_ids(con)                          # 시작 조직의 위쪽 조직은 견줄 조직으로 세지 않는다
     count = {}
     for u in units:
-        if u["level"] != root and u["org_id"] in under:
+        if u["level"] != root and u["org_id"] in under and u["org_id"] not in hidden:
             count[u["level"]] = count.get(u["level"], 0) + 1
-    lv_opts = [lv for lv in levels.codes() if lv in count]
+    lv_opts = org_labels.visible_levels(con, [lv for lv in levels.codes() if lv in count])
     if level not in lv_opts:
         level = next((lv for lv in lv_opts if count[lv] >= 2), lv_opts[0] if lv_opts else None)
     c = rs.org_compare(con, ym, org_ids=org_ids, level=level, parent_id=parent, period_type=pt, sector=sector or None) if level else None
+    names = org_labels.level_names(con, levels.codes())
     for r in (c or {}).get("rows", []):
         r["rate_label"] = f"가동 {r['active']} / {r['headcount']}명"
-    parents = [u for u in units if level and u["depth"] < levels.depth(level)]
-    return page(request, ctx, "perf_org_compare.html", c=c, level=level, lv_opts=lv_opts, LEVEL_NAMES=levels.level_ko(), parents=parents,
-                parent=parent, yms=yms, ym=ym, pt=pt, sector=sector, SECTORS=SECTORS, PERIODS=rs.PERIOD_KO, fresh=fresh(con, ym),
+        r["name"] = org_labels.shown(con, r)                     # 같은 이름의 지점이 여러 본부 아래에 있어 본부 이름을 앞에 붙인다
+    parents = org_labels.choose(con, [u for u in units if level and u["depth"] < levels.depth(level)],
+                                keep={parent} if parent is not None else ())
+    return page(request, ctx, "perf_org_compare.html", c=c, level=level, level_ko=names.get(level, ""), lv_opts=lv_opts, LEVEL_NAMES=names,
+                parents=parents, parent=parent, yms=yms, ym=ym, pt=pt, sector=sector, SECTORS=SECTORS, PERIODS=rs.PERIOD_KO, fresh=fresh(con, ym),
                 f=filters(pt, sector, ym, None, level=level or "", parent=parent or ""))
 
 
@@ -195,6 +208,7 @@ def hall_ranking(con, ctx, prev, metric) -> dict | None:
     root = next((o for o in rs.ranking_orgs(con, ctx) if o["level"] == levels.root_code()), None)
     if root is None:
         return None
+    root = {**root, "text": "전체 조직" if root["org_id"] in org_labels.hidden_ids(con) else f"{root['name']} 전체"}   # 맨 위 조직이 숨겨지면 이름을 내지 않는다
     run = con.execute("SELECT MAX(run_id) r FROM calc_run WHERE run_type='ranking' AND period_ym=? AND status='done'", (prev,)).fetchone()["r"]
     if not run:
         return {"root": root, "rows": [], "total": 0, "run_at": None, "me": None}

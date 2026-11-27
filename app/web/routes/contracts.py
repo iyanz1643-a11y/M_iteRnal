@@ -40,7 +40,7 @@ from app import db
 from app.engine import classify
 from app.web import auth
 from app.web.deps import NO_STORE, _in, _q, get_con, guard, page
-from app.web.routes.perf import fresh, pick_org, scope_ids, scope_orgs
+from app.web.routes.perf import fresh, org_choices, pick_org, scope_ids
 
 router = APIRouter()
 PATH = "/perf/contracts"
@@ -305,7 +305,7 @@ def contracts(request: Request, ctx: dict = Depends(guard), con=Depends(get_con)
     rows = [_decorate(r) for r in _rows(con, where, params, PER_PAGE, (pg - 1) * PER_PAGE)]
     keep = {k: ("" if v is None else v) for k, v in f.items()}
     return page(request, ctx, "perf_contracts.html", rows=rows, total=total, by_status=by_status, pg=pg, pages=pages, f=keep, months=months,
-                sel=sel, orgs=scope_orgs(con, ctx), opts=_options(con), STATUS_KO=STATUS_KO, SECTOR_KO=SECTOR_KO, fresh=fresh(con, ctx["ym"]))
+                sel=sel, orgs=org_choices(con, ctx, sel), opts=_options(con), STATUS_KO=STATUS_KO, SECTOR_KO=SECTOR_KO, fresh=fresh(con, ctx["ym"]))
 
 
 @router.post("/perf/contracts", response_class=HTMLResponse)

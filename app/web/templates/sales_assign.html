@@ -6,7 +6,7 @@
 {% block body %}
 <p class="eyebrow">영업 · {{ SCOPES[ctx.scope] }} · {{ now|when }} 기준</p>
 <h1 class="display">DB 배정과 성과</h1>
-<p class="lede">미배정 DB 를 지역에 맞춰 나누고, 활동 없이 {{ STALE }}일이 지난 DB 를 회수합니다. 체결률은 팀, 지점, 본부 단위로 봅니다.</p>
+<p class="lede">미배정 DB 를 지역에 맞춰 나누고, 활동 없이 {{ STALE }}일이 지난 DB 를 회수합니다. 체결률은 {% if rule_on %}{% for lv in LEVELS %}{{ LEVEL_NAMES.get(lv, lv) }}{{ ', ' if not loop.last }}{% endfor %}{% else %}팀, 지점, 본부{% endif %} 단위로 봅니다.</p>
 {{ flashbox(flash) }}
 {% if error %}<div class="alert bad" role="alert" style="margin-top:24px">{{ error }}</div>{% endif %}
 
@@ -108,7 +108,7 @@
 {% else %}<div class="card"><div class="k">범위 안 재직자가 없습니다</div></div>{% endif %}
 
 <h2 class="sec">조직 단위 체결률</h2>
-<nav class="seg perf-seg" aria-label="조직 단위">{% for lv in LEVELS %}<a class="{{ 'on' if level == lv }}" href="{{ path }}?level={{ lv }}">{{ LEVEL_KO.get(lv, lv) }}</a>{% endfor %}</nav>
+<nav class="seg perf-seg" aria-label="조직 단위">{% for lv in LEVELS %}<a class="{{ 'on' if level == lv }}" href="{{ path }}?level={{ lv }}">{{ LEVEL_NAMES.get(lv, lv) }}</a>{% endfor %}</nav>
 {% if conv %}
 <div class="card tablecard" style="margin-top:16px"><table>
 <tr><th>조직</th><th class="num hide-sm">사람</th><th class="num hide-sm">배정</th><th class="num hide-sm">체결</th><th class="num">체결률</th></tr>

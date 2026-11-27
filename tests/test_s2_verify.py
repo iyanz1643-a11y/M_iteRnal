@@ -133,6 +133,11 @@ def rows(html):
 
 
 # ---------------------------------------------------------------- 숫자 대조: 조직 합계
+def _root_id(con) -> int:
+    """맨 위 조직. 메인 관리자의 랭킹 기본 화면은 config/org_labels.yaml 의 시작 조직이라 전체 순위는 이 조직을 직접 연다."""
+    return con.execute("SELECT org_id FROM org_unit WHERE parent_id IS NULL").fetchone()[0]
+
+
 def test_org_total_same_on_home_period_category_compare_and_team(env):
     """지점장 범위의 이번 달 인정보험료와 순건수. 홈, 기간별 업적, 구분별 집계, 조직 비교(관리자와 메인 관리자), 팀원 현황 합."""
     mgr = env["mgr"]
@@ -175,7 +180,7 @@ def test_person_same_on_main_team_members_and_main_ranking(env):
         name = con.execute("SELECT name FROM agent WHERE agent_id=?", (who,)).fetchone()[0]
         r = next((r for r in rows(team) if f'<td class="strong">{name}' in r), "")
     seen["팀원 현황 메인"] = col(r, "premium")
-    rk = admin.get("/perf/ranking").text
+    rk = admin.get(f"/perf/ranking?org={_root_id(con)}").text      # 기본 화면은 시작 조직(org_labels)이라 전체 순위는 맨 위 조직을 직접 연다
     seen["랭킹 메인"] = col(next((r for r in rows(rk) if f'data-agent="{who}"' in r), ""), "value")
     assert all(v is not None for v in seen.values()), sorted(k for k, v in seen.items() if v is None)
     assert len(set(seen.values())) == 1, sorted(seen)
@@ -500,7 +505,7 @@ def test_every_person_same_on_home_summary_team_period_ranking(env):
     team = [r for r in rows(boss.get("/team/members").text) if 'data-col="code"' in r]
     period = [r for r in rows(boss.get("/perf/period").text) if 'data-agent="' in r]
     rk_boss = [r for r in rows(boss.get("/perf/ranking").text) if 'data-agent="' in r]
-    rk_all = [r for r in rows(admin.get("/perf/ranking").text) if 'data-agent="' in r]
+    rk_all = [r for r in rows(admin.get(f"/perf/ranking?org={_root_id(con)}").text) if 'data-agent="' in r]    # 전체 순위는 맨 위 조직을 직접 연다
     bad, n = [], 0
     for aid in env["inside"]:
         code = code_of(con, aid)

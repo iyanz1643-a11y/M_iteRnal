@@ -10,7 +10,7 @@
 {% if err %}<div class="alert bad" role="alert" style="margin-top:20px">{{ err }}</div>{% endif %}
 
 <form class="perf-pick" method="get" action="/org/settings" style="margin-top:24px">
-  <label class="f">조직<select name="org" onchange="this.form.submit()">{% for o in orgs %}<option value="{{ o.org_id }}"{% if o.org_id == org_id %} selected{% endif %}>{{ o.text }} · {{ LEVEL_KO.get(o.level, o.level) }}</option>{% endfor %}</select></label>
+  <label class="f">조직<select name="org" onchange="this.form.submit()">{% for o in orgs %}<option value="{{ o.org_id }}"{% if o.org_id == org_id %} selected{% endif %}>{{ o.label }}</option>{% endfor %}</select></label>
   <noscript><button class="ghost" type="submit">보기</button></noscript>
 </form>
 {% if not writable %}<p class="cap">이 조직의 설정은 볼 수만 있습니다. 바꾸기는 메인 관리자와 지사장·본부장, 지점장과 그 대리가 자기 조직에서 합니다.</p>{% endif %}

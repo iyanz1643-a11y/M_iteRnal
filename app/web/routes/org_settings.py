@@ -12,8 +12,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.org import levels
 from app.org import settings as st
-from app.org.sync import org_texts
-from app.web import auth
+from app.web import auth, org_labels
 from app.web.deps import get_con, guard, page
 from app.web.routes import notify
 
@@ -23,17 +22,19 @@ DO_KO = {"set": "바꾸기", "inherit": "위 조직 값 따르기", "lock": "막
 DO_ASK = {"set": "바꿀까요", "inherit": "위 조직의 값을 따르게 할까요", "lock": "막을까요", "unlock": "풀까요"}
 
 
-def _orgs(con, ctx) -> list:
-    texts = org_texts(con)
-    rows = [{"org_id": r[0], "level": r[1], "text": texts.get(r[0], r[2])}
-            for r in con.execute("SELECT org_id, level, name FROM org_unit WHERE active=1") if r[0] in ctx["org_ids"]]
+def _orgs(con, ctx, keep=()) -> list:
+    """조직 선택 상자의 줄. 시작 조직의 위쪽 조직은 뺀다(org_labels). 지금 고른 조직은 남긴다."""
+    texts = org_labels.texts(con)
+    rows = [{"org_id": r[0], "level": r[1], "text": texts.get(r[0], r[2]), "name": r[2], "path_key": r[3]}
+            for r in con.execute("SELECT org_id, level, name, path_key FROM org_unit WHERE active=1") if r[0] in ctx["org_ids"]]
+    rows = org_labels.choose(con, rows, keep=keep)
     rows.sort(key=lambda o: (levels.depth(o["level"]) > 0, o["text"]))
     return rows
 
 
 def _default_org(con, ctx):
     if ctx["role"] == "main":
-        return st.root_org(con)
+        return org_labels.start_org_id(con) or st.root_org(con)      # 시작 조직이 있으면 그 조직부터 보인다. 위쪽 조직은 선택 상자에서 숨긴다
     heads = sorted(ctx.get("heads") or [], key=lambda h: levels.depth(h["level"]))
     return heads[0]["org_id"] if heads else None
 
@@ -96,7 +97,7 @@ def _form_values(value) -> list:
 
 
 def _page(request, ctx, con, org_id, edit=None, ask=None, err=None, msg=None, status_code=200):
-    texts = org_texts(con)
+    texts = org_labels.texts(con)
     rows = _rows(con, ctx, org_id, texts)
     sections = [{"name": g, "rows": [r for r in rows if r["group"] == g]} for g in st.GROUP_ORDER]
     hist = st.history(con, org_id)
@@ -108,7 +109,7 @@ def _page(request, ctx, con, org_id, edit=None, ask=None, err=None, msg=None, st
     form = next((r for r in rows if r["key"] == edit), None) if edit else None
     if form and not form["can_edit"] and ctx["role"] != "main":
         form = None
-    resp = page(request, ctx, "org_settings.html", status_code=status_code, now_ym=st.now_ym(con), orgs=_orgs(con, ctx), org_id=org_id, org_text=texts.get(org_id, ""),
+    resp = page(request, ctx, "org_settings.html", status_code=status_code, now_ym=st.now_ym(con), orgs=_orgs(con, ctx, keep={org_id}), org_id=org_id, org_text=texts.get(org_id, ""),
                 sections=sections, hist=hist[:100], n_hist=len(hist), form=form, ask=ask, err=err, msg=msg, first_ym=st.first_open_ym(con),
                 courses=_courses(con), writable=org_id in st.write_orgs(con, ctx), is_main=ctx["role"] == "main")
     resp.headers["Cache-Control"] = "no-store"

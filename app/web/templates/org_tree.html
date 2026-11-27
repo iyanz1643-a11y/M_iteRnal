@@ -2,15 +2,19 @@
 {% block body %}
 <p class="eyebrow">{{ ctx.ym[:4] }}년 {{ ctx.ym[4:]|int }}월 · {{ SCOPES[ctx.scope] }}</p>
 <h1 class="display">조직 계층</h1>
-<p class="lede">{% for lv in levels %}{{ lv.name }}, {% endfor %}설계사의 여섯 단계입니다. 조직은 이름이 아니라 위에서부터의 경로로 구분하므로 이름이 같은 센터나 팀도 따로 보입니다.</p>
+{% if shown is none %}<p class="lede">{% for lv in levels %}{{ lv.name }}, {% endfor %}설계사의 여섯 단계입니다. 조직은 이름이 아니라 위에서부터의 경로로 구분하므로 이름이 같은 센터나 팀도 따로 보입니다.</p>
 <div class="grid g5" style="margin-top:32px">{% for lv in levels %}
   <div class="card"><div class="k">{{ lv.name }}</div><div class="mid">{{ counts[lv.code] }}<span class="unit">개</span></div></div>{% endfor %}
 </div>
+{% else %}<p class="lede">{% for name in shown %}{{ name }}, {% endfor %}설계사의 단계입니다. 조직은 이름이 아니라 위에서부터의 경로로 구분하므로 이름이 같은 지점도 본부마다 따로 보입니다.</p>
+<div class="grid g5" style="margin-top:32px">{% for name, n in shown.items() %}
+  <div class="card"><div class="k">{{ name }}</div><div class="mid">{{ n }}<span class="unit">개</span></div></div>{% endfor %}
+</div>{% endif %}
 <div class="card tablecard" style="margin-top:16px"><table>
 <tr><th>조직</th><th class="hide-sm">계층</th><th class="hide-sm">조직장</th><th class="num">직속 인원</th><th class="num">아래 인원</th></tr>
-{% for o in orgs %}{% set hs %}{% for h in o.heads %}{{ h.name }} <span class="chip {{ 'warn' if h.role == 'deputy' else '' }}">{{ HEAD_KO.get(h.role, h.role) }}{% if h.date_to %} {{ h.date_to|md }}까지{% endif %}</span>{% if not loop.last %}<br>{% endif %}{% else %}{% if o.level != levels[0].code %}<span class="cap" style="margin:0">미지정</span>{% endif %}{% endfor %}{% endset %}
-<tr><td class="strong"><span class="indent" style="--d:{{ o.depth }}"></span><span class="tree-name">{{ o.name }}<div class="sm-sub"><span>{{ hs }}</span></div></span></td>
-<td class="hide-sm"><span class="chip">{{ LEVEL_KO.get(o.level, o.level) }}</span></td>
+{% for o in orgs %}{% set hs %}{% for h in o.heads %}{{ h.name }} <span class="chip {{ 'warn' if h.role == 'deputy' else '' }}">{{ h.role_ko }}{% if h.date_to %} {{ h.date_to|md }}까지{% endif %}</span>{% if not loop.last %}<br>{% endif %}{% else %}{% if o.level != levels[0].code %}<span class="cap" style="margin:0">미지정</span>{% endif %}{% endfor %}{% endset %}
+<tr><td class="strong"><span class="indent" style="--d:{{ o.depth }}"></span><span class="tree-name">{{ o.title }}<div class="sm-sub"><span>{{ hs }}</span></div></span></td>
+<td class="hide-sm">{% if o.chip %}<span class="chip">{{ o.chip }}</span>{% endif %}</td>
 <td class="hide-sm" style="white-space:normal">{{ hs }}</td>
 <td class="num">{{ o.direct }}</td><td class="num">{{ o.below }}</td></tr>{% endfor %}
 </table></div>

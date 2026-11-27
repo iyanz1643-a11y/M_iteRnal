@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% import "_perf.html" as pf %}{% import "_persist.html" as px %}
 {% block body %}
-<p class="eyebrow">{{ ym|ymko }} 기준 · {{ SCOPES[ctx.scope] }}{% if sel %} · {{ sel.name }}{% endif %}</p>
+<p class="eyebrow">{{ ym|ymko }} 기준 · {{ SCOPES[ctx.scope] }}{% if sel %} · {{ sel.text }}{% endif %}</p>
 <h1 class="display">유지율</h1>
 <p class="lede">13회차와 25회차 유지율을 업권, 보험사, 사람으로 나눠 봅니다. 위험 계약은 건수와 증권번호 끝 네 자리만 보입니다.</p>
 {{ pf.pick_form(path, f, yms, ym, orgs, sel) }}
