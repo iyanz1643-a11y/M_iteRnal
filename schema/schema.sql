@@ -1898,3 +1898,40 @@ ALTER TABLE promotion ADD COLUMN copied_from INTEGER REFERENCES promotion(promo_
 -- [promotion_alt:begin]
 ALTER TABLE promotion ADD COLUMN alt_chains_json TEXT;              -- 추가안 목록
 -- [promotion_alt:end]
+
+-- ---------------------------------------------------------------------------
+-- 노션 시책 시상 정리본 (D-13, D-115, 11월 27일). app/connect/notion.py 가 쓴다. 기존 표는 건드리지 않고 덧붙이기만 한다.
+-- 대표님이 노션 데이터베이스에 정리해 둔 시상안과 시책을 읽기 전용으로 가져와 두는 표다. 노션에는 쓰지 않는다.
+-- 페이지마다 한 줄이다. content_hash 는 정리된 내용의 해시이고 같으면 다시 처리하지 않는다. 원본 JSON 은 data/raw/notion_plan 에 해시 이름으로 있다.
+-- verify_status 는 늘 unverified 다. 앱에서 원문과 한 번 더 대조하기 전까지 시상안 해석의 근거로 올리지 않는다.
+-- 노션에서 사라진 페이지는 지우지 않고 gone_at 을 채운다. 사람 이름, 연락처, 키는 넣지 않는다.
+-- 오래된 DB 에서도 이 묶음만 다시 돌릴 수 있게 모두 IF NOT EXISTS 로 쓴다. app/connect/notion.py 의 ensure_table 이 이 묶음을 읽는다.
+-- [notion:begin]
+CREATE TABLE IF NOT EXISTS notion_plan_page (
+    page_id        TEXT PRIMARY KEY,                    -- 노션 페이지 ID. 소문자 UUID
+    title          TEXT NOT NULL DEFAULT '',            -- 제목
+    insurer        TEXT NOT NULL DEFAULT '',            -- 보험사
+    kind           TEXT NOT NULL DEFAULT '',            -- 구분
+    doc_type       TEXT NOT NULL DEFAULT '',            -- 자료유형: 시상포스터, 월간시상안(PDF), 추가시상시안, 여행시상, 영상, 기타
+    ym             TEXT,                                -- 연월 YYYYMM. 읽지 못하면 비어 있다
+    week           TEXT NOT NULL DEFAULT '',            -- 주차
+    period_text    TEXT NOT NULL DEFAULT '',            -- 시책기간 글
+    products       TEXT NOT NULL DEFAULT '',            -- 대상상품. 여러 개면 쉼표로 이은 글
+    payback_text   TEXT NOT NULL DEFAULT '',            -- 지급·환수조건
+    core_text      TEXT NOT NULL DEFAULT '',            -- 핵심시책
+    source_link    TEXT NOT NULL DEFAULT '',            -- 원본링크. http 나 https 만 담는다
+    transcribed    INTEGER NOT NULL DEFAULT 0,          -- 원문이식. 1 이면 이식됨
+    processed_on   TEXT NOT NULL DEFAULT '',            -- 처리일 글
+    last_edited    TEXT,                                -- 노션의 마지막 편집 시각
+    body_text      TEXT NOT NULL DEFAULT '',            -- 본문 글자 전체. 핵심 시책 요약과 접힌 원문 글자
+    content_hash   TEXT NOT NULL,                       -- 정리된 내용의 sha256. last_edited 와 content_hash 는 해시에 넣지 않는다
+    raw_path       TEXT,                                -- data 아래 상대 경로. 원본 JSON
+    verify_status  TEXT NOT NULL DEFAULT 'unverified',
+    first_seen_at  TEXT NOT NULL,                       -- 처음 가져온 시각
+    changed_at     TEXT NOT NULL,                       -- 내용이 마지막으로 바뀐 것을 가져온 시각
+    fetched_at     TEXT NOT NULL,                       -- 마지막으로 읽은 시각
+    gone_at        TEXT                                 -- 노션에서 보이지 않게 된 것을 확인한 시각
+);
+CREATE INDEX IF NOT EXISTS idx_notion_plan_page_ym ON notion_plan_page(ym, insurer);
+CREATE INDEX IF NOT EXISTS idx_notion_plan_page_hash ON notion_plan_page(content_hash);
+-- [notion:end]

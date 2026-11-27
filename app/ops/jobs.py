@@ -13,6 +13,7 @@
 | notify_sweep | 알림 정리. 끝난 명함 승인 권한을 맞춘다 | 없음 | 없음 |
 | connect_watch | 연결 가져오기. CONNECT_WATCH_DIR 폴더의 새 파일 | 없음 | ingest 와 같다 |
 | gdrive | 연결 가져오기. 구글 드라이브. 설정 전에는 설정 안 됨으로 끝난다 | 없음 | ingest 와 같다 |
+| notion_import | 노션 가져오기. 시책·시상 정리본을 읽기 전용으로 notion_plan_page 에 넣는다. 키가 없으면 not_configured 로 끝난다. D-13, D-115 | 없음 | 없음 |
 | review_submit | 7나이츠 심사. 화면 /review/requests 가 uploads 의 review/ 에 둔 요청 파일로 review.submit 을 부른다 | key, by | 없음 |
 
 - 적재 뒤에는 그 귀속월과, 그 뒤에 이미 저장된 업적 run 이 있는 달을 모두 다시 돌린다. 분기, 반기, 연 누적이 앞 달의 적재를 담기 때문이다.
@@ -44,7 +45,7 @@ QUEUED, RUNNING, DONE, FAILED = "queued", "running", "done", "failed"
 STATUS_KO = {QUEUED: "대기", RUNNING: "처리 중", DONE: "끝남", FAILED: "실패"}
 KIND_KO = {"ingest": "큰 적재", "perf_run": "업적 run", "rank_run": "랭킹 run", "notify_sweep": "알림 정리",
            "connect_watch": "폴더 가져오기", "gdrive": "구글 드라이브 가져오기", "recon_run": "대사 다시 돌리기",
-           "review_submit": "7나이츠 심사"}
+           "review_submit": "7나이츠 심사", "notion_import": "노션 가져오기"}
 YM = re.compile(r"^20\d\d(0[1-9]|1[0-2])$")
 LEASE_SECONDS = 30 * 60
 BACKOFF_SECONDS = 30
@@ -378,6 +379,18 @@ def _gdrive(con, p, job):
     return _source_result(con, run, job, "worker")
 
 
+def _notion_import(con, p, job):
+    """노션 시책·시상 정리본 가져오기. 읽기만 한다. 실패해도 예외로 올리지 않고 상태와 건수만 남긴다. 사유는 연결 상태 표에 있다.
+
+    키가 없으면 not_configured 로 끝난다. 한 번 돌 때 노션 호출은 시간 제한과 재시도 안에서 하고, 다른 작업은 이 일과 따로 돈다.
+    """
+    from app.connect import notion
+    from app.connect.state import StateStore
+    out = notion.import_plan_pages(con, state=StateStore(con=con))
+    counts = {k: v for k, v in (out.value or {}).items() if isinstance(v, int)}
+    return {"status": out.status, "counts": counts}
+
+
 def ai_client(con):
     """AI 를 부르는 입구. 키가 없으면 꺼진 클라이언트다. 시험과 브라우저 확인은 이 함수를 바꿔 가짜 클라이언트를 넣는다."""
     from app.ai.client import AIClient
@@ -418,7 +431,8 @@ def _notify_sweep(con, p, job):
 
 
 HANDLERS = {"ingest": _ingest, "perf_run": _perf_run, "rank_run": _rank_run, "notify_sweep": _notify_sweep,
-            "connect_watch": _connect_watch, "gdrive": _gdrive, "recon_run": _recon_run, "review_submit": _review_submit}
+            "connect_watch": _connect_watch, "gdrive": _gdrive, "recon_run": _recon_run, "review_submit": _review_submit,
+            "notion_import": _notion_import}
 
 
 # ---------------------------------------------------------------- 정해진 때 넣기

@@ -33,6 +33,8 @@ def run_with_timeout(fn: Callable, timeout: float | None):
     try:
         return fut.result(timeout=timeout)
     except FutureTimeout:
+        if fut.done():            # 파이썬 3.11 부터 FutureTimeout 이 TimeoutError 와 같다. 함수 자신이 던진 시간 초과는 그대로 올린다
+            raise
         fut.cancel()
         raise CallTimeout(f"{timeout:g}초 안에 끝나지 않았습니다") from None
     finally:

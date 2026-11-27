@@ -26,9 +26,22 @@
     <button class="ghost" name="action" value="notify_sweep">{{ ACTIONS.notify_sweep }}</button>
     <button class="ghost" name="action" value="connect_watch">{{ ACTIONS.connect_watch }}</button>
     <button class="ghost" name="action" value="gdrive">{{ ACTIONS.gdrive }}</button>
+    <button class="ghost" name="action" value="notion_import">{{ ACTIONS.notion_import }}</button>
   </div>
-  <p class="cap">가져오기는 설정된 폴더와 드라이브만 봅니다. 설정이 없으면 설정 안 됨으로 끝납니다.</p>
+  <p class="cap">가져오기는 설정된 폴더와 드라이브만 봅니다. 설정이 없으면 설정 안 됨으로 끝납니다. 노션은 읽기만 하고 노션에 쓰지 않습니다. 키가 없으면 키 없음으로 끝나고 다른 일은 그대로 돕니다.</p>
 </form>
+
+<h2 class="sec">연결 상태</h2>
+{% if connections %}
+<div class="card tablecard"><table>
+<tr><th>연결</th><th>상태</th><th class="hide-sm">마지막 성공</th><th class="hide-sm">마지막 실패</th><th>사유</th></tr>
+{% for c in connections %}<tr><td class="wrap-sm">{{ c.label }}{% if c.summary %}<div class="sm-sub"><span>{{ c.summary }}</span></div>{% endif %}</td>
+<td><span class="chip {{ c.chip }}">{{ c.status_ko }}</span>{% if c.consecutive_failures and c.status == 'failed' %} <span class="cap">연속 {{ c.consecutive_failures }}번</span>{% endif %}</td>
+<td class="hide-sm">{{ (c.last_success_at | when) or '-' }}</td><td class="hide-sm">{{ (c.last_failure_at | when) or '-' }}</td>
+<td class="wrap-sm">{{ c.reason or '-' }}</td></tr>{% endfor %}
+</table></div>
+{% else %}<div class="card"><div class="k">연결 상태를 읽지 못했습니다</div></div>{% endif %}
+<p class="cap">연결이 끊겨도 파일 직접 올리기로 같은 일을 할 수 있습니다.</p>
 
 <h2 class="sec">최근 작업</h2>
 {% if rows %}

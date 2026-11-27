@@ -22,6 +22,7 @@ KINDS = {"contract": "계약현황", "plan": "시상안", "employee": "사원현
 VIA_UPLOAD = "upload"
 VIA_FOLDER = "folder"
 VIA_GDRIVE = "gdrive"
+VIA_NOTION = "notion"
 
 # 결과 상태
 OK = "ok"

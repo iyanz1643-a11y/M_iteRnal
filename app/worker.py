@@ -2,7 +2,7 @@
 
     python -m app.worker                               # 멈출 때까지 처리한다. WORKER_INTERVAL 초마다 대기열을 본다
     python -m app.worker --once                        # 대기열이 빌 때까지 처리하고 끝낸다
-    python -m app.worker enqueue perf_run --ym 202610  # 작업을 넣는다. rank_run, recon_run, notify_sweep, connect_watch, gdrive
+    python -m app.worker enqueue perf_run --ym 202610  # 작업을 넣는다. rank_run, recon_run, notify_sweep, connect_watch, gdrive, notion_import
     python -m app.worker enqueue ingest --area raw --key contract/202610/<해시>_<이름> --kind contract --ym 202610
     python -m app.worker enqueue ingest --area uploads --key <폴더>/<이름> --kind statement --insurer <보험사 코드> --ym 202610
     python -m app.worker status [--limit 20]           # 최근 작업의 번호, 종류, 상태, 건수
